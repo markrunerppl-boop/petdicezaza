@@ -1,5 +1,5 @@
 -- =========================================================
--- Pet Dice Pro Farm (Ultra Potato FPS Boost Edition)
+-- Pet Dice Pro Farm (Fix Auto Trade + Ultra Potato Mode)
 -- =========================================================
 repeat task.wait() until game:IsLoaded()
 
@@ -42,9 +42,7 @@ if readfile and isfile and isfile(File) then
 end
 
 local function SaveSettings()
-    if writefile then
-        pcall(function() writefile(File, HS:JSONEncode(getgenv().CFG)) end)
-    end
+    if writefile then pcall(function() writefile(File, HS:JSONEncode(getgenv().CFG)) end) end
 end
 
 -- =========================================================
@@ -79,7 +77,7 @@ local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 local Window = Rayfield:CreateWindow({
     Name = "🎲 Pet Dice Pro Farm",
     LoadingTitle = "Loading Script...",
-    LoadingSubtitle = "Ultra FPS Boost Edition",
+    LoadingSubtitle = "Trade Fixed Edition",
     Theme = "DarkBlue",
     Discord = { Enabled = false },
     KeySystem = false
@@ -95,7 +93,7 @@ local TabTrade = Window:CreateTab("🤝 ระบบเทรดออโต้"
 local TabSettings = Window:CreateTab("⚙️ ตั้งค่า")
 
 -- =========================================================
--- ⚙️ แท็บตั้งค่า (Settings & Save)
+-- ⚙️ แท็บตั้งค่า (Settings)
 -- =========================================================
 TabSettings:CreateSection("ระบบบันทึกและจัดการ")
 TabSettings:CreateButton({Name = "💾 บันทึกการทำงาน (Save Config)", Callback = function() SaveSettings() Rayfield:Notify({Title = "✅ บันทึกสำเร็จ!", Content = "สคริปต์จะจำค่าไว้ทำงานออโต้ครั้งหน้า", Duration = 3}) end})
@@ -119,7 +117,7 @@ TabRewards:CreateSection("ระบบอัปเกรด")
 TabRewards:CreateToggle({Name = "ซื้อต้นไม้อัปเกรดอัตโนมัติ", CurrentValue = getgenv().CFG.Upgrade, Flag = "TogUpgrade", Callback = function(V) getgenv().CFG.Upgrade = V if V then task.spawn(function() while getgenv().CFG.Upgrade do pcall(function() Fire("Funnel", "UpgradeTree", 1) task.wait(0.5) Fire("BuyAllUpgrades") end) task.wait(15) end end) end end})
 
 -- =========================================================
--- ⚡ แท็บอื่นๆ & ลดแลค (FPS Boost ขั้นสุดยอด)
+-- ⚡ แท็บอื่นๆ & ลดแลค (Ultra Potato)
 -- =========================================================
 TabOther:CreateSection("ระบบข้ามเวลา")
 TabOther:CreateToggle({Name = "ข้ามคัทซีนทั้งหมด", CurrentValue = getgenv().CFG.Cutscene, Flag = "TogCutscene", Callback = function(V) getgenv().CFG.Cutscene = V if V then task.spawn(function() while getgenv().CFG.Cutscene do pcall(function() Fire("CutsceneDone") end) task.wait(1) end end) end end})
@@ -129,62 +127,31 @@ TabOther:CreateButton({
     Name = "🚀 เปิดโหมดภาพกากขั้นสุด (ล้างเอฟเฟค 100%)",
     Callback = function()
         pcall(function()
-            -- 1. ปรับกราฟิกต่ำสุดใน Setting
             settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
-            
-            -- 2. ปิดแสง เงา หมอก ท้องฟ้า
             Lighting.GlobalShadows = false
             Lighting.FogEnd = 9e9
             Lighting.Brightness = 0
             for _, v in pairs(Lighting:GetChildren()) do
-                if v:IsA("PostEffect") or v:IsA("BlurEffect") or v:IsA("BloomEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") or v:IsA("Atmosphere") or v:IsA("Sky") then
-                    v:Destroy()
-                end
+                if v:IsA("PostEffect") or v:IsA("BlurEffect") or v:IsA("BloomEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") or v:IsA("Atmosphere") or v:IsA("Sky") then v:Destroy() end
             end
-            
-            -- 3. ปิดเอฟเฟคน้ำและภูมิประเทศ
             local T = workspace.Terrain
-            T.WaterWaveSize = 0
-            T.WaterWaveSpeed = 0
-            T.WaterReflectance = 0
-            T.WaterTransparency = 0
-            T.Decoration = false
-
-            -- 4. สแกนทำลายพื้นผิว เอฟเฟค และพาร์ติเคิลทั้งเกม
+            T.WaterWaveSize, T.WaterWaveSpeed, T.WaterReflectance, T.WaterTransparency, T.Decoration = 0, 0, 0, 0, false
             for _, v in pairs(workspace:GetDescendants()) do
-                if v:IsA("BasePart") then
-                    v.Material = Enum.Material.SmoothPlastic
-                    v.Reflectance = 0
-                    v.CastShadow = false
-                elseif v:IsA("Decal") or v:IsA("Texture") or v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Beam") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Light") then
-                    v:Destroy()
-                elseif v:IsA("MeshPart") then
-                    v.TextureID = "" -- ลบลายโมเดล
-                elseif v:IsA("SpecialMesh") then
-                    v.TextureId = ""
-                elseif v:IsA("ShirtGraphic") or v:IsA("Shirt") or v:IsA("Pants") or v:IsA("Accessory") then
-                    v:Destroy() -- ถอดเสื้อผ้า หมวก เครื่องประดับออกหมด (ลดภาระ RAM)
-                end
+                if v:IsA("BasePart") then v.Material = Enum.Material.SmoothPlastic v.Reflectance = 0 v.CastShadow = false
+                elseif v:IsA("Decal") or v:IsA("Texture") or v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Beam") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Light") then v:Destroy()
+                elseif v:IsA("MeshPart") then v.TextureID = "" 
+                elseif v:IsA("SpecialMesh") then v.TextureId = ""
+                elseif v:IsA("ShirtGraphic") or v:IsA("Shirt") or v:IsA("Pants") or v:IsA("Accessory") then v:Destroy() end
             end
-            
-            Rayfield:Notify({Title = "🚀 Ultra FPS Boost", Content = "ล้างบางกราฟิกเรียบร้อย! เอฟเฟคทั้งหมดถูกทำลายเพื่อประหยัดสเปค", Duration = 5})
+            Rayfield:Notify({Title = "🚀 Ultra FPS Boost", Content = "ล้างบางกราฟิกเรียบร้อย! ทรัพยากรเครื่องถูกรีดให้ใช้ขั้นต่ำแล้ว", Duration = 5})
         end)
     end
 })
 
-TabOther:CreateToggle({
-    Name = "⬛ ปิดการประมวลผล 3D (จอดำลด CPU 90%)",
-    CurrentValue = false,
-    Flag = "TogBlackScreen",
-    Callback = function(V)
-        pcall(function()
-            RunService:Set3dRenderingEnabled(not V)
-        end)
-    end
-})
+TabOther:CreateToggle({Name = "⬛ ปิดการประมวลผล 3D (จอดำลด CPU 90%)", CurrentValue = false, Flag = "TogBlackScreen", Callback = function(V) pcall(function() RunService:Set3dRenderingEnabled(not V) end) end})
 
 -- =========================================================
--- 🤝 แท็บเทรดออโต้
+-- 🤝 แท็บเทรดออโต้ (✅ แก้ไขหน้าต่างยกเลิกแล้ว)
 -- =========================================================
 TabTrade:CreateSection("เป้าหมายการเทรด")
 
@@ -193,9 +160,7 @@ local TargetPlayerName = "ทุกคน"
 
 local function GetPlayerNames() 
     local n = {"[ เลือกทุกคนในห้อง ]"} 
-    for _, p in ipairs(P:GetPlayers()) do 
-        if p ~= P.LocalPlayer then table.insert(n, p.Name) end 
-    end 
+    for _, p in ipairs(P:GetPlayers()) do if p ~= P.LocalPlayer then table.insert(n, p.Name) end end 
     if #n == 1 then table.insert(n, "ไม่มีผู้เล่นอื่นในเซิร์ฟ") end 
     return n 
 end
@@ -221,9 +186,90 @@ TabTrade:CreateButton({Name = "🔄 รีเฟรชรายชื่อผ�
 
 TabTrade:CreateSection("ระบบ Auto Trade")
 
-TabTrade:CreateToggle({Name = "ออโต้ส่งคำขอเทรด (Auto Request)", CurrentValue = getgenv().CFG.AutoRequest, Flag = "TogAutoRequest", Callback = function(V) getgenv().CFG.AutoRequest = V if V then task.spawn(function() while getgenv().CFG.AutoRequest do pcall(function() if TargetPlayerUserId == "ALL" then for _, p in ipairs(P:GetPlayers()) do if p ~= P.LocalPlayer then Fire("TradeRequest", p.UserId) end end elseif TargetPlayerUserId then Fire("TradeRequest", TargetPlayerUserId) end end) task.wait(3) end end) end end})
-TabTrade:CreateToggle({Name = "ออโต้ยอมรับเทรด (Auto Accept)", CurrentValue = getgenv().CFG.AutoAccept, Flag = "TogAutoAccept", Callback = function(V) getgenv().CFG.AutoAccept = V if V then task.spawn(function() while getgenv().CFG.AutoAccept do pcall(function() if TargetPlayerUserId == "ALL" then for _, p in ipairs(P:GetPlayers()) do if p ~= P.LocalPlayer then Fire("TradeRespond", p.UserId, true) end end task.wait(0.5); Fire("Funnel", "Trading", 1) elseif TargetPlayerUserId then Fire("TradeRespond", TargetPlayerUserId, true) task.wait(0.5); Fire("Funnel", "Trading", 1) end end) task.wait(2) end end) end end})
-TabTrade:CreateToggle({Name = "ออโต้โยนไอเทมทั้งหมด (Auto Give)", CurrentValue = getgenv().CFG.AutoGive, Flag = "TogAutoGive", Callback = function(V) getgenv().CFG.AutoGive = V if V then task.spawn(function() while getgenv().CFG.AutoGive do pcall(function() if P.LocalPlayer.PlayerGui:FindFirstChild("Trading") then local items = {"PotionLuck", "PotionCash", "PotionSpeed", "Gems", "Shards", "SuperRolls", "LootBags", "Speed15"} for _, item in ipairs(items) do Fire("TradeItem", item, 999999999) task.wait(0.1) end end end) task.wait(3) end end) end end})
+TabTrade:CreateToggle({
+    Name = "ออโต้ส่งคำขอเทรด (Auto Request)",
+    CurrentValue = getgenv().CFG.AutoRequest,
+    Flag = "TogAutoRequest",
+    Callback = function(V)
+        getgenv().CFG.AutoRequest = V
+        if V then
+            task.spawn(function()
+                while getgenv().CFG.AutoRequest do
+                    pcall(function()
+                        -- ✅ ตรวจสอบ: ถ้ายืนเทรดอยู่แล้ว ห้ามส่งคำขอเด็ดขาด
+                        if not P.LocalPlayer.PlayerGui:FindFirstChild("Trading") then
+                            if TargetPlayerUserId == "ALL" then
+                                for _, p in ipairs(P:GetPlayers()) do
+                                    if p ~= P.LocalPlayer then Fire("TradeRequest", p.UserId) end
+                                end
+                            elseif TargetPlayerUserId then
+                                Fire("TradeRequest", TargetPlayerUserId)
+                            end
+                        end
+                    end)
+                    task.wait(4) -- ยิงทุก 4 วิ
+                end
+            end)
+        end
+    end
+})
 
--- โหลดค่าที่เซฟไว้ตอนเริ่ม
+TabTrade:CreateToggle({
+    Name = "ออโต้ยอมรับเทรด (Auto Accept)",
+    CurrentValue = getgenv().CFG.AutoAccept,
+    Flag = "TogAutoAccept",
+    Callback = function(V)
+        getgenv().CFG.AutoAccept = V
+        if V then
+            task.spawn(function()
+                while getgenv().CFG.AutoAccept do
+                    pcall(function()
+                        -- ✅ ตรวจสอบ: ถ้ายืนเทรดอยู่แล้ว ห้ามกดยอมรับซ้ำเด็ดขาด
+                        if not P.LocalPlayer.PlayerGui:FindFirstChild("Trading") then
+                            if TargetPlayerUserId == "ALL" then
+                                for _, p in ipairs(P:GetPlayers()) do
+                                    if p ~= P.LocalPlayer then Fire("TradeRespond", p.UserId, true) end
+                                end
+                                task.wait(0.5); Fire("Funnel", "Trading", 1)
+                            elseif TargetPlayerUserId then
+                                Fire("TradeRespond", TargetPlayerUserId, true)
+                                task.wait(0.5); Fire("Funnel", "Trading", 1)
+                            end
+                        end
+                    end)
+                    task.wait(2.5) -- เช็คคนส่งเทรดมาทุก 2.5 วิ
+                end
+            end)
+        end
+    end
+})
+
+TabTrade:CreateToggle({
+    Name = "ออโต้โยนไอเทมทั้งหมด (Auto Give)",
+    CurrentValue = getgenv().CFG.AutoGive,
+    Flag = "TogAutoGive",
+    Callback = function(V)
+        getgenv().CFG.AutoGive = V
+        if V then
+            task.spawn(function()
+                while getgenv().CFG.AutoGive do
+                    pcall(function()
+                        -- ✅ ตรวจสอบ: ต้องรอให้หน้าต่างเทรดเด้งขึ้นมาก่อน ถึงจะเริ่มสูบของลงกล่องเทรด
+                        if P.LocalPlayer.PlayerGui:FindFirstChild("Trading") then
+                            local items = {"PotionLuck", "PotionCash", "PotionSpeed", "Gems", "Shards", "SuperRolls", "LootBags", "Speed15"} 
+                            for _, item in ipairs(items) do 
+                                Fire("TradeItem", item, 999999999) 
+                                task.wait(0.1) 
+                            end
+                            task.wait(3) -- โยนของเสร็จให้พักแปปนึง
+                        end
+                    end)
+                    task.wait(1) -- คอยดักจับหน้าต่างเทรดทุกๆ 1 วินาที
+                end
+            end)
+        end
+    end
+})
+
+-- โหลดค่าตั้งต้นเมื่อรันสคริปต์
 Rayfield:LoadConfiguration()
