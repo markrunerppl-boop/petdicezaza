@@ -1,5 +1,5 @@
 -- =========================================================
--- Pet Dice Pro Farm (Fix Auto Trade + Ultra Potato Mode)
+-- Pet Dice Pro Farm (Trade Cancel FIX + Full Auto Confirm)
 -- =========================================================
 repeat task.wait() until game:IsLoaded()
 
@@ -151,7 +151,7 @@ TabOther:CreateButton({
 TabOther:CreateToggle({Name = "⬛ ปิดการประมวลผล 3D (จอดำลด CPU 90%)", CurrentValue = false, Flag = "TogBlackScreen", Callback = function(V) pcall(function() RunService:Set3dRenderingEnabled(not V) end) end})
 
 -- =========================================================
--- 🤝 แท็บเทรดออโต้ (✅ แก้ไขหน้าต่างยกเลิกแล้ว)
+-- 🤝 แท็บเทรดออโต้ (รวมการทำงานไว้ในลูปเดียว แก้บัค 100%)
 -- =========================================================
 TabTrade:CreateSection("เป้าหมายการเทรด")
 
@@ -184,92 +184,97 @@ local DropdownTrade = TabTrade:CreateDropdown({
 })
 TabTrade:CreateButton({Name = "🔄 รีเฟรชรายชื่อผู้เล่น", Callback = function() DropdownTrade:Refresh(GetPlayerNames()) end})
 
-TabTrade:CreateSection("ระบบ Auto Trade")
+TabTrade:CreateSection("ระบบดำเนินการ (ทำงานอัตโนมัติเมื่ออยู่หน้าเทรด)")
 
 TabTrade:CreateToggle({
-    Name = "ออโต้ส่งคำขอเทรด (Auto Request)",
+    Name = "1. ออโต้ส่งคำขอเทรด",
     CurrentValue = getgenv().CFG.AutoRequest,
     Flag = "TogAutoRequest",
-    Callback = function(V)
-        getgenv().CFG.AutoRequest = V
-        if V then
-            task.spawn(function()
-                while getgenv().CFG.AutoRequest do
-                    pcall(function()
-                        -- ✅ ตรวจสอบ: ถ้ายืนเทรดอยู่แล้ว ห้ามส่งคำขอเด็ดขาด
-                        if not P.LocalPlayer.PlayerGui:FindFirstChild("Trading") then
-                            if TargetPlayerUserId == "ALL" then
-                                for _, p in ipairs(P:GetPlayers()) do
-                                    if p ~= P.LocalPlayer then Fire("TradeRequest", p.UserId) end
-                                end
-                            elseif TargetPlayerUserId then
-                                Fire("TradeRequest", TargetPlayerUserId)
-                            end
-                        end
-                    end)
-                    task.wait(4) -- ยิงทุก 4 วิ
-                end
-            end)
-        end
-    end
+    Callback = function(V) getgenv().CFG.AutoRequest = V end
 })
 
 TabTrade:CreateToggle({
-    Name = "ออโต้ยอมรับเทรด (Auto Accept)",
+    Name = "2. ออโต้รับคำขอเทรด",
     CurrentValue = getgenv().CFG.AutoAccept,
     Flag = "TogAutoAccept",
-    Callback = function(V)
-        getgenv().CFG.AutoAccept = V
-        if V then
-            task.spawn(function()
-                while getgenv().CFG.AutoAccept do
-                    pcall(function()
-                        -- ✅ ตรวจสอบ: ถ้ายืนเทรดอยู่แล้ว ห้ามกดยอมรับซ้ำเด็ดขาด
-                        if not P.LocalPlayer.PlayerGui:FindFirstChild("Trading") then
-                            if TargetPlayerUserId == "ALL" then
-                                for _, p in ipairs(P:GetPlayers()) do
-                                    if p ~= P.LocalPlayer then Fire("TradeRespond", p.UserId, true) end
-                                end
-                                task.wait(0.5); Fire("Funnel", "Trading", 1)
-                            elseif TargetPlayerUserId then
-                                Fire("TradeRespond", TargetPlayerUserId, true)
-                                task.wait(0.5); Fire("Funnel", "Trading", 1)
-                            end
-                        end
-                    end)
-                    task.wait(2.5) -- เช็คคนส่งเทรดมาทุก 2.5 วิ
-                end
-            end)
-        end
-    end
+    Callback = function(V) getgenv().CFG.AutoAccept = V end
 })
 
 TabTrade:CreateToggle({
-    Name = "ออโต้โยนไอเทมทั้งหมด (Auto Give)",
+    Name = "3. ส่งไอเทมทั้งหมด (สำหรับไอดีหลัก)",
     CurrentValue = getgenv().CFG.AutoGive,
     Flag = "TogAutoGive",
-    Callback = function(V)
-        getgenv().CFG.AutoGive = V
-        if V then
-            task.spawn(function()
-                while getgenv().CFG.AutoGive do
-                    pcall(function()
-                        -- ✅ ตรวจสอบ: ต้องรอให้หน้าต่างเทรดเด้งขึ้นมาก่อน ถึงจะเริ่มสูบของลงกล่องเทรด
-                        if P.LocalPlayer.PlayerGui:FindFirstChild("Trading") then
-                            local items = {"PotionLuck", "PotionCash", "PotionSpeed", "Gems", "Shards", "SuperRolls", "LootBags", "Speed15"} 
-                            for _, item in ipairs(items) do 
-                                Fire("TradeItem", item, 999999999) 
-                                task.wait(0.1) 
-                            end
-                            task.wait(3) -- โยนของเสร็จให้พักแปปนึง
-                        end
-                    end)
-                    task.wait(1) -- คอยดักจับหน้าต่างเทรดทุกๆ 1 วินาที
-                end
-            end)
-        end
-    end
+    Callback = function(V) getgenv().CFG.AutoGive = V end
 })
 
--- โหลดค่าตั้งต้นเมื่อรันสคริปต์
+-- =========================================================
+-- ⚙️ ลูปควบคุมระบบเทรดหลัก (Master Trade Loop)
+-- =========================================================
+task.spawn(function()
+    while true do
+        task.wait(1.5) -- หน่วงเวลาสแกนระบบทุก 1.5 วินาที
+        pcall(function()
+            -- เช็คว่าหน้าต่างเทรดเปิดอยู่หรือไม่
+            local pg = P.LocalPlayer:FindFirstChild("PlayerGui")
+            local inTrade = pg and (pg:FindFirstChild("Trading") or pg:FindFirstChild("Trade"))
+
+            if inTrade then
+                -- ==========================================
+                -- สถานะ: กำลังอยู่ในหน้าต่างเทรด (ห้ามยิงขอเทรดเด็ดขาด)
+                -- ==========================================
+                
+                -- สเต็ปที่ 1: โยนไอเทม (ถ้าเปิดสวิตช์ไว้)
+                if getgenv().CFG.AutoGive then
+                    local items = {"PotionLuck", "PotionCash", "PotionSpeed", "Gems", "Shards", "SuperRolls", "LootBags", "Speed15"} 
+                    for _, item in ipairs(items) do 
+                        Fire("TradeItem", item, 999999999) 
+                        task.wait(0.05) -- โยนของเร็วขึ้น
+                    end
+                    task.wait(1.5) -- รอของเข้ากล่องครบแล้วค่อยกดยืนยัน
+                else
+                    task.wait(2) -- ถ้าเป็นไอดีไก่ (คนรับของ) ให้รอไอดีหลักโยนของมาให้เสร็จก่อน 2 วินาที
+                end
+
+                -- สเต็ปที่ 2: ระบบกดยืนยัน (Ready & Confirm) แบบลับๆ อัตโนมัติ!
+                -- *หมายเหตุ: ยิงคำสั่งยืนยันยอดฮิตที่เกม Roblox ใช้
+                Fire("TradeReady")
+                Fire("TradeReady", true)
+                Fire("TradeConfirm")
+                Fire("TradeAccept")
+                
+            else
+                -- ==========================================
+                -- สถานะ: อยู่ด้านนอก (หน้าต่างเทรดปิดอยู่)
+                -- ==========================================
+                
+                -- ออโต้ส่งคำขอ
+                if getgenv().CFG.AutoRequest then
+                    if TargetPlayerUserId == "ALL" then
+                        for _, p in ipairs(P:GetPlayers()) do
+                            if p ~= P.LocalPlayer then Fire("TradeRequest", p.UserId) end
+                        end
+                    elseif TargetPlayerUserId then
+                        Fire("TradeRequest", TargetPlayerUserId)
+                    end
+                end
+                
+                -- ออโต้รับคำขอ
+                if getgenv().CFG.AutoAccept then
+                    if TargetPlayerUserId == "ALL" then
+                        for _, p in ipairs(P:GetPlayers()) do
+                            if p ~= P.LocalPlayer then Fire("TradeRespond", p.UserId, true) end
+                        end
+                        task.wait(0.5)
+                        Fire("Funnel", "Trading", 1) -- ดึงหน้าต่างขึ้นมา
+                    elseif TargetPlayerUserId then
+                        Fire("TradeRespond", TargetPlayerUserId, true)
+                        task.wait(0.5)
+                        Fire("Funnel", "Trading", 1) -- ดึงหน้าต่างขึ้นมา
+                    end
+                end
+            end
+        end)
+    end
+end)
+
 Rayfield:LoadConfiguration()
