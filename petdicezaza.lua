@@ -72,6 +72,7 @@ local Upgrades = require(PetDice.Logic.Upgrades)
 local WorldBossConfig = PetDice.Configs:FindFirstChild("WorldBossConfig") and require(PetDice.Configs.WorldBossConfig) or nil
 local ScheduleConfig = PetDice.Configs:FindFirstChild("ScheduleConfig") and require(PetDice.Configs.ScheduleConfig) or nil
 local CombatConfig = PetDice.Configs:FindFirstChild("CombatConfig") and require(PetDice.Configs.CombatConfig) or nil
+local LootBagController = (PetDice.Client:FindFirstChild("Cutscenes") and PetDice.Client.Cutscenes:FindFirstChild("LootBagController") and require(PetDice.Client.Cutscenes.LootBagController)) or nil
 
 local function Fire(...) 
     Action:FireServer(unpack({...})) 
@@ -1972,9 +1973,18 @@ Tabs.Items:AddButton({
         local data = State.Data
         if data and (data.LootBags or 0) > 0 then
             Fire("OpenLootBag", "all")
-            Notify("🎒 ถุงสมบัติ", "ส่งคำสั่งเปิดถุงสมบัติทั้งหมดเรียบร้อย!", 3)
-            task.delay(1.0, function()
-                Fire("ClaimLootPets", "Infinity")
+            Notify("🎒 ถุงสมบัติ", "กำลังเปิดถุงสมบัติทั้งหมด กรุณารอแอนิเมชัน...", 4)
+            task.delay(4.5, function()
+                local waiting = 0
+                pcall(function()
+                    if PetData and PetData.WaitingCount and State.Data then
+                        waiting = PetData.WaitingCount(State.Data, "Infinity")
+                    end
+                end)
+                if waiting > 0 then
+                    Fire("ClaimLootPets", "Infinity")
+                    Notify("🐾 สัตว์เลี้ยง", "รับสัตว์เลี้ยงจากถุงสมบัติ " .. waiting .. " ตัวเรียบร้อย!", 3)
+                end
                 UpdatePotionStatus()
             end)
         else
@@ -1986,8 +1996,18 @@ Tabs.Items:AddButton({
 Tabs.Items:AddButton({
     Title = "🐾 เคลมสัตว์เลี้ยงจากถุงสมบัติ (Claim Loot Pets)",
     Callback = function()
-        Fire("ClaimLootPets", "Infinity")
-        Notify("🐾 สัตว์เลี้ยง", "กดรับสัตว์เลี้ยงจากถุงสมบัติเรียบร้อย!", 3)
+        local waiting = 0
+        pcall(function()
+            if PetData and PetData.WaitingCount and State.Data then
+                waiting = PetData.WaitingCount(State.Data, "Infinity")
+            end
+        end)
+        if waiting > 0 then
+            Fire("ClaimLootPets", "Infinity")
+            Notify("🐾 สัตว์เลี้ยง", "กดรับสัตว์เลี้ยงจากถุงสมบัติ " .. waiting .. " ตัวเรียบร้อย!", 3)
+        else
+            Notify("ℹ️ ไม่มีสัตว์เลี้ยงค้าง", "ไม่มีสัตว์เลี้ยงรอรับในระบบ", 2)
+        end
     end
 })
 
@@ -3248,6 +3268,7 @@ end)
 -- 8. Auto Halloween (100% Anti-Ban, Real-Time & Safe Execution)
 local claimedGoalsCache = {}
 local lastHalloweenBuyTick = 0
+local lastHalloweenBagOpenTick = 0
 
 task.spawn(function()
     while true do
@@ -3307,14 +3328,40 @@ task.spawn(function()
                 end
             end
             
-            -- 4. Auto Open Bags: รออนิเมชันเปิดกระเป๋าให้เสร็จสมบูรณ์ก่อนรับสัตว์เลี้ยง
-            if CFG.HalloweenAutoOpenBags then
-                local bagCount = State.Data and State.Data.SeasonBags and State.Data.SeasonBags.Halloween or 0
-                if bagCount > 0 then
-                    Fire("OpenLootBag", "all", "Halloween")
-                    Humanizer.Wait(4.0, 5.5)
-                    Fire("ClaimLootPets", "Season")
-                    Humanizer.Wait(1.5, 2.5)
+            -- 4. Auto Open Bags: ปลอดภัย 100% ซิงค์กับระบบคัตซีน ไม่สแปมรีโมท และเคลมเฉพาะเมื่อมีสัตว์เลี้ยงค้างในระบบจริงเท่านั้น
+            local bagNowTick = tick()
+            if CFG.HalloweenAutoOpenBags and (bagNowTick - lastHalloweenBagOpenTick > 15) then
+                local isLootBagBusy = false
+                pcall(function()
+                    if LootBagController and LootBagController.Api and LootBagController.Api.Busy then
+                        isLootBagBusy = LootBagController.Api.Busy()
+                    end
+                end)
+                
+                if not isLootBagBusy then
+                    local bagCount = State.Data and State.Data.SeasonBags and State.Data.SeasonBags.Halloween or 0
+                    if bagCount > 0 then
+                        lastHalloweenBagOpenTick = bagNowTick
+                        Fire("OpenLootBag", "all", "Halloween")
+                        Notify("🎒 ฮาโลวีน", "กำลังเปิดกระเป๋าฮาโลวีน (" .. bagCount .. " ใบ)...", 3)
+                        Humanizer.Wait(4.5, 6.0) -- รอให้เซิร์ฟเวอร์คำนวณและเล่นแอนิเมชันให้จบอย่างปลอดภัย
+                    end
+                    
+                    -- ตรวจสอบว่ามีสัตว์เลี้ยงค้างรอรับจริงหรือไม่ (ดึงข้อมูลแบบ Real-time จาก PetData.WaitingCount)
+                    local waitingPets = 0
+                    pcall(function()
+                        if State.Data and PetData and PetData.WaitingCount then
+                            waitingPets = PetData.WaitingCount(State.Data, "Season")
+                        end
+                    end)
+                    
+                    -- เคลมเฉพาะเมื่อมีสัตว์เลี้ยงรอรับจริง ๆ เท่านั้น ป้องกันการยิงแพ็กเก็ตเคลมเปล่าที่ทำให้โดนแบนเด็ดขาด
+                    if waitingPets > 0 then
+                        Humanizer.Wait(1.0, 1.8)
+                        Fire("ClaimLootPets", "Season")
+                        Notify("🐾 รับสัตว์เลี้ยง", "รับสัตว์เลี้ยงฮาโลวีน " .. waitingPets .. " ตัวเรียบร้อย!", 3)
+                        Humanizer.Wait(1.5, 2.5)
+                    end
                 end
             end
             
@@ -3682,6 +3729,8 @@ task.spawn(function()
 end)
 
 -- 13. Auto Potions & Consumables
+local lastInfinityBagOpenTick = 0
+
 task.spawn(function()
     while true do
         task.wait(2.5)
@@ -3708,10 +3757,37 @@ task.spawn(function()
                 Fire("UsePotion", "Speed", 1)
                 Humanizer.Wait(0.5, 1.0)
             end
-            if CFG.AutoOpenLootBags and (data.LootBags or 0) > 0 then
-                Fire("OpenLootBag", "all")
-                Humanizer.Wait(1.0, 2.0)
-                Fire("ClaimLootPets", "Infinity")
+            
+            -- ปลอดภัย 100%: เปิดถุงสมบัติทั่วไปแบบหน่วงเวลา 15s ซิงค์คัตซีน และเคลมเฉพาะเมื่อมีสัตว์เลี้ยงค้างจริงเท่านั้น
+            local infinityBagNow = tick()
+            if CFG.AutoOpenLootBags and (data.LootBags or 0) > 0 and (infinityBagNow - lastInfinityBagOpenTick > 15) then
+                local isBusy = false
+                pcall(function()
+                    if LootBagController and LootBagController.Api and LootBagController.Api.Busy then
+                        isBusy = LootBagController.Api.Busy()
+                    end
+                end)
+                
+                if not isBusy then
+                    lastInfinityBagOpenTick = infinityBagNow
+                    Fire("OpenLootBag", "all")
+                    Notify("🎒 ถุงสมบัติ", "กำลังเปิดถุงสมบัติทั่วไป (" .. (data.LootBags or 0) .. " ใบ)...", 3)
+                    Humanizer.Wait(4.5, 6.0)
+                    
+                    local waitingInfinity = 0
+                    pcall(function()
+                        if PetData and PetData.WaitingCount then
+                            waitingInfinity = PetData.WaitingCount(data, "Infinity")
+                        end
+                    end)
+                    
+                    if waitingInfinity > 0 then
+                        Humanizer.Wait(1.0, 1.8)
+                        Fire("ClaimLootPets", "Infinity")
+                        Notify("🐾 สัตว์เลี้ยง", "กดรับสัตว์เลี้ยงจากถุงสมบัติ " .. waitingInfinity .. " ตัวเรียบร้อย!", 3)
+                        Humanizer.Wait(1.5, 2.5)
+                    end
+                end
             end
         end)
     end
