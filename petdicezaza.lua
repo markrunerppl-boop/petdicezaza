@@ -189,6 +189,28 @@ for _, t in ipairs(Modifiers.Traits) do
     TraitNameById[t.Id] = t.Name
 end
 
+local function IsPetEligibleForEnhance(pet)
+    if not pet then return false end
+    local petId = pet.Id or pet.PetId
+    if not petId then return false end
+    local def = PetData and PetData.ById and PetData.ById[petId]
+    if not def then return false end
+    
+    -- กรองสัตว์เลี้ยงประเภท Limited / Copy / Exclusive ทั้งหมด
+    -- (เซิร์ฟเวอร์ปฏิเสธการอัปเลเวล / สุ่มเกรด / สุ่มเทรตสัตว์เลี้ยงเหล่านี้เด็ดขาด)
+    if def.Limited == true or def.Rarity == "Limited" then
+        return false
+    end
+    if def.Copy == true or def.Copies == true then
+        return false
+    end
+    -- สัตว์เลี้ยงที่เป็นตัวก๊อปปี้สเตตัส (มีฟิลด์ R อ้างอิงตัวอื่น และไม่มีฟิลด์เลเวล/เกรดแท้จริง)
+    if pet.R and typeof(pet.R) == "string" and not pet.G and not pet.L then
+        return false
+    end
+    return true
+end
+
 local function GetPetGradeRank(pet)
     if not pet or not pet.G then return #Modifiers.Grades + 1 end
     return Modifiers.GradeRank(pet.G) or (#Modifiers.Grades + 1)
@@ -200,11 +222,13 @@ local function GetPetTraitRank(pet)
 end
 
 local function IsPetGradeLocked(pet, targetRank)
+    if not IsPetEligibleForEnhance(pet) then return true end -- สัตว์เลี้ยงประเภทพิเศษไม่สามารถสุ่มเกรดได้ ให้ถือว่าล็อคข้ามเสมอ
     targetRank = targetRank or (getgenv().CFG and getgenv().CFG.TargetGradeRank) or 8
     return GetPetGradeRank(pet) <= targetRank
 end
 
 local function IsPetTraitLocked(pet, targetRank)
+    if not IsPetEligibleForEnhance(pet) then return true end -- สัตว์เลี้ยงประเภทพิเศษไม่สามารถสุ่มเทรตได้ ให้ถือว่าล็อคข้ามเสมอ
     targetRank = targetRank or (getgenv().CFG and getgenv().CFG.TargetTraitRank) or 6
     return GetPetTraitRank(pet) <= targetRank
 end
@@ -251,10 +275,12 @@ local function GetTopBestPets(count)
     local candidates = {}
     
     for uid, pet in pairs(data.Pets) do
-        local sUid = tostring(uid)
-        local baseIncome = 0
-        pcall(function() baseIncome = Stats.PetBaseIncome(pet) end)
-        table.insert(candidates, { uid = sUid, base = baseIncome })
+        if IsPetEligibleForEnhance(pet) then
+            local sUid = tostring(uid)
+            local baseIncome = 0
+            pcall(function() baseIncome = Stats.PetBaseIncome(pet) end)
+            table.insert(candidates, { uid = sUid, base = baseIncome })
+        end
     end
     
     table.sort(candidates, function(a, b)
@@ -2913,10 +2939,11 @@ task.spawn(function()
     end
 end)
 
--- 11. Auto Roll Pet Grade (Rank <= TargetRank Strictly Locked - High Speed Safe)
+-- 11. Auto Roll Pet Grade (Rank <= TargetRank Strictly Locked - Safe Humanized Engine)
 task.spawn(function()
+    local consecutiveRolls = 0
     while true do
-        task.wait(0.15)
+        task.wait(0.20)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
@@ -2929,7 +2956,7 @@ task.spawn(function()
                 end
                 local targetRank = CFG.TargetGradeRank or 8
                 local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
-                local rollDelay = math.clamp(CFG.RollSpeed or 0.25, 0.15, 1.0)
+                local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.2)
                 local anyRolled = false
                 
                 for _, uid in ipairs(targetUids) do
@@ -2937,30 +2964,42 @@ task.spawn(function()
                     if not data or not data.Gems or data.Gems < 1 then break end
                     
                     local pet = data.Pets[uid]
-                    if pet then
+                    if pet and IsPetEligibleForEnhance(pet) then
                         if not IsPetGradeLocked(pet, targetRank) then
                             Fire("RollGrade", uid)
                             anyRolled = true
-                            Humanizer.Wait(math.max(0.12, rollDelay - 0.04), rollDelay + 0.04)
+                            consecutiveRolls = consecutiveRolls + 1
+                            
+                            -- Humanizer หน่วงเวลาแบบเป็นธรรมชาติ ปลอดภัยจากการตรวจจับของ Roblox
+                            Humanizer.Wait(math.max(0.25, rollDelay - 0.05), rollDelay + 0.08)
+                            
+                            -- พักสั้นๆ ทุก 12 ครั้งเพื่อจำลองพฤติกรรมมนุษย์ ป้องกัน Remote Burst
+                            if consecutiveRolls >= 12 then
+                                consecutiveRolls = 0
+                                task.wait(math.random(60, 100) / 100)
+                            end
                             data = State.Data
                         end
                     end
                 end
                 
                 if not anyRolled then
-                    task.wait(2.0)
+                    consecutiveRolls = 0
+                    task.wait(2.5) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือไม่มีตัวให้สุ่ม พัก 2.5 วินาที ไม่ยิงซ้ำ
                 end
             end)
         else
+            consecutiveRolls = 0
             task.wait(1.5)
         end
     end
 end)
 
--- 12. Auto Roll Pet Trait (Rank <= TargetRank Strictly Locked - High Speed Safe)
+-- 12. Auto Roll Pet Trait (Rank <= TargetRank Strictly Locked - Safe Humanized Engine)
 task.spawn(function()
+    local consecutiveRolls = 0
     while true do
-        task.wait(0.15)
+        task.wait(0.20)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
@@ -2973,7 +3012,7 @@ task.spawn(function()
                 end
                 local targetRank = CFG.TargetTraitRank or 6
                 local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
-                local rollDelay = math.clamp(CFG.RollSpeed or 0.25, 0.15, 1.0)
+                local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.2)
                 local anyRolled = false
                 
                 for _, uid in ipairs(targetUids) do
@@ -2981,21 +3020,32 @@ task.spawn(function()
                     if not data or not data.Shards or data.Shards < 1 then break end
                     
                     local pet = data.Pets[uid]
-                    if pet then
+                    if pet and IsPetEligibleForEnhance(pet) then
                         if not IsPetTraitLocked(pet, targetRank) then
                             Fire("RollTrait", uid)
                             anyRolled = true
-                            Humanizer.Wait(math.max(0.12, rollDelay - 0.04), rollDelay + 0.04)
+                            consecutiveRolls = consecutiveRolls + 1
+                            
+                            -- Humanizer หน่วงเวลาแบบเป็นธรรมชาติ ปลอดภัยจากการตรวจจับของ Roblox
+                            Humanizer.Wait(math.max(0.25, rollDelay - 0.05), rollDelay + 0.08)
+                            
+                            -- พักสั้นๆ ทุก 12 ครั้งเพื่อจำลองพฤติกรรมมนุษย์ ป้องกัน Remote Burst
+                            if consecutiveRolls >= 12 then
+                                consecutiveRolls = 0
+                                task.wait(math.random(60, 100) / 100)
+                            end
                             data = State.Data
                         end
                     end
                 end
                 
                 if not anyRolled then
-                    task.wait(2.0)
+                    consecutiveRolls = 0
+                    task.wait(2.5) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือไม่มีตัวให้สุ่ม พัก 2.5 วินาที ไม่ยิงซ้ำ
                 end
             end)
         else
+            consecutiveRolls = 0
             task.wait(1.5)
         end
     end
