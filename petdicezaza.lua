@@ -364,6 +364,7 @@ local Window = Fluent:CreateWindow({
     Theme = "Darker",
     MinimizeKey = Enum.KeyCode.RightControl
 })
+getgenv().PetDiceWindow = Window
 
 -- Fix transparency: Make background 100% solid dark and high contrast for crystal clear readability
 local function ApplySolidWindowStyle(win)
@@ -580,7 +581,12 @@ end)
 -- ------------------------------------------------------------------------------
 Tabs.Enhance:AddSection("⚙️ ตั้งค่าสัตว์เลี้ยงและเป้าหมาย")
 
-Tabs.Enhance:AddSlider("SliderEnhancePetCount", {
+local SliderEnhancePetCount, InputCustomEnhancePetCount
+local SliderRollSpeed, InputCustomRollSpeed
+local SliderTargetPetLevel, InputCustomTargetPetLevel
+local DropUpgradeLevelStep, InputCustomUpgradeStep
+
+SliderEnhancePetCount = Tabs.Enhance:AddSlider("SliderEnhancePetCount", {
     Title = "จำนวนสัตว์เลี้ยงที่จะอัปเกรด (1 - 8 ตัว)",
     Description = "เลือกจำนวนสัตว์เลี้ยงที่ดีที่สุดที่จะสั่งอัปเลเวลและสุ่มบัฟ",
     Default = CFG.EnhancePetCount or 4,
@@ -589,11 +595,38 @@ Tabs.Enhance:AddSlider("SliderEnhancePetCount", {
     Rounding = 0,
     Callback = function(V)
         UpdateCFG("EnhancePetCount", V)
+        pcall(function()
+            if InputCustomEnhancePetCount and InputCustomEnhancePetCount.Value ~= tostring(V) then
+                InputCustomEnhancePetCount:SetValue(tostring(V))
+            end
+        end)
         UpdateOverviewTab()
     end
 })
 
-Tabs.Enhance:AddSlider("SliderRollSpeed", {
+InputCustomEnhancePetCount = Tabs.Enhance:AddInput("InputCustomEnhancePetCount", {
+    Title = "✏️ กำหนดจำนวนสัตว์เลี้ยงเอง (พิมพ์ตัวเลข 1 - 8)",
+    Default = tostring(CFG.EnhancePetCount or 4),
+    Placeholder = "พิมพ์จำนวน เช่น 1 - 8...",
+    Numeric = true,
+    Finished = true,
+    Callback = function(val)
+        local n = tonumber(val)
+        if n and n >= 1 then
+            n = math.clamp(math.floor(n), 1, 8)
+            UpdateCFG("EnhancePetCount", n)
+            pcall(function()
+                if SliderEnhancePetCount and SliderEnhancePetCount.Value ~= n then
+                    SliderEnhancePetCount:SetValue(n)
+                end
+            end)
+            UpdateOverviewTab()
+            Notify("🐾 อัปเกรด", "ตั้งค่าจำนวนสัตว์เลี้ยงเป็น " .. n .. " ตัว", 2)
+        end
+    end
+})
+
+SliderRollSpeed = Tabs.Enhance:AddSlider("SliderRollSpeed", {
     Title = "⚡ ความเร็วในการสุ่มบัฟ/เกรด (0.15 - 1.00 วินาที)",
     Description = "ความหน่วงระหว่างการสุ่ม (แนะนำ 0.20 - 0.30 วิ = เร็วสุดและปลอดภัยจากระบบตรวจจับ 100%)",
     Default = CFG.RollSpeed or 0.25,
@@ -602,10 +635,36 @@ Tabs.Enhance:AddSlider("SliderRollSpeed", {
     Rounding = 2,
     Callback = function(V)
         UpdateCFG("RollSpeed", V)
+        pcall(function()
+            if InputCustomRollSpeed and InputCustomRollSpeed.Value ~= tostring(V) then
+                InputCustomRollSpeed:SetValue(tostring(V))
+            end
+        end)
     end
 })
 
-Tabs.Enhance:AddSlider("SliderTargetPetLevel", {
+InputCustomRollSpeed = Tabs.Enhance:AddInput("InputCustomRollSpeed", {
+    Title = "✏️ กำหนดความเร็วในการสุ่มเอง (พิมพ์วินาที)",
+    Default = tostring(CFG.RollSpeed or 0.25),
+    Placeholder = "พิมพ์ความเร็ว เช่น 0.20, 0.25...",
+    Numeric = true,
+    Finished = true,
+    Callback = function(val)
+        local n = tonumber(val)
+        if n and n > 0 then
+            local safeN = math.max(0.12, math.floor(n * 100 + 0.5) / 100)
+            UpdateCFG("RollSpeed", safeN)
+            pcall(function()
+                if safeN >= 0.15 and safeN <= 1.00 and SliderRollSpeed then
+                    SliderRollSpeed:SetValue(safeN)
+                end
+            end)
+            Notify("⚡ ความเร็วสุ่ม", "ตั้งค่าความเร็วสุ่มเป็น " .. safeN .. " วินาที", 2)
+        end
+    end
+})
+
+SliderTargetPetLevel = Tabs.Enhance:AddSlider("SliderTargetPetLevel", {
     Title = "🎯 เลเวลเป้าหมายสูงสุดที่ต้องการ (1 - 100)",
     Description = "สัตว์เลี้ยงที่เลเวลถึงเป้าหมายนี้แล้ว จะหยุดอัปทันที",
     Default = CFG.TargetPetLevel or 100,
@@ -614,11 +673,38 @@ Tabs.Enhance:AddSlider("SliderTargetPetLevel", {
     Rounding = 0,
     Callback = function(V)
         UpdateCFG("TargetPetLevel", V)
+        pcall(function()
+            if InputCustomTargetPetLevel and InputCustomTargetPetLevel.Value ~= tostring(V) then
+                InputCustomTargetPetLevel:SetValue(tostring(V))
+            end
+        end)
         UpdateOverviewTab()
     end
 })
 
-Tabs.Enhance:AddDropdown("DropUpgradeLevelStep", {
+InputCustomTargetPetLevel = Tabs.Enhance:AddInput("InputCustomTargetPetLevel", {
+    Title = "✏️ กำหนดเลเวลเป้าหมายเอง (พิมพ์ตัวเลข)",
+    Default = tostring(CFG.TargetPetLevel or 100),
+    Placeholder = "พิมพ์เลเวล เช่น 50, 100, 200...",
+    Numeric = true,
+    Finished = true,
+    Callback = function(val)
+        local n = tonumber(val)
+        if n and n >= 1 then
+            local lvl = math.floor(n)
+            UpdateCFG("TargetPetLevel", lvl)
+            pcall(function()
+                if lvl >= 1 and lvl <= 100 and SliderTargetPetLevel then
+                    SliderTargetPetLevel:SetValue(lvl)
+                end
+            end)
+            UpdateOverviewTab()
+            Notify("🎯 เลเวลเป้าหมาย", "ตั้งค่าเลเวลเป้าหมายเป็น " .. lvl, 2)
+        end
+    end
+})
+
+DropUpgradeLevelStep = Tabs.Enhance:AddDropdown("DropUpgradeLevelStep", {
     Title = "⚡ รูปแบบ / จำนวนเลเวลที่จะอัปต่อรอบ",
     Description = "เลือกจำนวนขั้นเลเวลที่จะส่งคำสั่งอัปเกรด",
     Values = UpgradeStepOptions,
@@ -626,7 +712,30 @@ Tabs.Enhance:AddDropdown("DropUpgradeLevelStep", {
     Multi = false,
     Callback = function(val)
         UpdateCFG("UpgradeLevelStepName", val)
-        UpdateCFG("UpgradeLevelStep", UpgradeStepMap[val] or 1)
+        local step = UpgradeStepMap[val] or 1
+        UpdateCFG("UpgradeLevelStep", step)
+        pcall(function()
+            if InputCustomUpgradeStep and InputCustomUpgradeStep.Value ~= tostring(step) then
+                InputCustomUpgradeStep:SetValue(tostring(step))
+            end
+        end)
+    end
+})
+
+InputCustomUpgradeStep = Tabs.Enhance:AddInput("InputCustomUpgradeStep", {
+    Title = "✏️ กำหนดจำนวนเลเวลที่จะอัปเองต่อรอบ (พิมพ์ตัวเลข)",
+    Default = tostring(CFG.UpgradeLevelStep or 1),
+    Placeholder = "พิมพ์จำนวนเลเวล เช่น 1, 5, 10, 25...",
+    Numeric = true,
+    Finished = true,
+    Callback = function(val)
+        local n = tonumber(val)
+        if n and n >= 1 then
+            local step = math.floor(n)
+            UpdateCFG("UpgradeLevelStep", step)
+            UpdateCFG("UpgradeLevelStepName", "กำหนดเอง: +" .. step .. " เลเวล")
+            Notify("⚡ อัปเลเวล", "ตั้งค่าการอัปเกรดเป็นครั้งละ " .. step .. " เลเวล", 2)
+        end
     end
 })
 
@@ -913,13 +1022,42 @@ Tabs.Rebirth:AddToggle("TogTree", {
     Callback = function(V) UpdateCFG("UpgradeTree", V) end
 })
 
-Tabs.Rebirth:AddSlider("SliderTreeDelay", {
+local SliderTreeDelay, InputCustomTreeDelay
+SliderTreeDelay = Tabs.Rebirth:AddSlider("SliderTreeDelay", {
     Title = "ระยะเวลาหน่วงในการวนซื้อ (วินาที)",
     Default = CFG.UpgradeTreeDelay or 3,
     Min = 2,
     Max = 10,
     Rounding = 0,
-    Callback = function(V) UpdateCFG("UpgradeTreeDelay", V) end
+    Callback = function(V)
+        UpdateCFG("UpgradeTreeDelay", V)
+        pcall(function()
+            if InputCustomTreeDelay and InputCustomTreeDelay.Value ~= tostring(V) then
+                InputCustomTreeDelay:SetValue(tostring(V))
+            end
+        end)
+    end
+})
+
+InputCustomTreeDelay = Tabs.Rebirth:AddInput("InputCustomTreeDelay", {
+    Title = "✏️ กำหนดระยะเวลาหน่วงเอง (พิมพ์วินาที)",
+    Default = tostring(CFG.UpgradeTreeDelay or 3),
+    Placeholder = "พิมพ์วินาที เช่น 2, 3, 5...",
+    Numeric = true,
+    Finished = true,
+    Callback = function(val)
+        local n = tonumber(val)
+        if n and n >= 1 then
+            local sec = math.floor(n)
+            UpdateCFG("UpgradeTreeDelay", sec)
+            pcall(function()
+                if sec >= 2 and sec <= 10 and SliderTreeDelay then
+                    SliderTreeDelay:SetValue(sec)
+                end
+            end)
+            Notify("🌳 ต้นไม้ทักษะ", "ตั้งค่าความหน่วงเป็น " .. sec .. " วินาที", 2)
+        end
+    end
 })
 
 Tabs.Rebirth:AddButton({
@@ -1160,13 +1298,42 @@ Tabs.Expedition:AddToggle("TogAutoExpedition", {
     Callback = function(V) UpdateCFG("AutoExpedition", V) end
 })
 
-Tabs.Expedition:AddSlider("SliderExpPetCount", {
+local SliderExpPetCount, InputCustomExpPetCount
+SliderExpPetCount = Tabs.Expedition:AddSlider("SliderExpPetCount", {
     Title = "จำนวนสัตว์เลี้ยงต่อ 1 ช่อง",
     Default = CFG.ExpeditionPetCount or 1,
     Min = 1,
     Max = 5,
     Rounding = 0,
-    Callback = function(V) UpdateCFG("ExpeditionPetCount", V) end
+    Callback = function(V)
+        UpdateCFG("ExpeditionPetCount", V)
+        pcall(function()
+            if InputCustomExpPetCount and InputCustomExpPetCount.Value ~= tostring(V) then
+                InputCustomExpPetCount:SetValue(tostring(V))
+            end
+        end)
+    end
+})
+
+InputCustomExpPetCount = Tabs.Expedition:AddInput("InputCustomExpPetCount", {
+    Title = "✏️ กำหนดจำนวนสัตว์เลี้ยงต่อช่องเอง (พิมพ์ตัวเลข 1 - 5)",
+    Default = tostring(CFG.ExpeditionPetCount or 1),
+    Placeholder = "พิมพ์จำนวน เช่น 1 - 5...",
+    Numeric = true,
+    Finished = true,
+    Callback = function(val)
+        local n = tonumber(val)
+        if n and n >= 1 then
+            local count = math.clamp(math.floor(n), 1, 5)
+            UpdateCFG("ExpeditionPetCount", count)
+            pcall(function()
+                if SliderExpPetCount and SliderExpPetCount.Value ~= count then
+                    SliderExpPetCount:SetValue(count)
+                end
+            end)
+            Notify("🌙 ผจญภัย", "ตั้งค่าจำนวนสัตว์เลี้ยงเป็น " .. count .. " ตัว", 2)
+        end
+    end
 })
 
 Tabs.Expedition:AddSection("🎁 เควส & รางวัลประจำวัน (Rewards & Quests)")
