@@ -913,18 +913,170 @@ Tabs.Enhance:AddToggle("TogAutoPetTrait", {
 -- ------------------------------------------------------------------------------
 -- 🏰 TAB 3: TOWER & DICE
 -- ------------------------------------------------------------------------------
-Tabs.Tower:AddSection("🏰 หอคอยอินฟินิตี้ (Infinity Tower)")
+Tabs.Tower:AddSection("📊 สถานะหอคอยแบบเรียลไทม์ (Live Tower Status)")
+
+local function IsTowerRunning()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
+    local hud = root and root:FindFirstChild("Hud")
+    if hud then
+        local tracker = hud:FindFirstChild("TowerTracker")
+        local battle = hud:FindFirstChild("Battle")
+        if (tracker and tracker.Visible) or (battle and battle.Visible) then
+            return true
+        end
+    end
+    return false
+end
+
+local function IsTowerInArena()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
+    local hud = root and root:FindFirstChild("Hud")
+    local battle = hud and hud:FindFirstChild("Battle")
+    return battle and battle.Visible == true
+end
+
+local function GetCurrentTowerFloor()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
+    local hud = root and root:FindFirstChild("Hud")
+    if hud then
+        local tracker = hud:FindFirstChild("TowerTracker")
+        if tracker and tracker.Visible then
+            for _, child in ipairs(tracker:GetDescendants()) do
+                if child:IsA("TextLabel") and child.Text:find("FLOOR") then
+                    local f = child.Text:match("FLOOR%s+(%d+)") or child.Text:match("ชั้น%s*(%d+)")
+                    if f then return tonumber(f) end
+                end
+            end
+        end
+        local battle = hud:FindFirstChild("Battle")
+        if battle and battle.Visible then
+            for _, child in ipairs(battle:GetDescendants()) do
+                if child:IsA("TextLabel") and (child.Text:find("FLOOR") or child.Text:find("STAGE")) then
+                    local f = child.Text:match("(%d+)")
+                    if f then return tonumber(f) end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local TowerStatusPara = Tabs.Tower:AddParagraph({
+    Title = "⏳ กำลังโหลดสถานะหอคอย...",
+    Content = "กำลังตรวจสอบชั้นและสถานะการลงหอคอย..."
+})
+
+local function UpdateTowerStatus()
+    pcall(function()
+        local data = State.Data
+        if not data then return end
+        
+        local isRunning = IsTowerRunning()
+        local inArena = IsTowerInArena()
+        local curFloor = GetCurrentTowerFloor() or (isRunning and data.TowerResume and data.TowerResume.Floor) or 0
+        local bestFloor = (data.TowerBest and data.TowerBest.Infinity) or 0
+        local autoTower = CFG.Tower and "🟢 เปิด (Active)" or "🔴 ปิด (Off)"
+        local autoExit = CFG.AutoExitArena and "🟢 เปิด" or "🔴 ปิด"
+        local autoDice = CFG.AutoPlay and "🟢 เปิด" or "🔴 ปิด"
+        
+        local statusText
+        if isRunning then
+            local modeStr = inArena and "ในอารีน่า (Arena)" or "โหมดเบื้องหลัง (Away)"
+            statusText = string.format("⚔️ กำลังฟาร์มชั้น: %d (%s)", curFloor, modeStr)
+        else
+            statusText = "💤 ไม่ได้ลงหอคอย (พร้อมเริ่ม)"
+        end
+        
+        local desc = string.format("🏰 หอคอย: Infinity | 🏆 สถิติสูงสุด: ชั้น %d\n⚙️ ออโต้หอคอย: %s | 🚪 ออกอารีน่า: %s | 🎲 ทอยเต๋า: %s",
+            bestFloor, autoTower, autoExit, autoDice)
+            
+        TowerStatusPara:SetTitle(statusText)
+        TowerStatusPara:SetDesc(desc)
+    end)
+end
+
+task.spawn(UpdateTowerStatus)
+task.spawn(function()
+    while true do
+        task.wait(1.0)
+        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        UpdateTowerStatus()
+    end
+end)
+
+Tabs.Tower:AddSection("🏰 ควบคุมการฟาร์มหอคอย (Infinity Tower Controls)")
 
 Tabs.Tower:AddToggle("TogTower", {
     Title = "1. ฟาร์มหอคอยอัตโนมัติ (Auto Tower)",
     Default = CFG.Tower,
-    Callback = function(V) UpdateCFG("Tower", V) end
+    Callback = function(V)
+        UpdateCFG("Tower", V)
+        if V then
+            task.spawn(function()
+                local data = State.Data
+                if not data then return end
+                
+                -- เปิด TowerAutoplay
+                Fire("SetSetting", "TowerAutoplay", true)
+                
+                -- สแกนเรียลไทม์: หากหอคอยไม่ได้ทำงานอยู่ ให้จัดทีมสัตว์เลี้ยงที่ดีที่สุดและเริ่มทันที
+                if not IsTowerRunning() then
+                    local towerDef = Towers.ById["Infinity"] or Towers.List[#Towers.List]
+                    local teamSize = Towers.TeamSizeFor(data)
+                    local team = TeamPairs.Best(data, towerDef, teamSize)
+                    if #team > 0 then
+                        Fire("TowerStart", towerDef.Id, team)
+                        Notify("🏰 หอคอย", "เปิดระบบและเริ่มลง Infinity Tower ทันที!", 3)
+                        if CFG.AutoExitArena then
+                            task.delay(1.5, function()
+                                Fire("TowerExit")
+                            end)
+                        end
+                    else
+                        Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
+                    end
+                else
+                    if CFG.AutoExitArena and IsTowerInArena() then
+                        Fire("TowerExit")
+                    end
+                    local curFloor = GetCurrentTowerFloor() or 0
+                    Notify("🏰 หอคอย", "เปิดระบบฟาร์มหอคอยแล้ว (กำลังฟาร์มชั้น " .. curFloor .. ")", 3)
+                end
+                task.delay(0.2, UpdateTowerStatus)
+            end)
+        else
+            task.spawn(function()
+                Fire("SetSetting", "TowerAutoplay", false)
+                Notify("🏰 หอคอย", "ปิดระบบฟาร์มหอคอยอัตโนมัติแล้ว", 2)
+                task.delay(0.2, UpdateTowerStatus)
+            end)
+        end
+    end
 })
 
 Tabs.Tower:AddToggle("TogAutoExitArena", {
     Title = "2. ออกจากอารีน่าอัตโนมัติเมื่อจบชั้น (Auto Exit Arena)",
     Default = CFG.AutoExitArena,
-    Callback = function(V) UpdateCFG("AutoExitArena", V) end
+    Callback = function(V)
+        UpdateCFG("AutoExitArena", V)
+        if V then
+            task.spawn(function()
+                if IsTowerInArena() then
+                    Fire("TowerExit")
+                    Notify("🚪 หอคอย", "ออกจากอารีน่ามาทำงานเบื้องหลังเรียบร้อย!", 2)
+                else
+                    Notify("🚪 หอคอย", "เปิดระบบออกจากอารีน่าอัตโนมัติแล้ว", 2)
+                end
+                task.delay(0.2, UpdateTowerStatus)
+            end)
+        else
+            Notify("🚪 หอคอย", "ปิดระบบออกจากอารีน่าอัตโนมัติแล้ว", 2)
+            task.delay(0.2, UpdateTowerStatus)
+        end
+    end
 })
 
 TogTowerEquipBest = Tabs.Tower:AddToggle("TogAutoEquipBest", {
@@ -949,6 +1101,7 @@ Tabs.Tower:AddButton({
             if CFG.AutoExitArena then
                 task.delay(1.5, function() Fire("TowerExit") end)
             end
+            task.delay(0.2, UpdateTowerStatus)
         else
             Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
         end
@@ -961,6 +1114,7 @@ Tabs.Tower:AddButton({
     Callback = function()
         Fire("TowerExit")
         Notify("🚪 หอคอย", "ส่งคำสั่งออกจากอารีน่าเรียบร้อย!", 2)
+        task.delay(0.2, UpdateTowerStatus)
     end
 })
 
@@ -970,6 +1124,7 @@ Tabs.Tower:AddButton({
     Callback = function()
         Fire("TowerLeave")
         Notify("🛑 หอคอย", "ส่งคำสั่งหยุดการลงหอคอยเรียบร้อย!", 2)
+        task.delay(0.2, UpdateTowerStatus)
     end
 })
 
@@ -978,13 +1133,43 @@ Tabs.Tower:AddSection("🎲 กลิ้งลูกเต๋า (Auto Dice)")
 Tabs.Tower:AddToggle("TogAutoPlay", {
     Title = "4. กลิ้งลูกเต๋าอัตโนมัติ (Auto Roll Dice)",
     Default = CFG.AutoPlay,
-    Callback = function(V) UpdateCFG("AutoPlay", V) end
+    Callback = function(V)
+        UpdateCFG("AutoPlay", V)
+        if V then
+            task.spawn(function()
+                local data = State.Data
+                if data and Stats and Stats.HasAuto and Stats.HasAuto(data, State.Mods and State.Mods() or {}) then
+                    Fire("SetAuto", true)
+                    Notify("🎲 กลิ้งลูกเต๋า", "เปิดระบบ Auto Roll ในเกมเรียบร้อย!", 2)
+                else
+                    Notify("🎲 กลิ้งลูกเต๋า", "เปิดระบบทอยลูกเต๋าอัตโนมัติเรียบร้อย!", 2)
+                end
+                task.delay(0.2, UpdateTowerStatus)
+            end)
+        else
+            task.spawn(function()
+                Fire("SetAuto", false)
+                Notify("🎲 กลิ้งลูกเต๋า", "ปิดระบบทอยลูกเต๋าอัตโนมัติแล้ว", 2)
+                task.delay(0.2, UpdateTowerStatus)
+            end)
+        end
+    end
 })
 
 Tabs.Tower:AddToggle("TogAutoBuyDice", {
     Title = "5. ซื้อลูกเต๋าอัตโนมัติเมื่อเงินพอ (Auto Buy Dice)",
     Default = CFG.AutoBuyDice,
-    Callback = function(V) UpdateCFG("AutoBuyDice", V) end
+    Callback = function(V)
+        UpdateCFG("AutoBuyDice", V)
+        if V then
+            task.spawn(function()
+                Fire("BuyDice")
+                Notify("🎲 ซื้อลูกเต๋า", "เปิดระบบซื้อลูกเต๋าอัตโนมัติเรียบร้อย!", 2)
+            end)
+        else
+            Notify("🎲 ซื้อลูกเต๋า", "ปิดระบบซื้อลูกเต๋าอัตโนมัติแล้ว", 2)
+        end
+    end
 })
 
 -- ------------------------------------------------------------------------------
@@ -1817,7 +2002,7 @@ end)
 -- 3. Auto Tower (Infinity Tower - Safe Background Runner)
 task.spawn(function()
     while true do
-        task.wait(2.5)
+        task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
@@ -1832,23 +2017,24 @@ task.spawn(function()
                     Fire("SetSetting", "TowerAutoplay", true)
                 end
                 
-                -- หากยังไม่ได้ลงหอคอย ให้เริ่มต้นลง Infinity Tower ด้วยทีมสัตว์เลี้ยงที่ดีที่สุด
-                if not data.TowerResume then
+                -- สแกนเรียลไทม์: หากหอคอยไม่ได้ทำงานอยู่ (จบชั้น/แพ้/ยังไม่ได้ลง) ให้จัดทีมสัตว์เลี้ยงที่ดีที่สุดและเริ่มทันที
+                if not IsTowerRunning() then
                     local towerDef = Towers.ById["Infinity"] or Towers.List[#Towers.List]
                     local teamSize = Towers.TeamSizeFor(data)
                     local team = TeamPairs.Best(data, towerDef, teamSize)
                     if #team > 0 then
+                        Fire("SetSetting", "TowerAutoplay", true)
                         Fire("TowerStart", towerDef.Id, team)
-                        Humanizer.Wait(2.0, 3.5)
+                        Humanizer.Wait(1.5, 2.5)
                         if CFG.AutoExitArena then
                             Fire("TowerExit")
-                            Humanizer.Wait(1.5, 2.5)
+                            Humanizer.Wait(1.0, 2.0)
                         end
                     end
-                elseif not data.TowerResume.Away and CFG.AutoExitArena then
-                    -- หากตัวละครอยู่ในอารีน่า ส่งคำสั่งออกมาให้อยู่ในโหมด Away เพื่อเดินสำรวจแมพได้อิสระ
+                elseif IsTowerInArena() and CFG.AutoExitArena then
+                    -- หากตัวละครหลุดเข้าไปในอารีน่า ส่งคำสั่งออกมาให้อยู่ในโหมด Away เพื่อเดินสำรวจแมพได้อิสระ
                     Fire("TowerExit")
-                    Humanizer.Wait(2.0, 3.0)
+                    Humanizer.Wait(1.5, 2.5)
                 end
             end)
         end
