@@ -331,6 +331,16 @@ end
 pcall(function() CleanOldGuis(CG) end)
 pcall(function() CleanOldGuis(LocalPlayer:FindFirstChild("PlayerGui")) end)
 
+-- Clean previous Fluent instances before loading
+if getgenv().PetDiceFluent then
+    pcall(function() getgenv().PetDiceFluent:Destroy() end)
+end
+for _, c in ipairs(CG:GetChildren()) do
+    if c:IsA("ScreenGui") and c.Name == "ScreenGui" then
+        pcall(function() c:Destroy() end)
+    end
+end
+
 -- ==============================================================================
 -- [5] LOAD FLUENT UI & SETUP WINDOW
 -- ==============================================================================
@@ -343,6 +353,7 @@ if okFluent and fluentRes then
 else
     Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/main/main.lua"))()
 end
+getgenv().PetDiceFluent = Fluent
 
 local Window = Fluent:CreateWindow({
     Title = "Pet Dice Pro Farm",
@@ -454,7 +465,7 @@ Tabs.Overview:AddButton({
     Title = "⭐ สวมใส่สัตว์เลี้ยงที่ดีที่สุดทันที (Equip Best Pets)",
     Description = "คำนวณและสวมใส่ทีมที่ดีที่สุดโดยอัตโนมัติ",
     Callback = function()
-        Fire("EquipBestPets")
+        Fire("EquipBest")
         Notify("⭐ สวมใส่สำเร็จ", "สวมใส่ทีมสัตว์เลี้ยงที่ดีที่สุดเรียบร้อย!", 3)
     end
 })
@@ -469,7 +480,7 @@ local function UpdateOverviewTab()
         local gemsStr = Format.Commas(data.Gems or 0)
         local shardsStr = Format.Commas(data.Shards or 0)
         local candyStr = Format.Commas((data.Season and data.Season.Candy) or 0)
-        local towerFloor = (data.Towers and data.Towers.Floor) or 0
+        local towerFloor = (data.TowerResume and data.TowerResume.Floor) or (data.TowerBest and data.TowerBest.Infinity) or 0
         local totalPets = 0
         if data.Pets then for _ in pairs(data.Pets) do totalPets = totalPets + 1 end end
         
@@ -784,11 +795,42 @@ Tabs.Tower:AddToggle("TogAutoEquipBest", {
 })
 
 Tabs.Tower:AddButton({
-    Title = "🚪 ออกจากอารีน่าทันที (Emergency Exit Arena)",
-    Description = "ส่งคำสั่งออกจากอารีน่าอย่างปลอดภัย",
+    Title = "▶️ เริ่มลงหอคอยทันที (Start Infinity Tower Now)",
+    Description = "จัดทีมสัตว์เลี้ยงที่ดีที่สุดและส่งคำสั่งเริ่มลงหอคอย",
     Callback = function()
-        Fire("TowerExitArena")
-        Notify("🚪 หอคอย", "ออกจากอารีน่าเรียบร้อย!", 2)
+        local data = State.Data
+        if not data then return end
+        local towerDef = Towers.ById["Infinity"] or Towers.List[#Towers.List]
+        local teamSize = Towers.TeamSizeFor(data)
+        local team = TeamPairs.Best(data, towerDef, teamSize)
+        if #team > 0 then
+            Fire("SetSetting", "TowerAutoplay", true)
+            Fire("TowerStart", towerDef.Id, team)
+            Notify("🏰 หอคอย", "เริ่มลง Infinity Tower เรียบร้อย!", 3)
+            if CFG.AutoExitArena then
+                task.delay(1.5, function() Fire("TowerExit") end)
+            end
+        else
+            Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
+        end
+    end
+})
+
+Tabs.Tower:AddButton({
+    Title = "🚪 ออกจากอารีน่าทันที (Exit Arena to Background)",
+    Description = "ส่งคำสั่งออกจากอารีน่าเพื่อเดินเล่นในแมพได้อิสระ (หอคอยยังคงฟาร์มต่อ)",
+    Callback = function()
+        Fire("TowerExit")
+        Notify("🚪 หอคอย", "ส่งคำสั่งออกจากอารีน่าเรียบร้อย!", 2)
+    end
+})
+
+Tabs.Tower:AddButton({
+    Title = "🛑 สั่งหยุดลงหอคอย (Stop Tower Run)",
+    Description = "ส่งคำสั่งหยุดการลงหอคอยรอบปัจจุบันทันที",
+    Callback = function()
+        Fire("TowerLeave")
+        Notify("🛑 หอคอย", "ส่งคำสั่งหยุดการลงหอคอยเรียบร้อย!", 2)
     end
 })
 
@@ -848,6 +890,15 @@ Tabs.Rebirth:AddSlider("SliderTreeDelay", {
     Max = 10,
     Rounding = 0,
     Callback = function(V) UpdateCFG("UpgradeTreeDelay", V) end
+})
+
+Tabs.Rebirth:AddButton({
+    Title = "🌳 ซื้ออัปเกรดต้นไม้ทั้งหมดทันที (Buy All Upgrades Now)",
+    Description = "ส่งคำสั่งซื้ออัปเกรดต้นไม้ทั้งหมดที่สามารถซื้อได้ใน 1 คลิก",
+    Callback = function()
+        Fire("BuyAllUpgrades")
+        Notify("🌳 อัปเกรด", "ส่งคำสั่งซื้ออัปเกรดต้นไม้ทั้งหมดสำเร็จ!", 2)
+    end
 })
 
 -- ------------------------------------------------------------------------------
@@ -1211,6 +1262,15 @@ local function GetHalloweenEntry()
     return Season.Entry(State.Data, seasonInfo.Id), seasonInfo
 end
 
+local function CanTrickOrTreat()
+    local s = Season.Halloween and Season.Halloween()
+    if not s or not State.Data then return false end
+    local entry = Season.Entry and Season.Entry(State.Data, s.Id)
+    local now = State.Now and State.Now() or os.time()
+    if not entry or not entry.TreatDay then return true end
+    return entry.TreatDay < Season.TreatDay(now)
+end
+
 local function FindPawculaNPC()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("Model") and obj.Name:lower():find("pawcula") then
@@ -1399,7 +1459,7 @@ local function GetTradeWindow()
 end
 
 local function IsInTrade()
-    return getgenv().TradeActiveSession == true or GetTradeWindow() ~= nil
+    return getgenv().TradeActiveSession == true or getgenv().CurrentTradeSession ~= nil or GetTradeWindow() ~= nil
 end
 
 -- ------------------------------------------------------------------------------
@@ -1473,9 +1533,12 @@ TradeRemote.OnClientEvent:Connect(function(event, payload)
         end
     elseif event == "Open" or event == "Update" then
         getgenv().TradeActiveSession = true
+        getgenv().CurrentTradeSession = payload
     elseif event == "Closed" then
+        getgenv().CurrentTradeSession = nil
+        getgenv().TradeItemsDropped = false
         task.spawn(function()
-            Humanizer.Wait(3.0, 5.0)
+            Humanizer.Wait(2.0, 3.5)
             getgenv().TradeActiveSession = false
         end)
     end
@@ -1491,10 +1554,20 @@ task.spawn(function()
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
         
         if CFG.AutoPlay then
             CircuitBreaker.Execute("AutoPlay", function()
-                if not State.Rolling then
+                local data = State.Data
+                if not data then return end
+                
+                -- สแกนเรียลไทม์: หากปลดล็อค Auto Roll ในเกมแล้ว ให้เปิดการทำงาน Native ของเกม
+                if Stats and Stats.HasAuto and Stats.HasAuto(data, State.Mods and State.Mods() or {}) then
+                    if not State.Auto then
+                        Fire("SetAuto", true)
+                        Humanizer.Wait(1.0, 1.8)
+                    end
+                elseif not State.Rolling then
                     Fire("Roll")
                     Humanizer.Wait(1.2, 2.0)
                 end
@@ -1503,7 +1576,7 @@ task.spawn(function()
     end
 end)
 
--- 2. Auto Buy Dice
+-- 2. Auto Buy & Equip Best Dice
 task.spawn(function()
     while true do
         task.wait(3.5)
@@ -1513,13 +1586,30 @@ task.spawn(function()
         if CFG.AutoBuyDice then
             CircuitBreaker.Execute("AutoBuyDice", function()
                 local data = State.Data
-                if not data or not data.Money then return end
-                for i = #Config.Dices, 1, -1 do
-                    local d = Config.Dices[i]
-                    if not (data.Dices and data.Dices[d.Id]) and data.Money >= d.Cost then
+                if not data or not data.Money or not data.OwnedDice or not Config.Dice then return end
+                
+                -- สแกนเรียลไทม์: ซื้อลูกเต๋าที่ดีที่สุดที่ยังไม่มีและเงินพอ
+                for i = #Config.Dice, 1, -1 do
+                    local d = Config.Dice[i]
+                    if not data.OwnedDice[d.Id] and (data.Money or 0) >= (d.Cost or 0) then
                         Fire("BuyDice", d.Id)
-                        Humanizer.Wait(1.0, 1.5)
+                        Humanizer.Wait(1.5, 2.5)
                         break
+                    end
+                end
+                
+                -- สแกนเรียลไทม์: สวมใส่ลูกเต๋าที่ดีที่สุดที่มีในครอบครองอัตโนมัติ
+                data = State.Data
+                if data and data.OwnedDice and Config.Dice then
+                    for i = #Config.Dice, 1, -1 do
+                        local d = Config.Dice[i]
+                        if data.OwnedDice[d.Id] then
+                            if data.Dice ~= d.Id then
+                                Fire("EquipDice", d.Id)
+                                Humanizer.Wait(1.0, 1.8)
+                            end
+                            break
+                        end
                     end
                 end
             end)
@@ -1527,10 +1617,10 @@ task.spawn(function()
     end
 end)
 
--- 3. Auto Tower
+-- 3. Auto Tower (Infinity Tower - Safe Background Runner)
 task.spawn(function()
     while true do
-        task.wait(2.0)
+        task.wait(2.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
@@ -1538,28 +1628,30 @@ task.spawn(function()
         if CFG.Tower then
             CircuitBreaker.Execute("Tower", function()
                 local data = State.Data
-                if not data or not data.Towers then return end
-                local tState = data.Towers.State
-                local curFloor = data.Towers.Floor or 1
+                if not data then return end
                 
-                if tState == "Arena" then
-                    local mobAlive = false
-                    local mobsFolder = workspace:FindFirstChild("TowerMobs") or workspace:FindFirstChild("Mobs")
-                    if mobsFolder then
-                        for _, m in ipairs(mobsFolder:GetChildren()) do
-                            local h = m:FindFirstChild("Humanoid")
-                            if h and h.Health > 0 then mobAlive = true break end
+                -- ตรวจสอบและเปิดการตั้งค่า Auto Tower ในตัวเกมเพื่อให้ระบบปีนชั้นเอง
+                if data.Settings and not data.Settings.TowerAutoplay then
+                    Fire("SetSetting", "TowerAutoplay", true)
+                end
+                
+                -- หากยังไม่ได้ลงหอคอย ให้เริ่มต้นลง Infinity Tower ด้วยทีมสัตว์เลี้ยงที่ดีที่สุด
+                if not data.TowerResume then
+                    local towerDef = Towers.ById["Infinity"] or Towers.List[#Towers.List]
+                    local teamSize = Towers.TeamSizeFor(data)
+                    local team = TeamPairs.Best(data, towerDef, teamSize)
+                    if #team > 0 then
+                        Fire("TowerStart", towerDef.Id, team)
+                        Humanizer.Wait(2.0, 3.5)
+                        if CFG.AutoExitArena then
+                            Fire("TowerExit")
+                            Humanizer.Wait(1.5, 2.5)
                         end
                     end
-                    if not mobAlive and CFG.AutoExitArena then
-                        Humanizer.Wait(1.5, 2.5)
-                        Fire("TowerExitArena")
-                        Humanizer.Wait(2.0, 3.0)
-                    end
-                elseif tState == "Idle" or tState == nil then
-                    -- เริ่มต้นหอคอยแบบ Background ไม่ดึง/ไม่อวาปตัวละคร ให้ผู้เล่นเดินสำรวจแมพได้อิสระ
-                    Fire("TowerStart", curFloor)
-                    Humanizer.Wait(2.5, 4.0)
+                elseif not data.TowerResume.Away and CFG.AutoExitArena then
+                    -- หากตัวละครอยู่ในอารีน่า ส่งคำสั่งออกมาให้อยู่ในโหมด Away เพื่อเดินสำรวจแมพได้อิสระ
+                    Fire("TowerExit")
+                    Humanizer.Wait(2.0, 3.0)
                 end
             end)
         end
@@ -1587,7 +1679,7 @@ task.spawn(function()
     end
 end)
 
--- 5. Auto Upgrade Skill Tree
+-- 5. Auto Upgrade Skill Tree (Buy All Affordable Upgrades)
 task.spawn(function()
     while true do
         local delayTime = CFG.UpgradeTreeDelay or 3
@@ -1598,15 +1690,18 @@ task.spawn(function()
         if CFG.UpgradeTree then
             CircuitBreaker.Execute("UpgradeTree", function()
                 local data = State.Data
-                if not data or not data.Upgrades then return end
-                for treeId, node in pairs(Upgrades.Tree or {}) do
-                    if not data.Upgrades[treeId] then
-                        local cost = Upgrades.Cost(treeId, data)
-                        if cost and (data.Money or 0) >= cost then
-                            Fire("UpgradeTree", treeId)
-                            Humanizer.Wait(0.4, 0.8)
-                        end
+                if not data or not data.Upgrades or not data.Money then return end
+                
+                -- สแกนเรียลไทม์: ตรวจสอบว่ามีอัปเกรดที่เงินพอซื้อได้จริงหรือไม่
+                if Upgrades and Upgrades.PlanBuyAll then
+                    local planned, totalCost = Upgrades.PlanBuyAll(data.Upgrades, data.Money, 50)
+                    if planned and #planned > 0 then
+                        Fire("BuyAllUpgrades")
+                        Humanizer.Wait(1.5, 2.5)
                     end
+                else
+                    Fire("BuyAllUpgrades")
+                    Humanizer.Wait(2.0, 3.0)
                 end
             end)
         end
@@ -1614,16 +1709,27 @@ task.spawn(function()
 end)
 
 -- 6. Auto Equip Best Pets
+local lastTotalPets = 0
 task.spawn(function()
     while true do
-        task.wait(5.0)
+        task.wait(10.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
         if CFG.AutoEquipBest then
             CircuitBreaker.Execute("AutoEquipBest", function()
-                Fire("EquipBestPets")
-                Humanizer.Wait(1.0, 2.0)
+                local data = State.Data
+                if not data or not data.Pets then return end
+                
+                local currentTotal = 0
+                for _ in pairs(data.Pets) do currentTotal = currentTotal + 1 end
+                
+                -- สแกนเรียลไทม์: สวมใส่เมื่อจำนวนสัตว์เลี้ยงเปลี่ยนหรือยังไม่ได้สวมใส่
+                if currentTotal ~= lastTotalPets or #(data.Equipped or {}) == 0 then
+                    Fire("EquipBest")
+                    lastTotalPets = currentTotal
+                    Humanizer.Wait(1.5, 2.5)
+                end
             end)
         end
     end
@@ -1638,12 +1744,23 @@ task.spawn(function()
         
         if CFG.AutoExpedition then
             CircuitBreaker.Execute("AutoExpedition", function()
+                local data = State.Data
+                if not data or not data.Expeditions then return end
+                
+                -- 1. สแกนเรียลไทม์: เคลมรางวัลการผจญภัยที่เสร็จแล้ว
                 ClaimAllDoneExpeditions()
                 Humanizer.Wait(1.0, 2.0)
-                local pets = GetNightmarePets(CFG.ExpeditionPetCount or 1)
-                if #pets > 0 then
-                    Fire("SendExpedition", "Nightmare", pets)
-                    Humanizer.Wait(1.5, 2.5)
+                
+                -- 2. สแกนเรียลไทม์: ตรวจสอบจำนวนช่องว่างก่อนส่งสัตว์เลี้ยง
+                data = State.Data
+                local maxSlots = Expeditions and Expeditions.Slots and Expeditions.Slots(data) or 3
+                local activeCount = #(data.Expeditions and data.Expeditions.Active or {})
+                if activeCount < maxSlots then
+                    local pets = GetNightmarePets(CFG.ExpeditionPetCount or 1)
+                    if #pets > 0 then
+                        Fire("SendExpedition", "Nightmare", pets)
+                        Humanizer.Wait(1.5, 2.5)
+                    end
                 end
             end)
         end
@@ -1686,12 +1803,14 @@ task.spawn(function()
             if CFG.HalloweenAutoOpenBags then
                 local bagCount = State.Data and State.Data.SeasonBags and State.Data.SeasonBags.Halloween or 0
                 if bagCount > 0 then
-                    Fire("OpenSeasonBags", "Halloween", math.min(bagCount, 25))
-                    Humanizer.Wait(1.2, 2.0)
+                    Fire("OpenLootBag", "all", "Halloween")
+                    Humanizer.Wait(1.5, 2.5)
+                    Fire("ClaimLootPets", "Season")
+                    Humanizer.Wait(1.0, 1.8)
                 end
             end
             
-            if CFG.HalloweenAutoTrickOrTreat then
+            if CFG.HalloweenAutoTrickOrTreat and CanTrickOrTreat() then
                 local npc, pivot = FindPawculaNPC()
                 if pivot then
                     Movement.SafeTween(pivot)
@@ -1704,63 +1823,72 @@ task.spawn(function()
     end
 end)
 
--- 9. Auto Trade Runner
+-- 9. Auto Trade Runner (Safe Real-Time Engine)
 task.spawn(function()
     while true do
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         
-        local win = GetTradeWindow()
-        if not win and not getgenv().TradeActiveSession then
-            if CFG.SenderMode then
+        -- สแกนเรียลไทม์: ตรวจสอบเงื่อนไขว่าปลดล็อคการเทรดในเกมหรือยัง (10 Rebirths & 10,000 Rolls)
+        local data = State.Data
+        local canTrade = data and Config.TradeUnlocked and Config.TradeUnlocked(data)
+        if not canTrade then
+            task.wait(5.0)
+            continue
+        end
+        
+        local inTrade = IsInTrade()
+        if not inTrade then
+            if CFG.SenderMode and CFG.TradeTargetId then
                 CircuitBreaker.Execute("TradeSender", function()
-                    if CFG.TradeTargetId then
-                        local targetPlayer = Players:GetPlayerByUserId(CFG.TradeTargetId)
-                        if targetPlayer and targetPlayer.Parent == Players then
-                            Fire("TradeRequest", CFG.TradeTargetId)
-                            Humanizer.Wait(3.0, 5.0)
-                        end
+                    local targetPlayer = Players:GetPlayerByUserId(CFG.TradeTargetId)
+                    if targetPlayer and targetPlayer.Parent == Players then
+                        Fire("TradeRequest", CFG.TradeTargetId)
+                        Humanizer.Wait(4.0, 6.0)
                     end
                 end)
             end
         else
-            if not getgenv().TradeActiveSession then
-                getgenv().TradeActiveSession = true
+            -- กำลังอยู่ในเซสชันเทรด (In active trade session)
+            -- 1. โหมดดรอปไอเทมอัตโนมัติ (Sender: Auto Drop Items)
+            if CFG.AutoDropItems and not getgenv().TradeItemsDropped then
+                Humanizer.Wait(1.2, 2.0)
+                for _, item in ipairs(tradeItemList) do
+                    if not IsInTrade() then break end
+                    local realCount = GetRealItemCount(item)
+                    if realCount > 0 then
+                        Fire("TradeItem", item, realCount)
+                        Humanizer.Wait(0.35, 0.65)
+                    end
+                end
+                getgenv().TradeItemsDropped = true
+                Humanizer.Wait(1.5, 2.5)
+            end
+            
+            -- 2. โหมดกด Ready อัตโนมัติอย่างปลอดภัย (Safe Auto Ready)
+            if CFG.AutoReady then
+                local session = getgenv().CurrentTradeSession
+                local you = session and session.You
+                local them = session and session.Them
                 
-                task.spawn(function()
-                    local dropped = false
-                    while IsInTrade() do
-                        if getgenv().PetDiceScriptToken ~= scriptToken then break end
-                        
-                        if CFG.AutoDropItems and not dropped then
-                            Humanizer.Wait(1.5, 2.5)
-                            for _, item in ipairs(tradeItemList) do
-                                if not IsInTrade() then break end
-                                local realCount = GetRealItemCount(item)
-                                if realCount > 0 then
-                                    Fire("TradeItem", item, realCount)
-                                    Humanizer.Wait(0.4, 0.7)
-                                end
-                            end
-                            dropped = true
-                            Humanizer.Wait(1.0, 2.0)
-                            continue
-                        end
-                        
-                        if CFG.ReceiverMode then Humanizer.Wait(1.2, 2.0) end
-                        
-                        if CFG.AutoReady then
-                            Humanizer.Wait(0.8, 1.5)
-                            Fire("TradeReady", true)
-                            Humanizer.Wait(3.0, 4.0)
-                        end
-                        
-                        task.wait(1.0)
+                -- ตรวจสอบว่าฝั่งเรายังไม่ได้กด Ready
+                if you and not you.Ready then
+                    -- สแกน LockedFor (คูลดาวน์ป้องกันของเกมหลังวางไอเทม ห้ามกดยืนยันทับ)
+                    local lockedFor = you.LockedFor or 0
+                    if lockedFor > 0 then
+                        task.wait(lockedFor + 0.5)
                     end
                     
-                    Humanizer.Wait(3.0, 5.0)
-                    getgenv().TradeActiveSession = false
-                end)
+                    -- หากเป็นฝั่งรับ (Receiver) รอให้อีกฝ่ายใส่ของหรือกด Ready ก่อน
+                    if CFG.ReceiverMode and them and not them.Ready then
+                        Humanizer.Wait(1.5, 2.5)
+                    end
+                    
+                    if IsInTrade() and not (getgenv().CurrentTradeSession and getgenv().CurrentTradeSession.You and getgenv().CurrentTradeSession.You.Ready) then
+                        Fire("TradeReady", true)
+                        Humanizer.Wait(2.0, 3.5)
+                    end
+                end
             end
         end
     end
