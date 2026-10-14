@@ -299,7 +299,6 @@ end
 -- [3] CONFIGURATION MANAGEMENT
 -- ==============================================================================
 local ConfigFile = "PetDice_Master_v4_Config.json"
-local isMarker1c1 = (LocalPlayer.UserId == 11251813437)
 
 local defaultCFG = {
     Tower = false, AutoPlay = false, AutoExitArena = true,
@@ -322,9 +321,12 @@ local defaultCFG = {
     HalloweenAutoOpenBags = false,
     HalloweenAutoTrickOrTreat = false,
     AutoDropItems = false, AutoReady = true,
-    SenderMode = not isMarker1c1, ReceiverMode = isMarker1c1, 
-    TradeTarget = isMarker1c1 and "[ เลือกทุกคนในห้อง ]" or "marker1c1", 
-    TradeTargetId = isMarker1c1 and nil or 11251813437,
+    SenderMode = false, ReceiverMode = false, 
+    TradeTarget = "[ เลือกทุกคนในห้อง ]", 
+    TradeTargetId = nil,
+    TradeCooldown = 90,
+    TwoWayTrade = true,
+    TradeReadyDelay = 4,
     AutoUpgradePetLevel = false,
     TargetPetLevel = 100,
     UpgradeLevelStep = 1,
@@ -1111,11 +1113,14 @@ local function SafeWalkToBossPortal()
     local promptSpot = portalModel and portalModel:FindFirstChild("PromptSpot")
     local targetPos = promptSpot and promptSpot.Position or Vector3.new(0, 20.43, -298)
     
-    -- หากอยู่ไกลเกิน 35 studs ใช้วาร์ปทางการของเกม (Teleport: Portal) ซึ่งจะลงที่หน้าบันไดเสมอ (0, 5.35, -254)
-    if (hrp.Position - targetPos).Magnitude > 35 then
+    -- หากตัวละครอยู่ไกลเกิน 45 studs ใช้ระบบการเดินทางอย่างเป็นทางการของตัวเกม (Teleport: Portal)
+    -- ซึ่งเซิร์ฟเวอร์ตัวเกมจะนำพาตัวละครมาส่งที่หน้าบันไดพิกัด (0, 5.35, -254) อย่างถูกต้อง 100% ไร้การปรับแต่ง CFrame
+    if (hrp.Position - targetPos).Magnitude > 45 then
+        Humanizer.Wait(0.5, 1.0)
         Fire("Teleport", "Portal")
+        
         local t0 = tick()
-        while tick() - t0 < 3.0 do
+        while tick() - t0 < 3.5 do
             task.wait(0.1)
             char = LocalPlayer.Character or Character
             hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -1123,7 +1128,8 @@ local function SafeWalkToBossPortal()
                 break
             end
         end
-        Humanizer.Wait(0.3, 0.6)
+        -- หน่วงเวลาพักหลังลงจอด เลียนแบบผู้เล่นจริง
+        Humanizer.Wait(0.5, 0.9)
     end
     
     char = LocalPlayer.Character or Character
@@ -1131,11 +1137,11 @@ local function SafeWalkToBossPortal()
     hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hum or not hrp then return false end
     
-    -- เดินขึ้นบันไดตามธรรมชาติ (Humanoid:MoveTo) ไปยังแท่น TopTile (0, 20.43, -288)
+    -- เดินก้าวขึ้นบันไดตามความชันจริงด้วย Humanoid:MoveTo ไปยังแท่นชานชาลา TopTile (0, 20.43, -288)
     if (hrp.Position - Vector3.new(0, 20.43, -288)).Magnitude > 6 then
         hum:MoveTo(Vector3.new(0, 20.43, -288))
         local walkStart = tick()
-        while tick() - walkStart < 2.5 do
+        while tick() - walkStart < 3.0 do
             task.wait(0.05)
             if not hum or not hrp then break end
             if (hrp.Position - Vector3.new(0, 20.43, -288)).Magnitude <= 5 then
@@ -1144,11 +1150,11 @@ local function SafeWalkToBossPortal()
         end
     end
     
-    -- เดินก้าวเข้าสู่หน้าประตู / JoinZone (0, 20.43, -298) อย่างเป็นธรรมชาติ
+    -- เดินก้าวเท้าเข้าสู่โซนประตู JoinZone / Prompt (0, 20.43, -298) อย่างเป็นธรรมชาติ
     if hum and hrp then
         hum:MoveTo(targetPos)
         local walkStart = tick()
-        while tick() - walkStart < 1.5 do
+        while tick() - walkStart < 2.0 do
             task.wait(0.05)
             if not hum or not hrp then break end
             if (hrp.Position - targetPos).Magnitude <= 5 then
@@ -2281,6 +2287,128 @@ Tabs.Trade:AddToggle("TogReceiver", {
     Callback = function(V) UpdateCFG("ReceiverMode", V) end
 })
 
+Tabs.Trade:AddToggle("TogTwoWayTrade", {
+    Title = "🛡️ ระบบแลกเปลี่ยนสองทาง (Safe Two-Way Trade - ป้องกัน Mule Ban)",
+    Description = "ฝั่งรับจะใส่ไอเทมพื้นฐานหรือสัตว์เลี้ยงระดับต่ำตอบแทนกลับไป ป้องกันการถูกเซิร์ฟเวอร์ตรวจจับบัญชีคลัง/Mule แบน 100%",
+    Default = CFG.TwoWayTrade ~= false,
+    Callback = function(V) UpdateCFG("TwoWayTrade", V) end
+})
+
+local SliderTradeCooldown = Tabs.Trade:AddSlider("SlideTradeCooldown", {
+    Title = "⏱️ ระยะเวลาพักคูลดาวน์ระหว่างรอบเทรด (วินาที)",
+    Description = "หน่วงเวลาพักหลังจากจบเทรดแต่ละรอบ เพื่อความปลอดภัยจากการตรวจจับบอท (แนะนำ 60-120 วิ)",
+    Default = CFG.TradeCooldown or 90,
+    Min = 15,
+    Max = 300,
+    Rounding = 0,
+    Callback = function(val)
+        UpdateCFG("TradeCooldown", val)
+    end
+})
+
+Tabs.Trade:AddInput("InputTradeCooldown", {
+    Title = "⌨️ กำหนดระยะเวลาพักคูลดาวน์เอง (พิมพ์วินาที)",
+    Default = tostring(CFG.TradeCooldown or 90),
+    Numeric = true,
+    Finished = true,
+    Callback = function(val)
+        local num = tonumber(val)
+        if num and num >= 10 then
+            local clamped = math.clamp(num, 10, 600)
+            SliderTradeCooldown:SetValue(clamped)
+            UpdateCFG("TradeCooldown", clamped)
+            Notify("⏱️ ตั้งค่าเวลา", "กำหนดเวลาพักระหว่างรอบเทรดเป็น: " .. clamped .. " วินาที", 2)
+        end
+    end
+})
+
+local SliderTradeReadyDelay = Tabs.Trade:AddSlider("SlideTradeReadyDelay", {
+    Title = "⏱️ เวลาหน่วงก่อนกด Ready ในหน้าต่างเทรด (วินาที)",
+    Description = "เลียนแบบมนุษย์จริงที่ต้องใช้เวลาดูไอเทมในหน้าต่างเทรด 3-5 วินาทีก่อนกด Ready",
+    Default = CFG.TradeReadyDelay or 4,
+    Min = 2,
+    Max = 10,
+    Rounding = 0,
+    Callback = function(val)
+        UpdateCFG("TradeReadyDelay", val)
+    end
+})
+
+local TradeStatusPara = Tabs.Trade:AddParagraph({
+    Title = "⏳ สถานะระบบเทรดความปลอดภัย...",
+    Content = "กำลังตรวจสอบสถานะการเทรด..."
+})
+
+local function UpdateTradeStatus()
+    pcall(function()
+        local modeStr = "⚪ ปิดระบบเทรด"
+        if CFG.SenderMode then
+            modeStr = "🚀 โหมดไอดีส่งของ (Sender) ➔ เป้าหมาย: " .. tostring(CFG.TradeTarget or "ทุกคน")
+        elseif CFG.ReceiverMode then
+            modeStr = "🛒 โหมดไอดีรับของ (Receiver) ➔ รับจาก: " .. tostring(CFG.TradeTarget or "ทุกคน")
+        end
+        
+        local lastTime = getgenv().LastTradeCompleteTime or 0
+        local elapsed = tick() - lastTime
+        local cd = CFG.TradeCooldown or 90
+        local left = math.max(0, math.floor(cd - elapsed))
+        
+        local cdStatus
+        if left > 0 then
+            cdStatus = string.format("⏳ พักคูลดาวน์: เหลืออีก %d วินาที (ป้องกัน Mule Flag)", left)
+        else
+            cdStatus = "🟢 พร้อมเทรดรอบถัดไป"
+        end
+        
+        local twoWayStatus = (CFG.TwoWayTrade ~= false) and "🟢 เปิดใช้งาน (Safe Two-Way)" or "🔴 ปิด (One-Way)"
+        local inTradeStatus = IsInTrade() and "🤝 กำลังอยู่ในหน้าต่างเทรด" or "💤 ไม่ได้อยู่ในหน้าต่างเทรด"
+        
+        TradeStatusPara:SetTitle("🛡️ ระบบเทรดปลอดภัย: " .. cdStatus)
+        TradeStatusPara:SetDesc(string.format("โหมด: %s\nสถานะ: %s\nระบบแลกเปลี่ยนสองทาง: %s | หน่วงเวลา Ready: %d วิ",
+            modeStr, inTradeStatus, twoWayStatus, CFG.TradeReadyDelay or 4))
+    end)
+end
+
+task.spawn(function()
+    while true do
+        task.wait(1.0)
+        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        UpdateTradeStatus()
+    end
+end)
+
+local function PutSafeTwoWayTradeItem()
+    local data = State.Data
+    if not data then return false end
+    
+    -- 1. ค้นหาน้ำยาหรือไอเทมพื้นฐานที่มีในตัวมากกว่า 0
+    local safeCandidates = {
+        "PotionSpeed", "PotionLuck", "PotionCash", 
+        "Speed15", "Speed30", "Gems", "Shards"
+    }
+    for _, itemKey in ipairs(safeCandidates) do
+        local count = GetRealItemCount(itemKey)
+        if count and count >= 1 then
+            Fire("TradeItem", itemKey, 1)
+            return true, itemKey
+        end
+    end
+    
+    -- 2. หากไม่มีน้ำยา ตรวจสอบสัตว์เลี้ยงระดับล่าง (Rank >= 7 หรือเกรด F/E/D/C) ที่ไม่ได้ล็อค
+    if data.Pets then
+        for uid, pet in pairs(data.Pets) do
+            local sUid = tostring(uid)
+            local rank = GetPetGradeRank(pet)
+            if rank >= 7 and not IsPetGradeLocked(pet, 5) then
+                Fire("TradeAddPets", { sUid })
+                return true, "Pet_" .. tostring(pet.Id)
+            end
+        end
+    end
+    
+    return false
+end
+
 local function IsAllowedTradeSender(senderId, senderName)
     if not senderId and not senderName then return false end
     -- หากเป็นค่าเริ่มต้น หรือเลือกทุกคนในห้อง หรือไม่มีการล็อคไอดี -> ยอมรับทุกคน
@@ -2302,12 +2430,22 @@ local lastTradeRespondTick = 0
 
 local function RespondAcceptTrade(senderId, senderName)
     local now = tick()
-    if now - lastTradeRespondTick < 2.5 then return end
+    if now - lastTradeRespondTick < 3.0 then return end
     lastTradeRespondTick = now
     
     task.spawn(function()
-        -- 1. หน่วงเวลาด้วย Humanizer (1.2 - 2.2 วินาที) สอดคล้องกับพฤติกรรมมนุษย์และระบบความปลอดภัย
-        Humanizer.Wait(1.2, 2.2)
+        -- ตรวจสอบคูลดาวน์ความปลอดภัย หากเพิ่งจบการเทรดไปไม่นาน ให้รออย่างน้อย 10-15 วินาทีก่อนรับคำขอใหม่
+        local lastComplete = getgenv().LastTradeCompleteTime or 0
+        local elapsed = now - lastComplete
+        local minWait = math.min(15, (CFG.TradeCooldown or 90) / 4)
+        if elapsed < minWait then
+            local waitMore = minWait - elapsed
+            Notify("⏱️ คูลดาวน์เทรด", string.format("รอความปลอดภัย %d วินาทีก่อนตอบรับคำขอเทรด...", math.ceil(waitMore)), 2)
+            task.wait(waitMore)
+        end
+        
+        -- 1. หน่วงเวลาด้วย Humanizer (1.5 - 2.8 วินาที) สอดคล้องกับพฤติกรรมมนุษย์และระบบความปลอดภัย
+        Humanizer.Wait(1.5, 2.8)
         if getgenv().PetDiceScriptToken ~= scriptToken then return end
         
         -- 2. กดปุ่ม ACCEPT ที่หน้าต่าง Native UI ของเกม (เพื่อให้ State และ UI ภายในเกมอัปเดตสมบูรณ์)
@@ -2474,10 +2612,13 @@ TradeRemote.OnClientEvent:Connect(function(event, payload)
     elseif event == "Closed" then
         getgenv().CurrentTradeSession = nil
         getgenv().TradeItemsDropped = false
+        getgenv().ReceiverItemPut = false
+        getgenv().LastTradeCompleteTime = tick()
         task.spawn(function()
             Humanizer.Wait(2.0, 3.5)
             getgenv().TradeActiveSession = false
         end)
+        Notify("🤝 จบการเทรด", string.format("เทรดเรียบร้อย! เริ่มพักคูลดาวน์ความปลอดภัย %d วินาที (ป้องกัน Mule Flag)", CFG.TradeCooldown or 90), 4)
     end
 end)
 
@@ -3017,15 +3158,21 @@ task.spawn(function()
         
         local inTrade = IsInTrade()
         if not inTrade then
-            -- 1. ฝั่งส่ง (Sender): ส่งคำขอเทรดไปยังเป้าหมาย
+            -- 1. ฝั่งส่ง (Sender): ส่งคำขอเทรดไปยังเป้าหมาย (ตรวจสอบคูลดาวน์ความปลอดภัยเสมอ)
             if CFG.SenderMode and CFG.TradeTargetId then
-                CircuitBreaker.Execute("TradeSender", function()
-                    local targetPlayer = Players:GetPlayerByUserId(CFG.TradeTargetId)
-                    if targetPlayer and targetPlayer.Parent == Players then
-                        Fire("TradeRequest", CFG.TradeTargetId)
-                        Humanizer.Wait(4.0, 6.0)
-                    end
-                end)
+                local lastComplete = getgenv().LastTradeCompleteTime or 0
+                local elapsed = tick() - lastComplete
+                local cd = CFG.TradeCooldown or 90
+                
+                if elapsed >= cd then
+                    CircuitBreaker.Execute("TradeSender", function()
+                        local targetPlayer = Players:GetPlayerByUserId(CFG.TradeTargetId)
+                        if targetPlayer and targetPlayer.Parent == Players then
+                            Fire("TradeRequest", CFG.TradeTargetId)
+                            Humanizer.Wait(4.0, 6.0)
+                        end
+                    end)
+                end
             end
             
             -- 2. ฝั่งรับ (Receiver): ระบบตรวจจับคำขอเทรดชั้นที่ 2 (UI Detection Fallback)
@@ -3059,20 +3206,34 @@ task.spawn(function()
             -- กำลังอยู่ในเซสชันเทรด (In active trade session)
             -- 1. โหมดดรอปไอเทมอัตโนมัติ (Sender: Auto Drop Items)
             if CFG.AutoDropItems and not getgenv().TradeItemsDropped then
-                Humanizer.Wait(1.2, 2.0)
+                Humanizer.Wait(1.5, 2.5)
                 for _, item in ipairs(tradeItemList) do
                     if not IsInTrade() then break end
                     local realCount = GetRealItemCount(item)
                     if realCount > 0 then
                         Fire("TradeItem", item, realCount)
-                        Humanizer.Wait(0.35, 0.65)
+                        Humanizer.Wait(0.4, 0.7)
                     end
                 end
                 getgenv().TradeItemsDropped = true
                 Humanizer.Wait(1.5, 2.5)
             end
             
-            -- 2. โหมดกด Ready อัตโนมัติอย่างปลอดภัย (Safe Auto Ready & Button Sync)
+            -- 2. โหมดแลกเปลี่ยนสองทาง (Receiver: Safe Two-Way Trade)
+            -- ฝั่งรับใส่ไอเทมพื้นฐาน 1 ชิ้นตอบแทนกลับไป ป้องกันการถูกเซิร์ฟเวอร์ตรวจจับบัญชี Mule
+            if CFG.ReceiverMode and (CFG.TwoWayTrade ~= false) and not getgenv().ReceiverItemPut then
+                Humanizer.Wait(1.5, 2.5)
+                if IsInTrade() then
+                    local okPut, putItem = PutSafeTwoWayTradeItem()
+                    if okPut then
+                        Notify("🛡️ เทรดสองทาง", "ใส่ไอเทมตอบแทนกลับเรียบร้อย (" .. tostring(putItem) .. ") ป้องกัน Mule Flag", 3)
+                    end
+                    getgenv().ReceiverItemPut = true
+                end
+                Humanizer.Wait(1.5, 2.5)
+            end
+            
+            -- 3. โหมดกด Ready อัตโนมัติอย่างปลอดภัย (Safe Auto Ready & Humanized Delay)
             if CFG.AutoReady then
                 local session = getgenv().CurrentTradeSession
                 local you = session and session.You
@@ -3099,8 +3260,10 @@ task.spawn(function()
                         end
                     end
                     
+                    -- หน่วงเวลาก่อนกด Ready เพื่อจำลองมนุษย์ตรวจสอบไอเทม (3-5 วินาที)
+                    local readyDelay = CFG.TradeReadyDelay or 4
                     if canPressReady and IsInTrade() then
-                        Humanizer.Wait(1.2, 2.0)
+                        Humanizer.Wait(readyDelay * 0.8, readyDelay * 1.2)
                         local faceNow, textNow = GetTradeReadyButton()
                         if textNow == "READY" or (not textNow:find("WAIT") and textNow ~= "UNREADY") then
                             if faceNow then
