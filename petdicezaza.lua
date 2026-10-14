@@ -129,18 +129,36 @@ function CircuitBreaker.Execute(actionName, fn)
     end
 end
 
-local Movement = {}
-function Movement.SafeTween(targetCFrame, speed)
-    if not HRP or not Humanoid or Humanoid.Health <= 0 then return end
-    speed = speed or 60
-    local dist = (HRP.Position - targetCFrame.Position).Magnitude
-    local duration = math.clamp(dist / speed, 0.4, 4.0)
+local function WalkToPawcula()
+    local char = LocalPlayer.Character or Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not hum or not hrp or hum.Health <= 0 then return false end
     
-    local tween = TweenService:Create(HRP, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
-        CFrame = targetCFrame + Vector3.new(0, 2.5, 0)
-    })
-    tween:Play()
-    tween.Completed:Wait()
+    local targetStand = Vector3.new(35.5, 2.25, -35.5)
+    
+    -- หากตัวละครอยู่ไกลเกิน 60 studs ให้ใช้ระบบวาร์ปทางการของตัวเกมกลับบ้านก่อน เพื่อความปลอดภัย
+    if (hrp.Position - targetStand).Magnitude > 60 then
+        Fire("Teleport", "Home")
+        Humanizer.Wait(0.8, 1.5)
+        char = LocalPlayer.Character or Character
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp then return false end
+    end
+    
+    -- เดินด้วย Humanoid:MoveTo ตามระบบฟิสิกส์ปกติของตัวเกม ไม่ใช้ Tween หรือ CFrame
+    hum:MoveTo(targetStand)
+    local t0 = tick()
+    while (hrp.Position - targetStand).Magnitude > 5 and tick() - t0 < 6.0 do
+        task.wait(0.15)
+        char = LocalPlayer.Character or Character
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then break end
+    end
+    
+    Humanizer.Wait(0.5, 1.0)
+    return (hrp.Position - targetStand).Magnitude <= 12
 end
 
 local function GetStallCFrame(stallName)
@@ -2245,66 +2263,81 @@ local function CanTrickOrTreat()
     local s = Season.Halloween and Season.Halloween()
     if not s or not State.Data then return false end
     local entry = Season.Entry and Season.Entry(State.Data, s.Id)
-    local now = State.Now and State.Now() or os.time()
-    if not entry or not entry.TreatDay then return true end
-    return entry.TreatDay < Season.TreatDay(now)
-end
-
-local function FindPawculaNPC()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj.Name:lower():find("pawcula") then
-            local pivot = obj:GetPivot()
-            local standPos = Vector3.new(pivot.X - 3.5, 5.65, pivot.Z + 3.5)
-            return obj, CFrame.lookAt(standPos, Vector3.new(pivot.X, 5.65, pivot.Z))
-        end
+    if not entry then return false end
+    local nowDay = Season.TreatDay and Season.TreatDay(State.Now and State.Now() or os.time())
+    if not nowDay then return false end
+    if entry.TreatDay and entry.TreatDay >= nowDay then
+        return false
     end
-    return nil, nil
+    return true
 end
 
 Tabs.Halloween:AddButton({
     Title = "🎁 กดรับรางวัลเป้าหมายฮาโลวีนทั้งหมด (1 คลิก)",
     Callback = function()
         local entry = GetHalloweenEntry()
-        if not entry then return end
+        if not entry then 
+            Notify("⚠️ ข้อมูลฮาโลวีน", "ไม่พบข้อมูลกิจกรรมฮาโลวีน", 2)
+            return 
+        end
         local claimed = 0
-        for _, g in ipairs(HalloweenConfig.Goals) do
-            local tierIdx = (entry.Goals[g.Id] or 0) + 1
-            local tier = g.Tiers[tierIdx]
-            local stat = entry.Stats[g.Stat] or 0
-            if tier ~= nil and stat >= tier.Goal then
+        for _, g in ipairs(HalloweenConfig.Goals or {}) do
+            local currentTier = entry.Goals and entry.Goals[g.Id] or 0
+            local nextTierIdx = currentTier + 1
+            local nextTier = g.Tiers and g.Tiers[nextTierIdx]
+            local stat = entry.Stats and entry.Stats[g.Stat] or 0
+            if nextTier ~= nil and stat >= nextTier.Goal then
                 Fire("HalloweenGoalClaim", g.Id)
                 claimed = claimed + 1
-                Humanizer.Wait(0.6, 1.2)
+                Humanizer.Wait(1.0, 1.8)
             end
         end
-        Notify("🎃 ฮาโลวีน", claimed > 0 and ("รับรางวัลเป้าหมาย " .. claimed .. " รายการ!") or "ยังไม่มีเป้าหมายที่สำเร็จ", 3)
+        Notify("🎃 ฮาโลวีน", claimed > 0 and ("รับรางวัลเป้าหมาย " .. claimed .. " รายการเรียบร้อย!") or "ไม่มีเป้าหมายที่สำเร็จพร้อมรับในขณะนี้", 3)
     end
 })
 
 Tabs.Halloween:AddButton({
     Title = "🛍️ ซื้อแพ็คกระเป๋า 10 ใบ (270 ลูกอม)",
     Callback = function()
+        if IsTowerRunning() or IsInTrade() or getgenv().TradeActiveSession then
+            Notify("⚠️ กำลังทำกิจกรรมอื่น", "กรุณาจบหอคอยหรือการเทรดก่อนซื้อไอเทม", 3)
+            return
+        end
         local entry = GetHalloweenEntry()
         if entry and (entry.Candy or 0) >= 270 then
             Fire("SpookyBuy", "HalloweenBag10")
             Notify("🛍️ ซื้อกระเป๋า", "ซื้อแพ็คกระเป๋าฮาโลวีน 10 ใบสำเร็จ!", 3)
         else
-            Notify("⚠️ ลูกอมไม่พอ", "ต้องใช้ 270 ลูกอม", 2)
+            Notify("⚠️ ลูกอมไม่พอ", "ต้องใช้ 270 ลูกอม (คุณมี: " .. tostring(entry and entry.Candy or 0) .. ")", 2)
         end
     end
 })
 
 Tabs.Halloween:AddButton({
-    Title = "🍬 เดินไปขอขนมฮาโลวีน (Trick or Treat With Safe Tween)",
+    Title = "🍬 เดินไปขอขนมฮาโลวีน (Safe Legitimate Walking)",
     Callback = function()
         task.spawn(function()
-            local npc, pivot = FindPawculaNPC()
-            if pivot then
-                Movement.SafeTween(pivot)
-                Humanizer.Wait(0.8, 1.5)
+            if not CanTrickOrTreat() then
+                Notify("⚠️ ขอขนมแล้ว", "คุณขอขนมประจำวันนี้ไปแล้ว กรุณารอรอบวันถัดไป", 3)
+                return
             end
-            Fire("TrickOrTreat")
-            Notify("🍬 Trick or Treat", "ส่งคำขอขนมเรียบร้อย!", 2)
+            if IsTowerRunning() or IsInTrade() or getgenv().TradeActiveSession then
+                Notify("⚠️ กำลังทำกิจกรรมอื่น", "กรุณาจบหอคอยหรือการเทรดก่อนเดินไปขอขนม", 3)
+                return
+            end
+            Notify("🚶 กำลังเดิน", "กำลังเดินไปยังเคานต์พาวคูลาอย่างปลอดภัย...", 2)
+            local arrived = WalkToPawcula()
+            if arrived then
+                Humanizer.Wait(0.8, 1.4)
+                if CanTrickOrTreat() then
+                    Fire("TrickOrTreat")
+                    Notify("🍬 Trick or Treat", "ส่งคำขอขนมเรียบร้อย!", 3)
+                    Humanizer.Wait(2.5, 4.0)
+                    Fire("Teleport", "Home")
+                end
+            else
+                Notify("⚠️ เดินไม่ถึงจุด", "ไม่สามารถเดินถึงเคานต์พาวคูลาได้", 2)
+            end
         end)
     end
 })
@@ -3212,57 +3245,91 @@ task.spawn(function()
     end
 end)
 
--- 8. Auto Halloween
+-- 8. Auto Halloween (100% Anti-Ban, Real-Time & Safe Execution)
+local claimedGoalsCache = {}
+local lastHalloweenBuyTick = 0
+
 task.spawn(function()
     while true do
-        task.wait(5.0)
+        task.wait(6.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        
+        -- ป้องกันการทำงานแทรกแซงระหว่างลงหอคอย เทรด หรือสู้บอสโลก
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0) continue end
+        if IsTowerRunning() or IsTowerInArena() then task.wait(3.0) continue end
+        local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if isJoined then task.wait(3.0) continue end
+        if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(3.0) continue end
         
         CircuitBreaker.Execute("AutoHalloween", function()
-            local entry = GetHalloweenEntry()
-            if not entry then return end
+            local entry, seasonInfo = GetHalloweenEntry()
+            if not entry or not seasonInfo then return end
             
-            if CFG.HalloweenAutoClaim then
+            -- 1. Auto Claim Goals: เคลมเป้าหมายทีละ 1 รายการ และมีแคชป้องกันการยิงซ้ำซ้อนเด็ดขาด
+            if CFG.HalloweenAutoClaim and HalloweenConfig.Goals then
                 for _, g in ipairs(HalloweenConfig.Goals) do
-                    local tierIdx = (entry.Goals[g.Id] or 0) + 1
-                    local tier = g.Tiers[tierIdx]
-                    local stat = entry.Stats[g.Stat] or 0
-                    if tier ~= nil and stat >= tier.Goal then
-                        Fire("HalloweenGoalClaim", g.Id)
-                        Humanizer.Wait(0.5, 1.0)
+                    local currentTier = entry.Goals and entry.Goals[g.Id] or 0
+                    local nextTierIdx = currentTier + 1
+                    local nextTier = g.Tiers and g.Tiers[nextTierIdx]
+                    local stat = entry.Stats and entry.Stats[g.Stat] or 0
+                    
+                    if nextTier and stat >= nextTier.Goal then
+                        local cacheKey = g.Id .. "_" .. tostring(nextTierIdx)
+                        local lastClaim = claimedGoalsCache[cacheKey] or 0
+                        if tick() - lastClaim > 60 then
+                            claimedGoalsCache[cacheKey] = tick()
+                            Fire("HalloweenGoalClaim", g.Id)
+                            Notify("🎁 เป้าหมายฮาโลวีน", "รับรางวัลเป้าหมาย " .. tostring(g.Id) .. " (ขั้นที่ " .. nextTierIdx .. ") เรียบร้อย!", 2)
+                            Humanizer.Wait(1.5, 2.5)
+                            break -- เคลมเพียง 1 รายการต่อรอบลูป ป้องกัน server rate limit / dupe flag
+                        end
                     end
                 end
             end
             
-            if CFG.HalloweenAutoBuyBags and (entry.Candy or 0) >= 270 then
+            -- 2. Auto Buy Bags (270 Candy): หน่วงเวลาพักระหว่างซื้ออย่างปลอดภัย
+            local nowTick = tick()
+            if CFG.HalloweenAutoBuyBags and (entry.Candy or 0) >= 270 and (nowTick - lastHalloweenBuyTick > 15) then
+                lastHalloweenBuyTick = nowTick
                 Fire("SpookyBuy", "HalloweenBag10")
-                Humanizer.Wait(1.0, 2.0)
+                Notify("🛍️ ฮาโลวีน", "ซื้อแพ็ค 10 กระเป๋าฮาโลวีนเรียบร้อย!", 2)
+                Humanizer.Wait(1.5, 2.5)
             end
             
-            if CFG.HalloweenAutoBuyLimitedPull and (entry.Candy or 0) >= 800 then
-                Fire("SpookyBuy", "LimitedPull")
-                Humanizer.Wait(1.0, 2.0)
+            -- 3. Auto Buy Limited Pull (800 Candy): ตรวจสอบจำนวนสต็อกจริงที่เหลือ ไม่ซื้อเกินโควต้า 5 ครั้งเด็ดขาด
+            if CFG.HalloweenAutoBuyLimitedPull and (entry.Candy or 0) >= 800 and (nowTick - lastHalloweenBuyTick > 15) then
+                local boughtPulls = entry.Bought and entry.Bought.LimitedPull or 0
+                if boughtPulls < 5 then
+                    lastHalloweenBuyTick = nowTick
+                    Fire("SpookyBuy", "LimitedPull")
+                    Notify("🎟️ ฮาโลวีน", "ซื้อ Limited Pull สำเร็จ! (" .. (boughtPulls + 1) .. "/5)", 3)
+                    Humanizer.Wait(1.5, 2.5)
+                end
             end
             
+            -- 4. Auto Open Bags: รออนิเมชันเปิดกระเป๋าให้เสร็จสมบูรณ์ก่อนรับสัตว์เลี้ยง
             if CFG.HalloweenAutoOpenBags then
                 local bagCount = State.Data and State.Data.SeasonBags and State.Data.SeasonBags.Halloween or 0
                 if bagCount > 0 then
                     Fire("OpenLootBag", "all", "Halloween")
-                    Humanizer.Wait(1.5, 2.5)
+                    Humanizer.Wait(4.0, 5.5)
                     Fire("ClaimLootPets", "Season")
-                    Humanizer.Wait(1.0, 1.8)
+                    Humanizer.Wait(1.5, 2.5)
                 end
             end
             
+            -- 5. Auto Trick or Treat: ตรวจสอบสิทธิ์ประจำวัน และเดินด้วย Humanoid:MoveTo ปลอดภัย 100% ไร้การ Tween/CFrame
             if CFG.HalloweenAutoTrickOrTreat and CanTrickOrTreat() then
-                local npc, pivot = FindPawculaNPC()
-                if pivot then
-                    Movement.SafeTween(pivot)
+                Notify("🍬 ขอขนมฮาโลวีน", "กำลังเดินไปหาเคานต์พาวคูลาเพื่อขอขนมประจำวัน...", 2)
+                local arrived = WalkToPawcula()
+                if arrived and CanTrickOrTreat() then
                     Humanizer.Wait(0.8, 1.5)
+                    Fire("TrickOrTreat")
+                    Notify("🍬 Trick or Treat", "ขอขนมฮาโลวีนสำเร็จ!", 3)
+                    Humanizer.Wait(2.5, 4.0)
+                    Fire("Teleport", "Home")
+                    Humanizer.Wait(1.0, 2.0)
                 end
-                Fire("TrickOrTreat")
-                Humanizer.Wait(2.0, 3.0)
             end
         end)
     end
