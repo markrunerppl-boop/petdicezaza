@@ -1027,117 +1027,83 @@ pcall(function()
             LiveTower.InArena = false
             LiveTower.Away = false
             LiveTower.LastEventTime = tick()
+        elseif action == "Stopped" or action == "Paused" then
+            LiveTower.Active = false
+            LiveTower.TowerId = nil
+            LiveTower.Floor = 0
+            LiveTower.InArena = false
+            LiveTower.Away = false
+            LiveTower.LastEventTime = tick()
         end
     end)
 end)
 
-local function GetActiveTowerId()
-    if LiveTower.Active and LiveTower.TowerId then
-        return LiveTower.TowerId
-    end
-    
-    -- Deep UI real-time scan in PetDiceUI Battle & TowerTracker
+local function SyncLiveTowerFromGame()
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
     local hud = root and root:FindFirstChild("Hud")
-    if hud then
-        local battle = hud:FindFirstChild("Battle")
-        if battle and battle.Visible then
-            for _, lbl in ipairs(battle:GetDescendants()) do
-                if lbl:IsA("TextLabel") and lbl.Text ~= "" then
-                    for _, t in ipairs(Towers.List or {}) do
-                        if lbl.Text:upper():find(t.Name:upper()) then
-                            return t.Id
-                        end
+    if not hud then return end
+    
+    local tracker = hud:FindFirstChild("TowerTracker")
+    local battle = hud:FindFirstChild("Battle")
+    
+    local isAway = tracker and tracker.Visible == true
+    local isArena = battle and battle.Visible == true
+    
+    if isAway or isArena then
+        LiveTower.Active = true
+        LiveTower.InArena = isArena
+        LiveTower.Away = isAway
+        
+        local container = (isArena and battle) or tracker
+        for _, lbl in ipairs(container:GetDescendants()) do
+            if lbl:IsA("TextLabel") and lbl.Text ~= "" then
+                local txt = lbl.Text:upper()
+                for _, t in ipairs(Towers.List or {}) do
+                    if txt:find(t.Name:upper()) then
+                        LiveTower.TowerId = t.Id
+                        break
                     end
+                end
+                local f = txt:match("FLOOR%s+(%d+)") or txt:match("STAGE%s+(%d+)") or txt:match("ชั้น%s*(%d+)")
+                if f then
+                    LiveTower.Floor = tonumber(f) or LiveTower.Floor
                 end
             end
         end
-        local tracker = hud:FindFirstChild("TowerTracker")
-        if tracker and tracker.Visible then
-            for _, lbl in ipairs(tracker:GetDescendants()) do
-                if lbl:IsA("TextLabel") and lbl.Text ~= "" then
-                    for _, t in ipairs(Towers.List or {}) do
-                        if lbl.Text:upper():find(t.Name:upper()) then
-                            return t.Id
-                        end
-                    end
-                end
-            end
-        end
+    else
+        -- หากทั้ง TowerTracker และ Battle มองไม่เห็น แสดงว่าตัวละครไม่ได้อยู่ในหอคอย
+        LiveTower.Active = false
+        LiveTower.TowerId = nil
+        LiveTower.InArena = false
+        LiveTower.Away = false
     end
-    
-    -- Check Attribute TowerArrive (e.g. "Coral#51")
-    local arrive = LocalPlayer:GetAttribute("TowerArrive")
-    if arrive and typeof(arrive) == "string" then
-        local prefix = arrive:match("^(.-)#")
-        if prefix and Towers.ById and Towers.ById[prefix] then
-            return prefix
-        end
+end
+
+local function GetActiveTowerId()
+    SyncLiveTowerFromGame()
+    if LiveTower.Active and LiveTower.TowerId then
+        return LiveTower.TowerId
     end
-    
     return nil
 end
 
 local function IsTowerRunning()
-    if LiveTower.Active and LiveTower.TowerId ~= nil then
-        return true
-    end
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
-    local hud = root and root:FindFirstChild("Hud")
-    if hud then
-        local tracker = hud:FindFirstChild("TowerTracker")
-        local battle = hud:FindFirstChild("Battle")
-        if (tracker and tracker.Visible) or (battle and battle.Visible) then
-            return true
-        end
-    end
-    if GetActiveTowerId() ~= nil then
-        return true
-    end
-    return false
+    SyncLiveTowerFromGame()
+    return LiveTower.Active == true and LiveTower.TowerId ~= nil
 end
 
 local function IsTowerInArena()
-    if LiveTower.Active and LiveTower.InArena then
-        return true
-    end
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
-    local hud = root and root:FindFirstChild("Hud")
-    local battle = hud and hud:FindFirstChild("Battle")
-    return battle and battle.Visible == true
+    SyncLiveTowerFromGame()
+    return LiveTower.Active == true and LiveTower.InArena == true
 end
 
 local function GetCurrentTowerFloor()
+    SyncLiveTowerFromGame()
     if LiveTower.Active and LiveTower.Floor and LiveTower.Floor > 0 then
         return LiveTower.Floor
     end
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
-    local hud = root and root:FindFirstChild("Hud")
-    if hud then
-        local battle = hud:FindFirstChild("Battle")
-        if battle and battle.Visible then
-            for _, child in ipairs(battle:GetDescendants()) do
-                if child:IsA("TextLabel") and (child.Text:find("FLOOR") or child.Text:find("STAGE")) then
-                    local f = child.Text:match("FLOOR%s+(%d+)") or child.Text:match("STAGE%s+(%d+)") or child.Text:match("(%d+)")
-                    if f then return tonumber(f) end
-                end
-            end
-        end
-        local tracker = hud:FindFirstChild("TowerTracker")
-        if tracker and tracker.Visible then
-            for _, child in ipairs(tracker:GetDescendants()) do
-                if child:IsA("TextLabel") and (child.Text:find("FLOOR") or child.Text:find("STAGE") or child.Text:find("ชั้น")) then
-                    local f = child.Text:match("FLOOR%s+(%d+)") or child.Text:match("STAGE%s+(%d+)") or child.Text:match("ชั้น%s*(%d+)") or child.Text:match("(%d+)")
-                    if f then return tonumber(f) end
-                end
-            end
-        end
-    end
-    return nil
+    return 0
 end
 
 local TowerStatusPara = Tabs.Tower:AddParagraph({
@@ -1276,6 +1242,8 @@ local function SafeWalkToBossPortal()
     return true
 end
 
+local lastTowerStartTick = 0
+
 local function SwitchOrStartTower(targetTowerId)
     if IsInTrade() or getgenv().TradeActiveSession then
         return false
@@ -1285,6 +1253,12 @@ local function SwitchOrStartTower(targetTowerId)
         Notify("⚠️ ข้อผิดพลาด", "ไม่พบข้อมูลผู้เล่น กำลังรอข้อมูล...", 3)
         return false 
     end
+    
+    local nowTick = tick()
+    if nowTick - lastTowerStartTick < 5.0 then
+        return false
+    end
+    
     targetTowerId = targetTowerId or GetCurrentOrNextTowerId(false)
     local towerDef = (Towers.ById and Towers.ById[targetTowerId]) or (Towers.List and Towers.List[1])
     if not towerDef then 
@@ -1311,17 +1285,18 @@ local function SwitchOrStartTower(targetTowerId)
     local teamSize = Towers.TeamSizeFor(data)
     local team = TeamPairs.Best(data, towerDef, teamSize)
     if #team > 0 then
+        lastTowerStartTick = nowTick
         Fire("SetSetting", "TowerAutoplay", true)
         Fire("TowerStart", towerDef.Id, team)
         Notify("🏰 หอคอย", "เริ่มลง " .. towerDef.Name .. " เรียบร้อย!", 3)
         if CFG.AutoExitArena then
-            task.delay(1.5, function() 
+            task.delay(2.0, function() 
                 if IsTowerInArena() then
                     Fire("TowerExit") 
                 end
             end)
         end
-        task.delay(0.3, UpdateTowerStatus)
+        task.delay(0.5, UpdateTowerStatus)
         return true
     else
         Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
