@@ -33,7 +33,16 @@ LocalPlayer.CharacterAdded:Connect(function(c)
     HRP = c:WaitForChild("HumanoidRootPart", 15)
 end)
 
--- ป้องกันรันสคริปต์ซ้ำซ้อน
+-- ป้องกันรันสคริปต์ซ้ำซ้อน และเคลียร์ UI เก่าก่อนรันใหม่ (Clean Startup & Hot-Reload Support)
+if getgenv().PetDiceOldFluent then
+    pcall(function() getgenv().PetDiceOldFluent:Destroy() end)
+    getgenv().PetDiceOldFluent = nil
+end
+pcall(function()
+    local oldToggle = LocalPlayer:WaitForChild("PlayerGui", 3):FindFirstChild("PetDiceMobileToggle")
+    if oldToggle then oldToggle:Destroy() end
+end)
+
 getgenv().PetDiceScriptToken = tick()
 local scriptToken = getgenv().PetDiceScriptToken
 getgenv().TradeActiveSession = false
@@ -51,9 +60,9 @@ local Config = require(PetDice.Configs.Config)
 local Expeditions = require(PetDice.Logic.Expeditions)
 local ExpeditionConfig = require(PetDice.Configs.ExpeditionConfig)
 local PetData = require(PetDice.Configs.PetData)
-local Season = require(PetDice.Logic.Season)
-local HalloweenConfig = require(PetDice.Configs.HalloweenConfig)
-local HalloweenShopConfig = require(PetDice.Configs.HalloweenShopConfig)
+local Season = PetDice.Logic:FindFirstChild("Season") and require(PetDice.Logic.Season) or nil
+local HalloweenConfig = (PetDice.Configs:FindFirstChild("HalloweenConfig") and require(PetDice.Configs.HalloweenConfig)) or { Goals = {}, Items = {} }
+local HalloweenShopConfig = (PetDice.Configs:FindFirstChild("HalloweenShopConfig") and require(PetDice.Configs.HalloweenShopConfig)) or {}
 local Towers = require(PetDice.Logic.Towers)
 local TeamPairs = require(PetDice.Logic.TeamPairs)
 local RewardsConfig = require(PetDice.Configs.RewardsConfig)
@@ -308,6 +317,9 @@ if readfile and isfile and isfile(ConfigFile) then
         for k, v in pairs(saved) do getgenv().CFG[k] = v end
     end)
 end
+if getgenv().CFG.TradeTarget == "[ เลือกทุกคนในห้อง ]" then
+    getgenv().CFG.TradeTargetId = nil
+end
 
 local function UpdateCFG(key, val)
     getgenv().CFG[key] = val
@@ -384,6 +396,7 @@ local function ApplySolidWindowStyle(win)
     end)
 end
 ApplySolidWindowStyle(Window)
+getgenv().PetDiceOldFluent = Fluent
 
 local function Notify(title, content, duration)
     pcall(function()
@@ -1831,6 +1844,66 @@ Tabs.Trade:AddToggle("TogReceiver", {
     Callback = function(V) UpdateCFG("ReceiverMode", V) end
 })
 
+local function IsAllowedTradeSender(senderId, senderName)
+    if not senderId and not senderName then return false end
+    -- หากเป็นค่าเริ่มต้น หรือเลือกทุกคนในห้อง หรือไม่มีการล็อคไอดี -> ยอมรับทุกคน
+    if not CFG.TradeTarget or CFG.TradeTarget == "[ เลือกทุกคนในห้อง ]" or CFG.TradeTargetId == nil then
+        return true
+    end
+    -- เช็คความตรงกันของ UserId (แปลงเป็นตัวเลขป้องกัน type mismatch)
+    if CFG.TradeTargetId and senderId and tonumber(senderId) == tonumber(CFG.TradeTargetId) then
+        return true
+    end
+    -- เช็คความตรงกันของชื่อผู้เล่น (แปลงพิมพ์เล็กป้องกัน case sensitive mismatch)
+    if senderName and CFG.TradeTarget and tostring(senderName):lower() == tostring(CFG.TradeTarget):lower() then
+        return true
+    end
+    return false
+end
+
+local lastTradeRespondTick = 0
+
+local function RespondAcceptTrade(senderId, senderName)
+    local now = tick()
+    if now - lastTradeRespondTick < 2.5 then return end
+    lastTradeRespondTick = now
+    
+    task.spawn(function()
+        -- 1. หน่วงเวลาด้วย Humanizer (1.2 - 2.2 วินาที) สอดคล้องกับพฤติกรรมมนุษย์และระบบความปลอดภัย
+        Humanizer.Wait(1.2, 2.2)
+        if getgenv().PetDiceScriptToken ~= scriptToken then return end
+        
+        -- 2. กดปุ่ม ACCEPT ที่หน้าต่าง Native UI ของเกม (เพื่อให้ State และ UI ภายในเกมอัปเดตสมบูรณ์)
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            local tr = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root.Effects:FindFirstChild("TradeRequest")
+            if tr and tr.Visible then
+                for _, btn in ipairs(tr:GetChildren()) do
+                    if btn.Name == "Button" then
+                        local txt = btn:FindFirstChildWhichIsA("TextLabel", true)
+                        if txt and txt.Text == "ACCEPT" then
+                            local face = btn:FindFirstChild("Face") or btn:FindFirstChildWhichIsA("TextButton", true)
+                            if face then
+                                for _, conn in pairs(getconnections(face.MouseButton1Click)) do
+                                    conn:Fire()
+                                end
+                            end
+                            tr.Visible = false
+                            break
+                        end
+                    end
+                end
+            end
+        end)
+        
+        -- 3. ส่ง Action Remote ตอบรับการเทรดไปยังเซิร์ฟเวอร์
+        if senderId then
+            Fire("TradeRespond", senderId, true)
+        end
+        Notify("🤝 ยอมรับคำขอเทรด", "ตอบรับคำขอเทรดจาก " .. tostring(senderName or "ผู้เล่น") .. " เรียบร้อย!", 3)
+    end)
+end
+
 local function GetTradeWindow()
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
@@ -1838,6 +1911,16 @@ local function GetTradeWindow()
     local tp = panels and panels:FindFirstChild("TradingPanel")
     if tp and tp.Visible then return tp end
     return nil
+end
+
+local function GetTradeReadyButton()
+    local tp = GetTradeWindow()
+    if not tp then return nil, "" end
+    local readyFrame = tp:FindFirstChild("Ready", true)
+    if not readyFrame then return nil, "" end
+    local face = readyFrame:FindFirstChild("Face") or readyFrame:FindFirstChildWhichIsA("TextButton", true)
+    local lbl = readyFrame:FindFirstChildWhichIsA("TextLabel", true)
+    return face, (lbl and lbl.Text or "")
 end
 
 local function IsInTrade()
@@ -1894,6 +1977,46 @@ Tabs.Settings:AddButton({
     end
 })
 
+Tabs.Settings:AddSection("🚀 อัปเดตสคริปต์เรียลไทม์ (Live GitHub Auto-Update)")
+
+Tabs.Settings:AddParagraph({
+    Title = "📡 แหล่งที่มาทางการ (Official GitHub Repository)",
+    Content = "URL: raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua\n" ..
+              "• ซิงค์เกมเรียลไทม์: เชื่อมต่อ State.OnChanged รับการเปลี่ยนแปลงของตัวเกมทันทีทุกเฟรม\n" ..
+              "• อัปเดตสคริปต์สด: กดปุ่มด้านล่างเพื่อดึงโค้ดล่าสุดจาก GitHub และเริ่มทำงานใหม่ได้ทันทีโดยไม่ต้องเข้าเกมใหม่"
+})
+
+Tabs.Settings:AddButton({
+    Title = "🔄 อัปเดตสคริปต์จาก GitHub ทันที (Live Hot-Reload)",
+    Description = "ดาวน์โหลดโค้ดล่าสุดจาก GitHub และเริ่มทำงานใหม่ทันที",
+    Callback = function()
+        Notify("🔄 กำลังตรวจสอบอัปเดต...", "กำลังดาวน์โหลดโค้ดล่าสุดจาก GitHub...", 4)
+        task.spawn(function()
+            local success, newCode = pcall(function()
+                local url = "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua?t=" .. tostring(tick())
+                return game:HttpGet(url)
+            end)
+            if success and newCode and #newCode > 1000 then
+                local fn, compileErr = loadstring(newCode)
+                if fn then
+                    Notify("✅ อัปเดตสำเร็จ!", "กำลังรันสคริปต์เวอร์ชันใหม่ล่าสุด...", 3)
+                    task.wait(0.5)
+                    getgenv().PetDiceScriptToken = tick()
+                    if Fluent and Fluent.Destroy then
+                        pcall(function() Fluent:Destroy() end)
+                    end
+                    task.wait(0.3)
+                    task.spawn(fn)
+                else
+                    Notify("❌ เกิดข้อผิดพลาด", "โค้ดจาก GitHub คอมไพล์ไม่ผ่าน: " .. tostring(compileErr), 5)
+                end
+            else
+                Notify("❌ ดาวน์โหลดไม่สำเร็จ", "ไม่สามารถดึงข้อมูลจาก GitHub ได้ กรุณาลองใหม่อีกครั้ง", 4)
+            end
+        end)
+    end
+})
+
 Window:SelectTab(1)
 
 -- ==============================================================================
@@ -1905,13 +2028,8 @@ TradeRemote.OnClientEvent:Connect(function(event, payload)
     if event == "Request" and CFG.ReceiverMode then
         local senderId = payload and payload.UserId
         local senderName = payload and payload.Name or "Unknown"
-        local allowed = (CFG.TradeTargetId == nil) or (senderId == CFG.TradeTargetId)
-        if allowed and senderId then
-            task.spawn(function()
-                Humanizer.Wait(1.5, 2.5)
-                Fire("TradeRespond", senderId, true)
-                Notify("🤝 ยอมรับคำขอเทรด", "ตอบรับคำขอเทรดจาก " .. senderName .. " เรียบร้อย!", 3)
-            end)
+        if IsAllowedTradeSender(senderId, senderName) then
+            RespondAcceptTrade(senderId, senderName)
         end
     elseif event == "Open" or event == "Update" then
         getgenv().TradeActiveSession = true
@@ -1922,6 +2040,48 @@ TradeRemote.OnClientEvent:Connect(function(event, payload)
         task.spawn(function()
             Humanizer.Wait(2.0, 3.5)
             getgenv().TradeActiveSession = false
+        end)
+    end
+end)
+
+-- ==============================================================================
+-- [7.1] REAL-TIME GAME STATE SYNC (State.OnChanged)
+-- ==============================================================================
+pcall(function()
+    if State and State.OnChanged then
+        local lastEquipBestTick = 0
+        State.OnChanged(function(syncData)
+            if getgenv().PetDiceScriptToken ~= scriptToken then return end
+            pcall(function()
+                if not syncData then return end
+                
+                -- อัปเดตข้อมูลสถิติหน้าแรกทันทีเมื่อตัวเลข เงิน เพชร ชาร์ด สัตว์เลี้ยง หรือซีซั่นเปลี่ยน
+                UpdateOverviewTab()
+                
+                -- อัปเดตสถานะหอคอยทันทีเมื่อชั้นเปลี่ยน หรือเริ่ม/จบหอคอย
+                if UpdateTowerStatus and (syncData.Full or syncData.TowerResume or syncData.TowerBest) then
+                    UpdateTowerStatus()
+                end
+                
+                -- อัปเดตสถานะน้ำยาทันทีเมื่อกดใช้ หรือเวลาน้ำยาเปลี่ยน
+                if UpdatePotionStatus and (syncData.Full or syncData.Potions or syncData.PotionEnds or syncData.LootBags or syncData.SeasonBags) then
+                    UpdatePotionStatus()
+                end
+                
+                -- สวมใส่สัตว์เลี้ยงที่ดีที่สุดทันทีแบบเรียลไทม์ เมื่อได้รับสัตว์เลี้ยงใหม่หรือสัตว์เลี้ยงเปลี่ยน
+                if CFG.AutoEquipBest and (syncData.Full or syncData.Pets or syncData.PetAdds or syncData.PetDels) then
+                    local now = tick()
+                    if now - lastEquipBestTick >= 1.0 then
+                        lastEquipBestTick = now
+                        task.spawn(function()
+                            Humanizer.Wait(0.2, 0.4)
+                            if getgenv().PetDiceScriptToken == scriptToken and not IsInTrade() and not getgenv().TradeActiveSession then
+                                Fire("EquipBest")
+                            end
+                        end)
+                    end
+                end
+            end)
         end)
     end
 end)
@@ -2243,14 +2403,50 @@ task.spawn(function()
             continue
         end
         
+        -- ตรวจสอบการตั้งค่าเปิดรับคำขอเทรดในเกม (TradeRequests Setting)
+        if CFG.ReceiverMode and data and data.Settings then
+            if data.Settings.TradeRequests == false then
+                Fire("SetSetting", "TradeRequests", true)
+            end
+        end
+        
         local inTrade = IsInTrade()
         if not inTrade then
+            -- 1. ฝั่งส่ง (Sender): ส่งคำขอเทรดไปยังเป้าหมาย
             if CFG.SenderMode and CFG.TradeTargetId then
                 CircuitBreaker.Execute("TradeSender", function()
                     local targetPlayer = Players:GetPlayerByUserId(CFG.TradeTargetId)
                     if targetPlayer and targetPlayer.Parent == Players then
                         Fire("TradeRequest", CFG.TradeTargetId)
                         Humanizer.Wait(4.0, 6.0)
+                    end
+                end)
+            end
+            
+            -- 2. ฝั่งรับ (Receiver): ระบบตรวจจับคำขอเทรดชั้นที่ 2 (UI Detection Fallback)
+            if CFG.ReceiverMode then
+                pcall(function()
+                    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                    local tr = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root.Effects:FindFirstChild("TradeRequest")
+                    if tr and tr.Visible then
+                        local txtLbl = tr:FindFirstChildWhichIsA("TextLabel", true)
+                        local msg = txtLbl and txtLbl.Text or ""
+                        local reqSenderName = msg:match("^(.-)%s+WANTS TO TRADE")
+                        local reqSenderPlayer = nil
+                        if reqSenderName then
+                            for _, p in ipairs(Players:GetPlayers()) do
+                                if p.Name:upper() == reqSenderName:upper() or (p.DisplayName and p.DisplayName:upper() == reqSenderName:upper()) then
+                                    reqSenderPlayer = p
+                                    break
+                                end
+                            end
+                        end
+                        local reqSenderId = reqSenderPlayer and reqSenderPlayer.UserId
+                        if not reqSenderId and CFG.TradeTargetId then reqSenderId = CFG.TradeTargetId end
+                        
+                        if IsAllowedTradeSender(reqSenderId, reqSenderName) then
+                            RespondAcceptTrade(reqSenderId, reqSenderName or "ผู้เล่น")
+                        end
                     end
                 end)
             end
@@ -2271,28 +2467,45 @@ task.spawn(function()
                 Humanizer.Wait(1.5, 2.5)
             end
             
-            -- 2. โหมดกด Ready อัตโนมัติอย่างปลอดภัย (Safe Auto Ready)
+            -- 2. โหมดกด Ready อัตโนมัติอย่างปลอดภัย (Safe Auto Ready & Button Sync)
             if CFG.AutoReady then
                 local session = getgenv().CurrentTradeSession
                 local you = session and session.You
                 local them = session and session.Them
                 
-                -- ตรวจสอบว่าฝั่งเรายังไม่ได้กด Ready
-                if you and not you.Ready then
-                    -- สแกน LockedFor (คูลดาวน์ป้องกันของเกมหลังวางไอเทม ห้ามกดยืนยันทับ)
-                    local lockedFor = you.LockedFor or 0
-                    if lockedFor > 0 then
-                        task.wait(lockedFor + 0.5)
-                    end
+                -- ตรวจสอบสถานะปุ่ม Ready จริงของเกม
+                local readyBtnFace, readyStatusText = GetTradeReadyButton()
+                
+                -- ถ้าปุ่มอยู่ในสถานะรอคูลดาวน์ (เช่น "WAIT 3", "WAIT 2", "WAIT 1") ให้รอจนกว่าคูลดาวน์หมด
+                if readyStatusText:find("WAIT") then
+                    task.wait(0.5)
+                elseif readyStatusText == "UNREADY" or (you and you.Ready) then
+                    -- ฝั่งเรากดพร้อมเรียบร้อยแล้ว ไม่ต้องกดซ้ำ (ป้องกันการกดยกเลิก)
+                elseif readyStatusText == "READY" or (you and not you.Ready) then
+                    -- ฝั่งเรายังไม่ได้กดพร้อม และปุ่มปลดล็อคให้กดได้
+                    local canPressReady = true
                     
                     -- หากเป็นฝั่งรับ (Receiver) รอให้อีกฝ่ายใส่ของหรือกด Ready ก่อน
                     if CFG.ReceiverMode and them and not them.Ready then
                         Humanizer.Wait(1.5, 2.5)
+                        local _, updatedStatus = GetTradeReadyButton()
+                        if updatedStatus:find("WAIT") then
+                            canPressReady = false
+                        end
                     end
                     
-                    if IsInTrade() and not (getgenv().CurrentTradeSession and getgenv().CurrentTradeSession.You and getgenv().CurrentTradeSession.You.Ready) then
-                        Fire("TradeReady", true)
-                        Humanizer.Wait(2.0, 3.5)
+                    if canPressReady and IsInTrade() then
+                        Humanizer.Wait(1.2, 2.0)
+                        local faceNow, textNow = GetTradeReadyButton()
+                        if textNow == "READY" or (not textNow:find("WAIT") and textNow ~= "UNREADY") then
+                            if faceNow then
+                                for _, conn in pairs(getconnections(faceNow.MouseButton1Click)) do
+                                    conn:Fire()
+                                end
+                            end
+                            Fire("TradeReady", true)
+                            Humanizer.Wait(2.0, 3.5)
+                        end
                     end
                 end
             end
