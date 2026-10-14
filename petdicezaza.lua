@@ -969,9 +969,99 @@ Tabs.Enhance:AddToggle("TogAutoPetTrait", {
 -- ------------------------------------------------------------------------------
 Tabs.Tower:AddSection("📊 สถานะหอคอยแบบเรียลไทม์ (Live Tower Status)")
 
+-- ==============================================================================
+-- [REAL-TIME LIVE TOWER TRACKER & DEEP GAME SYNC]
+-- ==============================================================================
+local LiveTower = {
+    Active = false,
+    TowerId = nil,
+    Floor = 0,
+    InArena = false,
+    Away = false,
+    LastResult = nil,
+    LastFloor = 0,
+    LastFinishedId = nil,
+    LastEventTime = 0
+}
+
+pcall(function()
+    local BattleRemote = PetDice:WaitForChild("Remotes"):WaitForChild("Battle")
+    BattleRemote.OnClientEvent:Connect(function(action, payload)
+        if action == "Floor" and typeof(payload) == "table" then
+            LiveTower.Active = true
+            LiveTower.TowerId = payload.Tower
+            LiveTower.Floor = tonumber(payload.Floor) or LiveTower.Floor
+            LiveTower.Away = payload.Away == true
+            LiveTower.InArena = not payload.Away
+            LiveTower.LastEventTime = tick()
+        elseif action == "Clear" and typeof(payload) == "table" then
+            LiveTower.Active = true
+            LiveTower.Floor = tonumber(payload.Floor) or LiveTower.Floor
+            LiveTower.LastEventTime = tick()
+        elseif action == "End" and typeof(payload) == "table" then
+            LiveTower.Active = false
+            LiveTower.LastResult = payload.Result
+            LiveTower.LastFinishedId = payload.Tower or LiveTower.TowerId
+            LiveTower.LastFloor = tonumber(payload.Floor) or LiveTower.Floor
+            LiveTower.TowerId = nil
+            LiveTower.Floor = 0
+            LiveTower.InArena = false
+            LiveTower.Away = false
+            LiveTower.LastEventTime = tick()
+        end
+    end)
+end)
+
+local function GetActiveTowerId()
+    if LiveTower.Active and LiveTower.TowerId then
+        return LiveTower.TowerId
+    end
+    
+    -- Deep UI real-time scan in PetDiceUI Battle & TowerTracker
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
+    local hud = root and root:FindFirstChild("Hud")
+    if hud then
+        local battle = hud:FindFirstChild("Battle")
+        if battle and battle.Visible then
+            for _, lbl in ipairs(battle:GetDescendants()) do
+                if lbl:IsA("TextLabel") and lbl.Text ~= "" then
+                    for _, t in ipairs(Towers.List or {}) do
+                        if lbl.Text:upper():find(t.Name:upper()) then
+                            return t.Id
+                        end
+                    end
+                end
+            end
+        end
+        local tracker = hud:FindFirstChild("TowerTracker")
+        if tracker and tracker.Visible then
+            for _, lbl in ipairs(tracker:GetDescendants()) do
+                if lbl:IsA("TextLabel") and lbl.Text ~= "" then
+                    for _, t in ipairs(Towers.List or {}) do
+                        if lbl.Text:upper():find(t.Name:upper()) then
+                            return t.Id
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Check Attribute TowerArrive (e.g. "Coral#51")
+    local arrive = LocalPlayer:GetAttribute("TowerArrive")
+    if arrive and typeof(arrive) == "string" then
+        local prefix = arrive:match("^(.-)#")
+        if prefix and Towers.ById and Towers.ById[prefix] then
+            return prefix
+        end
+    end
+    
+    return nil
+end
+
 local function IsTowerRunning()
-    local data = State.Data
-    if data and data.TowerResume ~= nil then
+    if LiveTower.Active and LiveTower.TowerId ~= nil then
         return true
     end
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
@@ -984,18 +1074,16 @@ local function IsTowerRunning()
             return true
         end
     end
+    if GetActiveTowerId() ~= nil then
+        return true
+    end
     return false
 end
 
-local function GetActiveTowerId()
-    local data = State.Data
-    if data and data.TowerResume and data.TowerResume.Tower then
-        return data.TowerResume.Tower
-    end
-    return nil
-end
-
 local function IsTowerInArena()
+    if LiveTower.Active and LiveTower.InArena then
+        return true
+    end
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
     local hud = root and root:FindFirstChild("Hud")
@@ -1004,24 +1092,27 @@ local function IsTowerInArena()
 end
 
 local function GetCurrentTowerFloor()
+    if LiveTower.Active and LiveTower.Floor and LiveTower.Floor > 0 then
+        return LiveTower.Floor
+    end
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
     local hud = root and root:FindFirstChild("Hud")
     if hud then
-        local tracker = hud:FindFirstChild("TowerTracker")
-        if tracker and tracker.Visible then
-            for _, child in ipairs(tracker:GetDescendants()) do
-                if child:IsA("TextLabel") and child.Text:find("FLOOR") then
-                    local f = child.Text:match("FLOOR%s+(%d+)") or child.Text:match("ชั้น%s*(%d+)")
-                    if f then return tonumber(f) end
-                end
-            end
-        end
         local battle = hud:FindFirstChild("Battle")
         if battle and battle.Visible then
             for _, child in ipairs(battle:GetDescendants()) do
                 if child:IsA("TextLabel") and (child.Text:find("FLOOR") or child.Text:find("STAGE")) then
-                    local f = child.Text:match("(%d+)")
+                    local f = child.Text:match("FLOOR%s+(%d+)") or child.Text:match("STAGE%s+(%d+)") or child.Text:match("(%d+)")
+                    if f then return tonumber(f) end
+                end
+            end
+        end
+        local tracker = hud:FindFirstChild("TowerTracker")
+        if tracker and tracker.Visible then
+            for _, child in ipairs(tracker:GetDescendants()) do
+                if child:IsA("TextLabel") and (child.Text:find("FLOOR") or child.Text:find("STAGE") or child.Text:find("ชั้น")) then
+                    local f = child.Text:match("FLOOR%s+(%d+)") or child.Text:match("STAGE%s+(%d+)") or child.Text:match("ชั้น%s*(%d+)") or child.Text:match("(%d+)")
                     if f then return tonumber(f) end
                 end
             end
@@ -1168,16 +1259,31 @@ end
 
 local function SwitchOrStartTower(targetTowerId)
     local data = State.Data
-    if not data then return end
+    if not data then 
+        Notify("⚠️ ข้อผิดพลาด", "ไม่พบข้อมูลผู้เล่น กำลังรอข้อมูล...", 3)
+        return false 
+    end
     targetTowerId = targetTowerId or GetCurrentOrNextTowerId(false)
     local towerDef = (Towers.ById and Towers.ById[targetTowerId]) or (Towers.List and Towers.List[1])
-    if not towerDef then return end
+    if not towerDef then 
+        Notify("⚠️ ข้อผิดพลาด", "ไม่พบข้อมูลหอคอย: " .. tostring(targetTowerId), 3)
+        return false 
+    end
+    
+    local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
+    local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+    if CFG.PauseTowerForBoss and (wbState == "Joining" or wbState == "Fighting" or isJoined) then
+        Notify("⚔️ บอสโลก", "ขณะนี้กำลังสู้บอสโลก ระบบจะเริ่มลง " .. towerDef.Name .. " ทันทีที่บอสโลกจบลง", 3)
+        return false
+    end
     
     local activeTower = GetActiveTowerId()
     if activeTower and activeTower ~= targetTowerId then
-        Notify("🏰 หอคอย", "กำลังเปลี่ยนจากหอคอย " .. activeTower .. " เป็น " .. towerDef.Name .. "...", 3)
+        local oldDef = Towers.ById and Towers.ById[activeTower]
+        local oldName = oldDef and oldDef.Name or activeTower
+        Notify("🏰 หอคอย", "กำลังเปลี่ยนจากหอคอย " .. tostring(oldName) .. " เป็น " .. tostring(towerDef.Name) .. "...", 3)
         Fire("TowerLeave")
-        Humanizer.Wait(1.0, 1.8)
+        Humanizer.Wait(1.5, 2.2)
     end
     
     local teamSize = Towers.TeamSizeFor(data)
@@ -1187,11 +1293,17 @@ local function SwitchOrStartTower(targetTowerId)
         Fire("TowerStart", towerDef.Id, team)
         Notify("🏰 หอคอย", "เริ่มลง " .. towerDef.Name .. " เรียบร้อย!", 3)
         if CFG.AutoExitArena then
-            task.delay(1.5, function() Fire("TowerExit") end)
+            task.delay(1.5, function() 
+                if IsTowerInArena() then
+                    Fire("TowerExit") 
+                end
+            end)
         end
-        task.delay(0.2, UpdateTowerStatus)
+        task.delay(0.3, UpdateTowerStatus)
+        return true
     else
         Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
+        return false
     end
 end
 
@@ -1221,13 +1333,17 @@ local function UpdateTowerStatus()
         local autoExit = CFG.AutoExitArena and "🟢 เปิด" or "🔴 ปิด"
         local autoDice = CFG.AutoPlay and "🟢 เปิด" or "🔴 ปิด"
         
+        local wbState = ReplicatedStorage:GetAttribute("WorldBossState") or "Idle"
+        local isPlayerIn = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        
         local statusText
-        if isRunning then
+        if CFG.PauseTowerForBoss and (wbState == "Joining" or wbState == "Fighting" or isPlayerIn) then
+            statusText = "⏸️ พักหอคอยชั่วคราว (กำลังร่วมศึกบอสโลก — จะลงต่อทันทีที่บอสจบ)"
+        elseif isRunning then
             local modeStr = inArena and "ในอารีน่า (Arena)" or "โหมดเบื้องหลัง (Away)"
-            local curTowerName = (data.TowerResume and data.TowerResume.Tower) or tName
-            statusText = string.format("⚔️ กำลังฟาร์ม [%s] ชั้น: %d (%s)", curTowerName, curFloor, modeStr)
+            statusText = string.format("⚔️ กำลังฟาร์ม [%s] ชั้น: %d (%s)", tName, curFloor, modeStr)
         else
-            statusText = "💤 ไม่ได้ลงหอคอย (พร้อมเริ่ม)"
+            statusText = "💤 หอคอยหยุดพัก (พร้อมเริ่ม)"
         end
         
         local playlistNames = {}
@@ -1235,7 +1351,9 @@ local function UpdateTowerStatus()
             local def = Towers.ById and Towers.ById[id]
             local shortName = (def and def.Name) or id
             shortName = shortName:gsub(" TOWER", "")
-            if id == currentTargetId then
+            if id == displayTowerId then
+                table.insert(playlistNames, "👉 [" .. shortName .. "]")
+            elseif id == currentTargetId then
                 table.insert(playlistNames, "[" .. shortName .. "]")
             else
                 table.insert(playlistNames, shortName)
@@ -1356,14 +1474,34 @@ Tabs.Tower:AddToggle("TogTower", {
         if V then
             task.spawn(function()
                 Fire("SetSetting", "TowerAutoplay", true)
-                if not IsTowerRunning() then
-                    StartSelectedTower()
+                
+                local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
+                local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+                if CFG.PauseTowerForBoss and (wbState == "Joining" or wbState == "Fighting" or isJoined) then
+                    Notify("🏰 หอคอย", "เปิดระบบฟาร์มหอคอยแล้ว! (ขณะนี้อยู่ในช่วงบอสโลก จะเริ่มลงหอคอยอัตโนมัติทันทีที่บอสจบ)", 4)
+                    task.delay(0.2, UpdateTowerStatus)
+                    return
+                end
+                
+                local isRunning = IsTowerRunning()
+                local activeId = GetActiveTowerId()
+                local targetId = GetCurrentOrNextTowerId(false)
+                
+                if not isRunning then
+                    SwitchOrStartTower(targetId)
                 else
-                    if CFG.AutoExitArena and IsTowerInArena() then
-                        Fire("TowerExit")
+                    local selectedIds = GetSelectedTowerIds()
+                    if activeId and #selectedIds > 0 and not table.find(selectedIds, activeId) then
+                        SwitchOrStartTower(targetId)
+                    else
+                        if CFG.AutoExitArena and IsTowerInArena() then
+                            Fire("TowerExit")
+                        end
+                        local curFloor = GetCurrentTowerFloor() or 0
+                        local towerDef = Towers.ById and Towers.ById[activeId or targetId]
+                        local tName = towerDef and towerDef.Name or (activeId or targetId)
+                        Notify("🏰 หอคอย", "เปิดระบบฟาร์มหอคอยแล้ว (กำลังฟาร์ม " .. tName .. " ชั้น " .. curFloor .. ")", 3)
                     end
-                    local curFloor = GetCurrentTowerFloor() or 0
-                    Notify("🏰 หอคอย", "เปิดระบบฟาร์มหอคอยแล้ว (กำลังฟาร์มชั้น " .. curFloor .. ")", 3)
                 end
                 task.delay(0.2, UpdateTowerStatus)
             end)
@@ -2804,8 +2942,8 @@ task.spawn(function()
                     
                     -- หากกำลังลงหอคอยที่ไม่ได้อยู่ในรายการที่เลือกไว้
                     if activeId and #selectedIds > 0 and not table.find(selectedIds, activeId) then
-                        Fire("TowerLeave")
-                        Humanizer.Wait(1.2, 2.0)
+                        local targetId = GetCurrentOrNextTowerId(false)
+                        SwitchOrStartTower(targetId)
                         return
                     end
                     
@@ -2833,21 +2971,7 @@ task.spawn(function()
                     if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.Tower then return end
                     
                     local targetId = GetCurrentOrNextTowerId(false)
-                    local towerDef = (Towers.ById and Towers.ById[targetId]) or (Towers.List and Towers.List[1])
-                    if towerDef then
-                        local teamSize = Towers.TeamSizeFor(data)
-                        local team = TeamPairs.Best(data, towerDef, teamSize)
-                        if #team > 0 then
-                            Fire("SetSetting", "TowerAutoplay", true)
-                            Fire("TowerStart", towerDef.Id, team)
-                            Humanizer.Wait(1.5, 2.5)
-                            if CFG.AutoExitArena then
-                                Fire("TowerExit")
-                                Humanizer.Wait(1.0, 2.0)
-                            end
-                            task.delay(0.2, UpdateTowerStatus)
-                        end
-                    end
+                    SwitchOrStartTower(targetId)
                 end
             end)
         end
