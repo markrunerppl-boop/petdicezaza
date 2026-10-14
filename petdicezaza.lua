@@ -460,6 +460,36 @@ for i = 1, 8 do
         Content = "รอข้อมูลสัตว์เลี้ยง..."
     })
 end
+local TogOverviewEquipBest, TogTowerEquipBest
+local isSyncingEquipToggle = false
+
+local function HandleAutoEquipBestToggle(V)
+    UpdateCFG("AutoEquipBest", V)
+    if not isSyncingEquipToggle then
+        isSyncingEquipToggle = true
+        pcall(function()
+            if TogOverviewEquipBest and TogOverviewEquipBest.Value ~= V then
+                TogOverviewEquipBest:SetValue(V)
+            end
+            if TogTowerEquipBest and TogTowerEquipBest.Value ~= V then
+                TogTowerEquipBest:SetValue(V)
+            end
+        end)
+        isSyncingEquipToggle = false
+    end
+    if V then
+        task.spawn(function()
+            Fire("EquipBest")
+            Notify("🐾 สัตว์เลี้ยง", "เปิดระบบและสวมใส่ทีมที่ดีที่สุดเรียบร้อย!", 2)
+        end)
+    end
+end
+
+TogOverviewEquipBest = Tabs.Overview:AddToggle("TogAutoEquipBestOverview", {
+    Title = "🐾 สวมใส่สัตว์เลี้ยงที่ดีที่สุดอัตโนมัติ (Auto Equip Best)",
+    Default = CFG.AutoEquipBest,
+    Callback = HandleAutoEquipBestToggle
+})
 
 Tabs.Overview:AddButton({
     Title = "⭐ สวมใส่สัตว์เลี้ยงที่ดีที่สุดทันที (Equip Best Pets)",
@@ -788,10 +818,10 @@ Tabs.Tower:AddToggle("TogAutoExitArena", {
     Callback = function(V) UpdateCFG("AutoExitArena", V) end
 })
 
-Tabs.Tower:AddToggle("TogAutoEquipBest", {
+TogTowerEquipBest = Tabs.Tower:AddToggle("TogAutoEquipBest", {
     Title = "3. สวมใส่สัตว์เลี้ยงที่ดีที่สุดอัตโนมัติ (Auto Equip Best)",
     Default = CFG.AutoEquipBest,
-    Callback = function(V) UpdateCFG("AutoEquipBest", V) end
+    Callback = HandleAutoEquipBestToggle
 })
 
 Tabs.Tower:AddButton({
@@ -1710,9 +1740,10 @@ end)
 
 -- 6. Auto Equip Best Pets
 local lastTotalPets = 0
+local lastPeriodicEquipTime = 0
 task.spawn(function()
     while true do
-        task.wait(10.0)
+        task.wait(2.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
@@ -1724,10 +1755,32 @@ task.spawn(function()
                 local currentTotal = 0
                 for _ in pairs(data.Pets) do currentTotal = currentTotal + 1 end
                 
-                -- สแกนเรียลไทม์: สวมใส่เมื่อจำนวนสัตว์เลี้ยงเปลี่ยนหรือยังไม่ได้สวมใส่
-                if currentTotal ~= lastTotalPets or #(data.Equipped or {}) == 0 then
-                    Fire("EquipBest")
+                local equippedCount = (data.Equipped and #data.Equipped) or 0
+                local maxEquipped = 1
+                pcall(function()
+                    if Stats and Stats.MaxEquipped then
+                        maxEquipped = Stats.MaxEquipped(data) or 1
+                    end
+                end)
+                local now = tick()
+                
+                -- สแกนเรียลไทม์:
+                -- 1. มีสัตว์เลี้ยงใหม่เข้ามา (currentTotal ~= lastTotalPets)
+                -- 2. สัตว์เลี้ยงที่ใส่อยู่ยังไม่เต็มช่อง (equippedCount < maxEquipped)
+                -- 3. ตรวจสอบเป็นระยะทุกๆ 8 วินาที เพื่ออัปเดตทีมที่ดีที่สุดเสมอเมื่อสัตว์เลี้ยงเลเวลอัป
+                local shouldEquip = false
+                if currentTotal ~= lastTotalPets then
+                    shouldEquip = true
                     lastTotalPets = currentTotal
+                elseif equippedCount < maxEquipped then
+                    shouldEquip = true
+                elseif (now - lastPeriodicEquipTime) >= 8.0 then
+                    shouldEquip = true
+                end
+                
+                if shouldEquip then
+                    lastPeriodicEquipTime = now
+                    Fire("EquipBest")
                     Humanizer.Wait(1.5, 2.5)
                 end
             end)
