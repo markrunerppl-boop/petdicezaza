@@ -68,6 +68,9 @@ local TeamPairs = require(PetDice.Logic.TeamPairs)
 local RewardsConfig = require(PetDice.Configs.RewardsConfig)
 local QuestsLogic = require(PetDice.Logic.Quests)
 local Upgrades = require(PetDice.Logic.Upgrades)
+local WorldBossConfig = PetDice.Configs:FindFirstChild("WorldBossConfig") and require(PetDice.Configs.WorldBossConfig) or nil
+local ScheduleConfig = PetDice.Configs:FindFirstChild("ScheduleConfig") and require(PetDice.Configs.ScheduleConfig) or nil
+local CombatConfig = PetDice.Configs:FindFirstChild("CombatConfig") and require(PetDice.Configs.CombatConfig) or nil
 
 local function Fire(...) 
     Action:FireServer(unpack({...})) 
@@ -273,6 +276,13 @@ local isMarker1c1 = (LocalPlayer.UserId == 11251813437)
 
 local defaultCFG = {
     Tower = false, AutoPlay = false, AutoExitArena = true,
+    SelectedTower = "Infinity",
+    SelectedTowerOption = "INFINITY TOWER [Infinity]",
+    TowerRestartDelay = 3,
+    AutoWorldBoss = false,
+    WorldBossElementFilter = "[ ตีทุกธาตุ (All Elements) ]",
+    WorldBossDifficultyFilter = "[ ตีทุกระดับ (All Difficulties) ]",
+    PauseTowerForBoss = true,
     AutoRebirth = false, AutoBuyDice = false, AutoEquipBest = true,
     Reward = false, Quest = false, Cutscene = false,
     UpgradeTree = false, UpgradeTreeDelay = 3,
@@ -982,15 +992,23 @@ local TowerStatusPara = Tabs.Tower:AddParagraph({
     Content = "กำลังตรวจสอบชั้นและสถานะการลงหอคอย..."
 })
 
+local BossStatusPara = Tabs.Tower:AddParagraph({
+    Title = "⏳ กำลังโหลดสถานะบอสโลก...",
+    Content = "กำลังตรวจสอบกำหนดการและระดับของบอสโลก..."
+})
+
 local function UpdateTowerStatus()
     pcall(function()
         local data = State.Data
         if not data then return end
         
+        local selectedTowerId = CFG.SelectedTower or "Infinity"
+        local towerDef = (Towers.ById and Towers.ById[selectedTowerId]) or (Towers.List and Towers.List[1])
+        local tName = towerDef and towerDef.Name or "Infinity"
         local isRunning = IsTowerRunning()
         local inArena = IsTowerInArena()
         local curFloor = GetCurrentTowerFloor() or (isRunning and data.TowerResume and data.TowerResume.Floor) or 0
-        local bestFloor = (data.TowerBest and data.TowerBest.Infinity) or 0
+        local bestFloor = (data.TowerBest and (data.TowerBest[selectedTowerId] or data.TowerBest.Infinity)) or 0
         local autoTower = CFG.Tower and "🟢 เปิด (Active)" or "🔴 ปิด (Off)"
         local autoExit = CFG.AutoExitArena and "🟢 เปิด" or "🔴 ปิด"
         local autoDice = CFG.AutoPlay and "🟢 เปิด" or "🔴 ปิด"
@@ -998,16 +1016,61 @@ local function UpdateTowerStatus()
         local statusText
         if isRunning then
             local modeStr = inArena and "ในอารีน่า (Arena)" or "โหมดเบื้องหลัง (Away)"
-            statusText = string.format("⚔️ กำลังฟาร์มชั้น: %d (%s)", curFloor, modeStr)
+            local curTowerName = (data.TowerResume and data.TowerResume.Tower) or tName
+            statusText = string.format("⚔️ กำลังฟาร์ม [%s] ชั้น: %d (%s)", curTowerName, curFloor, modeStr)
         else
             statusText = "💤 ไม่ได้ลงหอคอย (พร้อมเริ่ม)"
         end
         
-        local desc = string.format("🏰 หอคอย: Infinity | 🏆 สถิติสูงสุด: ชั้น %d\n⚙️ ออโต้หอคอย: %s | 🚪 ออกอารีน่า: %s | 🎲 ทอยเต๋า: %s",
-            bestFloor, autoTower, autoExit, autoDice)
+        local desc = string.format("🏰 หอคอยที่เลือก: %s | 🏆 สถิติสูงสุด: ชั้น %d\n⚙️ ออโต้หอคอย: %s | 🚪 ออกอารีน่า: %s | 🎲 ทอยเต๋า: %s",
+            tName, bestFloor, autoTower, autoExit, autoDice)
             
         TowerStatusPara:SetTitle(statusText)
         TowerStatusPara:SetDesc(desc)
+        
+        -- อัปเดตสถานะบอสโลก (World Boss Status)
+        local wbState = ReplicatedStorage:GetAttribute("WorldBossState") or "Idle"
+        local wbElem = ReplicatedStorage:GetAttribute("WorldBossElement") or "Random"
+        local wbDiff = ReplicatedStorage:GetAttribute("WorldBossDifficulty") or "Normal"
+        local wbJoined = ReplicatedStorage:GetAttribute("WorldBossJoined") or 0
+        local isPlayerIn = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        
+        local timeStr = "0:00"
+        if ScheduleConfig and ScheduleConfig.WorldBoss then
+            local now = workspace:GetServerTimeNow()
+            local wb = ScheduleConfig.WorldBoss
+            local nextIdx = ScheduleConfig.Index(wb, now) + 1
+            local nextStart = ScheduleConfig.StartOf(wb, nextIdx)
+            local left = math.max(0, math.floor(nextStart - now))
+            timeStr = string.format("%d:%02d", left // 60, left % 60)
+        end
+        
+        local bossTitle
+        if wbState == "Joining" then
+            bossTitle = string.format("⏳ บอสโลกเปิดรับสมัคร! [%s %s] (เริ่มใน %s)", wbDiff, wbElem, timeStr)
+        elseif wbState == "Fighting" then
+            bossTitle = string.format("⚔️ กำลังต่อสู้กับบอสโลก! [%s %s]", wbDiff, wbElem)
+        elseif wbState == "Result" then
+            bossTitle = "🏆 บอสโลกจบลงแล้ว (กำลังแจกรางวัล)"
+        else
+            bossTitle = string.format("💤 บอสโลกรอบถัดไปจะมาในอีก: %s", timeStr)
+        end
+        
+        local playerStatus = isPlayerIn and "🟢 คุณเข้าร่วมแล้ว" or "⚪ ยังไม่ได้เข้าร่วม"
+        local autoJoinStatus = CFG.AutoWorldBoss and "🟢 เปิดออโต้" or "🔴 ปิด"
+        local pauseStatus = CFG.PauseTowerForBoss and "🟢 พักหอคอยเพื่อตีบอส" or "⚪ ฟาร์มปกติ"
+        
+        local bossDesc = string.format("เป้าหมาย: ธาตุ %s | ระดับ %s\nสถานะของคุณ: %s | ผู้เล่นร่วมตี: %d คน\nระบบบอส: %s | %s",
+            CFG.WorldBossElementFilter or "ทุกธาตุ",
+            CFG.WorldBossDifficultyFilter or "ทุกระดับ",
+            playerStatus,
+            wbJoined,
+            autoJoinStatus,
+            pauseStatus
+        )
+        
+        BossStatusPara:SetTitle(bossTitle)
+        BossStatusPara:SetDesc(bossDesc)
     end)
 end
 
@@ -1020,7 +1083,64 @@ task.spawn(function()
     end
 end)
 
-Tabs.Tower:AddSection("🏰 ควบคุมการฟาร์มหอคอย (Infinity Tower Controls)")
+-- ดึงรายชื่อหอคอยทั้งหมดจากตัวเกมจริง
+local dynamicTowerOptions = {}
+local towerIdByOption = {}
+local defaultTowerOpt = "INFINITY TOWER [Infinity]"
+
+if Towers and Towers.List then
+    for _, t in ipairs(Towers.List) do
+        local elemStr = t.Element and (" (" .. tostring(t.Element) .. ")") or ""
+        local optName = t.Name .. elemStr .. " [" .. t.Id .. "]"
+        table.insert(dynamicTowerOptions, optName)
+        towerIdByOption[optName] = t.Id
+        if t.Id == "Infinity" then
+            defaultTowerOpt = optName
+        end
+    end
+end
+if #dynamicTowerOptions == 0 then
+    dynamicTowerOptions = {"INFINITY TOWER [Infinity]"}
+    towerIdByOption["INFINITY TOWER [Infinity]"] = "Infinity"
+end
+
+local function StartSelectedTower()
+    local data = State.Data
+    if not data then return end
+    local towerId = CFG.SelectedTower or "Infinity"
+    local towerDef = (Towers.ById and Towers.ById[towerId]) or (Towers.List and Towers.List[1])
+    if not towerDef then return end
+    
+    local teamSize = Towers.TeamSizeFor(data)
+    local team = TeamPairs.Best(data, towerDef, teamSize)
+    if #team > 0 then
+        Fire("SetSetting", "TowerAutoplay", true)
+        Fire("TowerStart", towerDef.Id, team)
+        Notify("🏰 หอคอย", "เริ่มลง " .. towerDef.Name .. " เรียบร้อย!", 3)
+        if CFG.AutoExitArena then
+            task.delay(1.5, function() Fire("TowerExit") end)
+        end
+        task.delay(0.2, UpdateTowerStatus)
+    else
+        Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
+    end
+end
+
+Tabs.Tower:AddSection("🏰 ระบบฟาร์มหอคอย (Tower Progression & Auto Farm)")
+
+local DropdownTower = Tabs.Tower:AddDropdown("DropSelectTower", {
+    Title = "เลือกหอคอยที่ต้องการลง (ดึงข้อมูลระดับทั้งหมดจากเกม)",
+    Values = dynamicTowerOptions,
+    Default = CFG.SelectedTowerOption or defaultTowerOpt,
+    Multi = false,
+    Callback = function(selection)
+        UpdateCFG("SelectedTowerOption", selection)
+        local tId = towerIdByOption[selection] or selection:match("%[(%w+)%]$") or "Infinity"
+        UpdateCFG("SelectedTower", tId)
+        Notify("🏰 หอคอย", "เลือกหอคอย: " .. selection, 2)
+        task.delay(0.2, UpdateTowerStatus)
+    end
+})
 
 Tabs.Tower:AddToggle("TogTower", {
     Title = "1. ฟาร์มหอคอยอัตโนมัติ (Auto Tower)",
@@ -1029,28 +1149,9 @@ Tabs.Tower:AddToggle("TogTower", {
         UpdateCFG("Tower", V)
         if V then
             task.spawn(function()
-                local data = State.Data
-                if not data then return end
-                
-                -- เปิด TowerAutoplay
                 Fire("SetSetting", "TowerAutoplay", true)
-                
-                -- สแกนเรียลไทม์: หากหอคอยไม่ได้ทำงานอยู่ ให้จัดทีมสัตว์เลี้ยงที่ดีที่สุดและเริ่มทันที
                 if not IsTowerRunning() then
-                    local towerDef = Towers.ById["Infinity"] or Towers.List[#Towers.List]
-                    local teamSize = Towers.TeamSizeFor(data)
-                    local team = TeamPairs.Best(data, towerDef, teamSize)
-                    if #team > 0 then
-                        Fire("TowerStart", towerDef.Id, team)
-                        Notify("🏰 หอคอย", "เปิดระบบและเริ่มลง Infinity Tower ทันที!", 3)
-                        if CFG.AutoExitArena then
-                            task.delay(1.5, function()
-                                Fire("TowerExit")
-                            end)
-                        end
-                    else
-                        Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
-                    end
+                    StartSelectedTower()
                 else
                     if CFG.AutoExitArena and IsTowerInArena() then
                         Fire("TowerExit")
@@ -1066,6 +1167,34 @@ Tabs.Tower:AddToggle("TogTower", {
                 Notify("🏰 หอคอย", "ปิดระบบฟาร์มหอคอยอัตโนมัติแล้ว", 2)
                 task.delay(0.2, UpdateTowerStatus)
             end)
+        end
+    end
+})
+
+local SliderTowerDelay = Tabs.Tower:AddSlider("SlideTowerDelay", {
+    Title = "ระยะเวลาหน่วงก่อนรีสตาร์ทหอคอย (วินาที)",
+    Description = "ปรับเวลารอหลังจากจบชั้นหอคอยเพื่อความปลอดภัย",
+    Default = CFG.TowerRestartDelay or 3,
+    Min = 1,
+    Max = 15,
+    Rounding = 0,
+    Callback = function(val)
+        UpdateCFG("TowerRestartDelay", val)
+    end
+})
+
+Tabs.Tower:AddInput("InputTowerDelay", {
+    Title = "⌨️ กำหนดระยะเวลาหน่วงเอง (พิมพ์วินาที)",
+    Default = tostring(CFG.TowerRestartDelay or 3),
+    Numeric = true,
+    Finished = true,
+    Callback = function(val)
+        local num = tonumber(val)
+        if num and num >= 0 then
+            local clamped = math.clamp(num, 0, 60)
+            SliderTowerDelay:SetValue(clamped)
+            UpdateCFG("TowerRestartDelay", clamped)
+            Notify("⏱️ ตั้งค่าเวลา", "กำหนดเวลารีสตาร์ทหอคอยเป็น: " .. clamped .. " วินาที", 2)
         end
     end
 })
@@ -1099,26 +1228,9 @@ TogTowerEquipBest = Tabs.Tower:AddToggle("TogAutoEquipBest", {
 })
 
 Tabs.Tower:AddButton({
-    Title = "▶️ เริ่มลงหอคอยทันที (Start Infinity Tower Now)",
-    Description = "จัดทีมสัตว์เลี้ยงที่ดีที่สุดและส่งคำสั่งเริ่มลงหอคอย",
-    Callback = function()
-        local data = State.Data
-        if not data then return end
-        local towerDef = Towers.ById["Infinity"] or Towers.List[#Towers.List]
-        local teamSize = Towers.TeamSizeFor(data)
-        local team = TeamPairs.Best(data, towerDef, teamSize)
-        if #team > 0 then
-            Fire("SetSetting", "TowerAutoplay", true)
-            Fire("TowerStart", towerDef.Id, team)
-            Notify("🏰 หอคอย", "เริ่มลง Infinity Tower เรียบร้อย!", 3)
-            if CFG.AutoExitArena then
-                task.delay(1.5, function() Fire("TowerExit") end)
-            end
-            task.delay(0.2, UpdateTowerStatus)
-        else
-            Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
-        end
-    end
+    Title = "▶️ เริ่มลงหอคอยที่เลือกทันที (Start Selected Tower Now)",
+    Description = "จัดทีมสัตว์เลี้ยงที่ดีที่สุดตรงตามธาตุและส่งคำสั่งเริ่มลงหอคอย",
+    Callback = StartSelectedTower
 })
 
 Tabs.Tower:AddButton({
@@ -1137,6 +1249,95 @@ Tabs.Tower:AddButton({
     Callback = function()
         Fire("TowerLeave")
         Notify("🛑 หอคอย", "ส่งคำสั่งหยุดการลงหอคอยเรียบร้อย!", 2)
+        task.delay(0.2, UpdateTowerStatus)
+    end
+})
+
+-- ดึงข้อมูลธาตุและระดับความยากของบอสโลกจากตัวเกมจริง
+local dynamicBossElemOptions = {"[ ตีทุกธาตุ (All Elements) ]"}
+if WorldBossConfig and WorldBossConfig.Elements then
+    for _, e in ipairs(WorldBossConfig.Elements) do
+        table.insert(dynamicBossElemOptions, e.Id)
+    end
+end
+
+local dynamicBossDiffOptions = {"[ ตีทุกระดับ (All Difficulties) ]"}
+if WorldBossConfig and WorldBossConfig.Difficulties then
+    for _, d in ipairs(WorldBossConfig.Difficulties) do
+        table.insert(dynamicBossDiffOptions, d.Id)
+    end
+end
+
+Tabs.Tower:AddSection("⚔️ ระบบตีบอสโลกอัตโนมัติ (World Boss Battles)")
+
+Tabs.Tower:AddDropdown("DropBossElement", {
+    Title = "เลือกธาตุของบอสที่ต้องการตี (ดึงจากตัวเกมจริง)",
+    Values = dynamicBossElemOptions,
+    Default = CFG.WorldBossElementFilter or "[ ตีทุกธาตุ (All Elements) ]",
+    Multi = false,
+    Callback = function(selection)
+        UpdateCFG("WorldBossElementFilter", selection)
+        Notify("⚔️ บอสโลก", "เลือกเป้าหมายธาตุ: " .. selection, 2)
+        task.delay(0.2, UpdateTowerStatus)
+    end
+})
+
+Tabs.Tower:AddDropdown("DropBossDifficulty", {
+    Title = "เลือกระดับความยากของบอส (ดึงจากตัวเกมจริง)",
+    Values = dynamicBossDiffOptions,
+    Default = CFG.WorldBossDifficultyFilter or "[ ตีทุกระดับ (All Difficulties) ]",
+    Multi = false,
+    Callback = function(selection)
+        UpdateCFG("WorldBossDifficultyFilter", selection)
+        Notify("⚔️ บอสโลก", "เลือกเป้าหมายความยาก: " .. selection, 2)
+        task.delay(0.2, UpdateTowerStatus)
+    end
+})
+
+Tabs.Tower:AddToggle("TogAutoWorldBoss", {
+    Title = "4. เข้าร่วมตีบอสโลกอัตโนมัติ (Auto Join World Boss)",
+    Default = CFG.AutoWorldBoss,
+    Callback = function(V)
+        UpdateCFG("AutoWorldBoss", V)
+        if V then
+            Notify("⚔️ บอสโลก", "เปิดระบบเข้าร่วมตีบอสโลกอัตโนมัติแล้ว!", 3)
+        else
+            Notify("⚔️ บอสโลก", "ปิดระบบเข้าร่วมตีบอสโลกอัตโนมัติแล้ว", 2)
+        end
+        task.delay(0.2, UpdateTowerStatus)
+    end
+})
+
+Tabs.Tower:AddToggle("TogPauseTowerForBoss", {
+    Title = "5. หยุดฟาร์มหอคอยชั่วคราวเมื่อมีบอส (Pause Tower For Boss)",
+    Default = CFG.PauseTowerForBoss,
+    Callback = function(V)
+        UpdateCFG("PauseTowerForBoss", V)
+        task.delay(0.2, UpdateTowerStatus)
+    end
+})
+
+Tabs.Tower:AddButton({
+    Title = "⚔️ กดเข้าร่วมตีบอสโลกทันที (Join World Boss Now)",
+    Description = "ส่งคำสั่งเข้าร่วมการต่อสู้กับบอสโลกรอบปัจจุบันทันที",
+    Callback = function()
+        local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
+        if wbState == "Joining" or wbState == "Fighting" then
+            Fire("WorldBossJoin")
+            Notify("⚔️ บอสโลก", "ส่งคำสั่งเข้าร่วมการตีบอสโลกเรียบร้อย!", 3)
+        else
+            Notify("⚠️ บอสโลก", "ขณะนี้บอสโลกยังไม่เปิดรับสมัคร (สถานะ: " .. tostring(wbState) .. ")", 3)
+        end
+        task.delay(0.2, UpdateTowerStatus)
+    end
+})
+
+Tabs.Tower:AddButton({
+    Title = "🚪 ออกจากการตีบอสทันที (Leave World Boss)",
+    Description = "ส่งคำสั่งถอนตัวจากการตีบอสโลก",
+    Callback = function()
+        Fire("WorldBossLeave")
+        Notify("🚪 บอสโลก", "ส่งคำสั่งออกจากบอสโลกเรียบร้อย!", 2)
         task.delay(0.2, UpdateTowerStatus)
     end
 })
@@ -2086,6 +2287,17 @@ pcall(function()
     end
 end)
 
+pcall(function()
+    ReplicatedStorage:GetAttributeChangedSignal("WorldBossState"):Connect(function()
+        if getgenv().PetDiceScriptToken ~= scriptToken then return end
+        if UpdateTowerStatus then task.delay(0.2, UpdateTowerStatus) end
+    end)
+    ReplicatedStorage:GetAttributeChangedSignal("WorldBossJoined"):Connect(function()
+        if getgenv().PetDiceScriptToken ~= scriptToken then return end
+        if UpdateTowerStatus then task.delay(0.2, UpdateTowerStatus) end
+    end)
+end)
+
 -- ==============================================================================
 -- [8] BACKGROUND WORKER LOOPS (14 SAFE ENGINE LOOPS)
 -- ==============================================================================
@@ -2159,13 +2371,22 @@ task.spawn(function()
     end
 end)
 
--- 3. Auto Tower (Infinity Tower - Safe Background Runner)
+-- 3. Auto Tower (Dynamic Tower Selection - Safe Background Runner)
 task.spawn(function()
     while true do
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
+        
+        -- หากเปิดให้พักหอคอยเมื่อบอสโลกมา และขณะนี้บอสโลกกำลังเปิดรับหรือต่อสู้ ให้รอจนกว่าบอสจะจบ
+        if CFG.PauseTowerForBoss then
+            local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
+            if wbState == "Joining" or wbState == "Fighting" then
+                task.wait(3.0)
+                continue
+            end
+        end
         
         if CFG.Tower then
             CircuitBreaker.Execute("Tower", function()
@@ -2179,22 +2400,80 @@ task.spawn(function()
                 
                 -- สแกนเรียลไทม์: หากหอคอยไม่ได้ทำงานอยู่ (จบชั้น/แพ้/ยังไม่ได้ลง) ให้จัดทีมสัตว์เลี้ยงที่ดีที่สุดและเริ่มทันที
                 if not IsTowerRunning() then
-                    local towerDef = Towers.ById["Infinity"] or Towers.List[#Towers.List]
-                    local teamSize = Towers.TeamSizeFor(data)
-                    local team = TeamPairs.Best(data, towerDef, teamSize)
-                    if #team > 0 then
-                        Fire("SetSetting", "TowerAutoplay", true)
-                        Fire("TowerStart", towerDef.Id, team)
-                        Humanizer.Wait(1.5, 2.5)
-                        if CFG.AutoExitArena then
-                            Fire("TowerExit")
-                            Humanizer.Wait(1.0, 2.0)
+                    local delaySec = CFG.TowerRestartDelay or 3
+                    if delaySec > 0 then
+                        task.wait(delaySec)
+                    end
+                    if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.Tower then return end
+                    
+                    local selectedId = CFG.SelectedTower or "Infinity"
+                    local towerDef = (Towers.ById and Towers.ById[selectedId]) or (Towers.List and Towers.List[1])
+                    if towerDef then
+                        local teamSize = Towers.TeamSizeFor(data)
+                        local team = TeamPairs.Best(data, towerDef, teamSize)
+                        if #team > 0 then
+                            Fire("SetSetting", "TowerAutoplay", true)
+                            Fire("TowerStart", towerDef.Id, team)
+                            Humanizer.Wait(1.5, 2.5)
+                            if CFG.AutoExitArena then
+                                Fire("TowerExit")
+                                Humanizer.Wait(1.0, 2.0)
+                            end
                         end
                     end
                 elseif IsTowerInArena() and CFG.AutoExitArena then
                     -- หากตัวละครหลุดเข้าไปในอารีน่า ส่งคำสั่งออกมาให้อยู่ในโหมด Away เพื่อเดินสำรวจแมพได้อิสระ
                     Fire("TowerExit")
                     Humanizer.Wait(1.5, 2.5)
+                end
+            end)
+        end
+    end
+end)
+
+-- 3.1. Auto World Boss Runner (Safe Real-Time Engine)
+task.spawn(function()
+    local lastBossJoinAttempt = 0
+    while true do
+        task.wait(2.0)
+        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
+        
+        if CFG.AutoWorldBoss then
+            pcall(function()
+                local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
+                local wbElem = ReplicatedStorage:GetAttribute("WorldBossElement") or ""
+                local wbDiff = ReplicatedStorage:GetAttribute("WorldBossDifficulty") or ""
+                local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+                
+                if wbState == "Joining" and not isJoined then
+                    -- กรองธาตุ
+                    local elemMatch = (not CFG.WorldBossElementFilter) or 
+                                     (CFG.WorldBossElementFilter == "[ ตีทุกธาตุ (All Elements) ]") or 
+                                     (wbElem:lower() == tostring(CFG.WorldBossElementFilter):lower()) or
+                                     (tostring(CFG.WorldBossElementFilter):find(wbElem))
+                    
+                    -- กรองระดับความยาก
+                    local diffMatch = (not CFG.WorldBossDifficultyFilter) or 
+                                     (CFG.WorldBossDifficultyFilter == "[ ตีทุกระดับ (All Difficulties) ]") or
+                                     (wbDiff:lower() == tostring(CFG.WorldBossDifficultyFilter):lower()) or
+                                     (tostring(CFG.WorldBossDifficultyFilter):find(wbDiff))
+                    
+                    if elemMatch and diffMatch then
+                        local now = tick()
+                        if now - lastBossJoinAttempt >= 6.0 then
+                            lastBossJoinAttempt = now
+                            CircuitBreaker.Execute("WorldBossJoin", function()
+                                -- Humanizer หน่วงเวลาเสมือนมนุษย์ 1.5 - 2.5 วินาที
+                                Humanizer.Wait(1.5, 2.5)
+                                if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.AutoWorldBoss then return end
+                                
+                                Fire("WorldBossJoin")
+                                Notify("⚔️ บอสโลก", string.format("เข้าร่วมการตีบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 4)
+                            end)
+                        end
+                    end
                 end
             end)
         end
