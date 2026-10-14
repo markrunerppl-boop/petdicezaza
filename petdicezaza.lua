@@ -1319,11 +1319,35 @@ Tabs.Tower:AddToggle("TogPauseTowerForBoss", {
 
 Tabs.Tower:AddButton({
     Title = "⚔️ กดเข้าร่วมตีบอสโลกทันที (Join World Boss Now)",
-    Description = "ส่งคำสั่งเข้าร่วมการต่อสู้กับบอสโลกรอบปัจจุบันทันที",
+    Description = "ส่งคำสั่งเข้าร่วมการต่อสู้กับบอสโลกรอบปัจจุบันทันที (วาร์ปไปหน้าประตูปลอดภัย)",
     Callback = function()
         local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
         if wbState == "Joining" or wbState == "Fighting" then
+            if CFG.PauseTowerForBoss and IsTowerRunning() then
+                Fire("TowerLeave")
+                task.wait(0.5)
+            end
+            
+            -- วาร์ปไปที่หน้าประตูบอสโลกด้วยระบบทางการของเกม ปลอดภัย 100%
+            local portalModel = workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")
+            local promptSpot = portalModel and portalModel:FindFirstChild("PromptSpot")
+            local hrp = Character and Character:FindFirstChild("HumanoidRootPart")
+            if promptSpot and hrp and (hrp.Position - promptSpot.Position).Magnitude > 35 then
+                Fire("Teleport", "Portal")
+                task.wait(1.0)
+                if hrp and promptSpot then
+                    hrp.CFrame = CFrame.new(promptSpot.Position.X, 5.35, -288)
+                    task.wait(0.5)
+                end
+            end
+            
             Fire("WorldBossJoin")
+            if promptSpot then
+                local prompt = promptSpot:FindFirstChild("JoinPrompt")
+                if prompt and typeof(fireproximityprompt) == "function" and prompt.Enabled then
+                    pcall(fireproximityprompt, prompt)
+                end
+            end
             Notify("⚔️ บอสโลก", "ส่งคำสั่งเข้าร่วมการตีบอสโลกเรียบร้อย!", 3)
         else
             Notify("⚠️ บอสโลก", "ขณะนี้บอสโลกยังไม่เปิดรับสมัคร (สถานะ: " .. tostring(wbState) .. ")", 3)
@@ -1334,10 +1358,12 @@ Tabs.Tower:AddButton({
 
 Tabs.Tower:AddButton({
     Title = "🚪 ออกจากการตีบอสทันที (Leave World Boss)",
-    Description = "ส่งคำสั่งถอนตัวจากการตีบอสโลก",
+    Description = "ส่งคำสั่งถอนตัวจากการตีบอสโลก และวาร์ปกลับบ้าน",
     Callback = function()
         Fire("WorldBossLeave")
-        Notify("🚪 บอสโลก", "ส่งคำสั่งออกจากบอสโลกเรียบร้อย!", 2)
+        task.wait(0.5)
+        Fire("Teleport", "Home")
+        Notify("🚪 บอสโลก", "ส่งคำสั่งออกจากบอสโลกและกลับบ้านเรียบร้อย!", 2)
         task.delay(0.2, UpdateTowerStatus)
     end
 })
@@ -2379,11 +2405,15 @@ task.spawn(function()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
         
-        -- หากเปิดให้พักหอคอยเมื่อบอสโลกมา และขณะนี้บอสโลกกำลังเปิดรับหรือต่อสู้ ให้รอจนกว่าบอสจะจบ
+        -- หากเปิดให้พักหอคอยเมื่อบอสโลกมา และขณะนี้บอสโลกกำลังเปิดรับหรือต่อสู้ ให้หยุดหอคอยและรอจนกว่าบอสจะจบ
         if CFG.PauseTowerForBoss then
             local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
             if wbState == "Joining" or wbState == "Fighting" then
-                task.wait(3.0)
+                if IsTowerRunning() then
+                    Fire("TowerLeave")
+                    Humanizer.Wait(1.0, 1.8)
+                end
+                task.wait(2.5)
                 continue
             end
         end
@@ -2434,18 +2464,34 @@ end)
 -- 3.1. Auto World Boss Runner (Safe Real-Time Engine)
 task.spawn(function()
     local lastBossJoinAttempt = 0
+    local wasInBoss = false
     while true do
-        task.wait(2.0)
+        task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
         
+        local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
+        local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        
+        if isJoined or wbState == "Fighting" then
+            if isJoined then wasInBoss = true end
+        end
+        
+        -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และให้หอคอยกลับมาฟาร์มต่อ
+        if wasInBoss and (wbState == "Idle" or wbState == "Result") and not isJoined then
+            wasInBoss = false
+            task.wait(2.5)
+            pcall(function()
+                Fire("Teleport", "Home")
+            end)
+            Humanizer.Wait(1.5, 2.5)
+        end
+        
         if CFG.AutoWorldBoss then
             pcall(function()
-                local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
                 local wbElem = ReplicatedStorage:GetAttribute("WorldBossElement") or ""
                 local wbDiff = ReplicatedStorage:GetAttribute("WorldBossDifficulty") or ""
-                local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
                 
                 if wbState == "Joining" and not isJoined then
                     -- กรองธาตุ
@@ -2462,14 +2508,46 @@ task.spawn(function()
                     
                     if elemMatch and diffMatch then
                         local now = tick()
-                        if now - lastBossJoinAttempt >= 6.0 then
+                        if now - lastBossJoinAttempt >= 5.0 then
                             lastBossJoinAttempt = now
                             CircuitBreaker.Execute("WorldBossJoin", function()
-                                -- Humanizer หน่วงเวลาเสมือนมนุษย์ 1.5 - 2.5 วินาที
-                                Humanizer.Wait(1.5, 2.5)
+                                -- 1. พักหอคอยก่อนเพื่อให้สัตว์เลี้ยงว่างพร้อมตีบอส
+                                if CFG.PauseTowerForBoss and IsTowerRunning() then
+                                    Fire("TowerLeave")
+                                    Humanizer.Wait(0.8, 1.5)
+                                end
+                                
+                                -- 2. วาร์ปไปที่ประตูบอสด้วยระบบทางการของตัวเกม (ปลอดภัยจากการตรวจจับ 100%)
+                                local portalModel = workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")
+                                local promptSpot = portalModel and portalModel:FindFirstChild("PromptSpot")
+                                local hrp = Character and Character:FindFirstChild("HumanoidRootPart")
+                                
+                                if promptSpot and hrp then
+                                    local dist = (hrp.Position - promptSpot.Position).Magnitude
+                                    if dist > 35 then
+                                        Fire("Teleport", "Portal")
+                                        task.wait(1.0)
+                                        if hrp and promptSpot then
+                                            hrp.CFrame = CFrame.new(promptSpot.Position.X, 5.35, -288)
+                                            task.wait(0.5)
+                                        end
+                                    end
+                                end
+                                
+                                -- 3. Humanizer หน่วงเวลาเล็กน้อย
+                                Humanizer.Wait(0.8, 1.5)
                                 if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.AutoWorldBoss then return end
                                 
+                                -- 4. ส่งคำสั่งเข้าร่วมบอสโลก
                                 Fire("WorldBossJoin")
+                                
+                                if promptSpot then
+                                    local prompt = promptSpot:FindFirstChild("JoinPrompt")
+                                    if prompt and typeof(fireproximityprompt) == "function" and prompt.Enabled then
+                                        pcall(fireproximityprompt, prompt)
+                                    end
+                                end
+                                
                                 Notify("⚔️ บอสโลก", string.format("เข้าร่วมการตีบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 4)
                             end)
                         end
