@@ -1,5 +1,5 @@
 -- ==============================================================================
--- 🎲 PET DICE MASTER SAFE EDITION v4.5 (FLUENT UI REBORN)
+-- 🎲 PET DICE MASTER SAFE EDITION v4.6 (FLUENT UI REBORN)
 -- 🛡️ Anti-AI Detection & High-Tier Protection System
 -- 🎨 Modern Windows 11 Fluent Acrylic Interface
 -- ==============================================================================
@@ -583,7 +583,7 @@ getgenv().PetDiceFluent = Fluent
 
 local Window = Fluent:CreateWindow({
     Title = "Pet Dice Pro Farm",
-    SubTitle = "Master Safe Edition v4.5",
+    SubTitle = "Master Safe Edition v4.6",
     TabWidth = 160,
     Size = UDim2.fromOffset(590, 480),
     Acrylic = false,
@@ -1595,10 +1595,20 @@ pcall(function()
     end
 end)
 
+local function GetCurrentTimestamp()
+    if State and type(State.Now) == "function" then
+        local ok, t = pcall(State.Now)
+        if ok and t then return t end
+    end
+    local ok, t = pcall(function() return workspace:GetServerTimeNow() end)
+    if ok and t then return t end
+    return os.time()
+end
+
 local function IsCandyStormActive()
     local cs = ScheduleConfig and ScheduleConfig.CandyStorm
     if not cs then return false, 0 end
-    local now = State.Now and State.Now() or (workspace:GetServerTimeNow and workspace:GetServerTimeNow() or os.time())
+    local now = GetCurrentTimestamp()
     local curIdx = ScheduleConfig.Index(cs, now)
     local startOf = ScheduleConfig.StartOf(cs, curIdx)
     local isHappening = (now - startOf) < cs.Lasts
@@ -1609,7 +1619,7 @@ end
 local function GetSecondsUntilNextStorm()
     local cs = ScheduleConfig and ScheduleConfig.CandyStorm
     if not cs then return 999 end
-    local now = State.Now and State.Now() or (workspace:GetServerTimeNow and workspace:GetServerTimeNow() or os.time())
+    local now = GetCurrentTimestamp()
     local nextStorm = ScheduleConfig.Next(cs, now)
     return math.max(0, nextStorm - now)
 end
@@ -3853,6 +3863,21 @@ Tabs.Settings:AddParagraph({
 })
 
 Tabs.Settings:AddButton({
+    Title = "📋 คัดลอกลิงก์ Loadstring สำหรับใส่โปร (Copy Loadstring)",
+    Description = "คัดลอกคำสั่งรันสคริปต์แบบเคลียร์แคช CDN ล่าสุดลง Clipboard",
+    Callback = function()
+        local scriptCmd = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua?t=" .. tick()))()'
+        local setCb = setclipboard or toclipboard or (Clipboard and Clipboard.set)
+        if setCb then
+            pcall(function() setCb(scriptCmd) end)
+            Notify("📋 คัดลอกสำเร็จ!", "คัดลอกคำสั่งรันสคริปต์ลง Clipboard เรียบร้อยแล้ว นำไปวางใน Executor ได้ทันที!", 4)
+        else
+            Notify("ℹ️ ลิงก์สคริปต์", scriptCmd, 6)
+        end
+    end
+})
+
+Tabs.Settings:AddButton({
     Title = "🔄 อัปเดตสคริปต์จาก GitHub ทันที (Live Hot-Reload)",
     Description = "ดาวน์โหลดโค้ดล่าสุดจาก GitHub และเริ่มทำงานใหม่ทันที",
     Callback = function()
@@ -3862,6 +3887,11 @@ Tabs.Settings:AddButton({
                 local url = "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua?t=" .. tostring(tick())
                 return game:HttpGet(url)
             end)
+            if not success or not newCode or #newCode < 1000 then
+                success, newCode = pcall(function()
+                    return game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua")
+                end)
+            end
             if success and newCode and #newCode > 1000 then
                 local fn, compileErr = loadstring(newCode)
                 if fn then
@@ -3874,10 +3904,15 @@ Tabs.Settings:AddButton({
                     if Fluent and Fluent.Destroy then
                         pcall(function() Fluent:Destroy() end)
                     end
-                    task.wait(0.3)
+                    if getgenv().PetDiceMobileToggleGui then
+                        pcall(function() getgenv().PetDiceMobileToggleGui:Destroy() end)
+                        getgenv().PetDiceMobileToggleGui = nil
+                    end
+                    task.wait(0.2)
                     task.spawn(fn)
                 else
-                    Notify("❌ เกิดข้อผิดพลาด", "โค้ดจาก GitHub คอมไพล์ไม่ผ่าน: " .. tostring(compileErr), 5)
+                    warn("[PetDice Updater] Compile error: " .. tostring(compileErr))
+                    Notify("❌ เกิดข้อผิดพลาด", "โค้ดจาก GitHub คอมไพล์ไม่ผ่าน: " .. tostring(compileErr), 6)
                 end
             else
                 Notify("❌ ดาวน์โหลดไม่สำเร็จ", "ไม่สามารถดึงข้อมูลจาก GitHub ได้ กรุณาลองใหม่อีกครั้ง", 4)
@@ -5223,4 +5258,4 @@ getgenv().PetDiceScriptLoaded = true
 getgenv().PetDiceScriptStarting = nil
 getgenv().PetDiceNotify = Notify
 
-Notify("🚀 สคริปต์พร้อมทำงาน", "Pet Dice Master Fluent Edition v4.5 โหลดสำเร็จ!", 4)
+Notify("🚀 สคริปต์พร้อมทำงาน", "Pet Dice Master Fluent Edition v4.6 โหลดสำเร็จ!", 4)
