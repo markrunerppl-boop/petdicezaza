@@ -4,8 +4,52 @@
 -- 🎨 Modern Windows 11 Fluent Acrylic Interface
 -- ==============================================================================
 
+-- ==============================================================================
+-- [0] STRICT SINGLETON STARTUP GATEKEEPER (ป้องกันรันสคริปต์ 2 รอบตอนเริ่มเกม 100%)
+-- ==============================================================================
+local executionTime = tick()
+
+-- 1. หากมีเธรดอื่นกำลังเริ่มต้นโหลดสคริปต์อยู่ (ภายใน 20 วินาที) ให้ยกเลิกการรันซ้ำซ้อนทันที
+if getgenv().PetDiceScriptStarting and (executionTime - getgenv().PetDiceScriptStarting < 20) then
+    warn("[PetDice Safe] Script is already initializing in another thread. Duplicate startup blocked 100%.")
+    return
+end
+
+-- 2. หากสคริปต์ทำงานอยู่แล้ว (มี UI ทำงานอยู่ และผู้ใช้ไม่ได้สั่ง Force Reload)
+if getgenv().PetDiceScriptLoaded and getgenv().PetDiceFluent and not getgenv().PetDiceForceReload then
+    local cg = game:GetService("CoreGui")
+    local lp = game:GetService("Players").LocalPlayer
+    local pg = lp and lp:FindFirstChild("PlayerGui")
+    local isUiAlive = false
+    
+    pcall(function()
+        if getgenv().PetDiceFluent and getgenv().PetDiceFluent.GUI and getgenv().PetDiceFluent.GUI.Parent then
+            isUiAlive = true
+        elseif cg and (cg:FindFirstChild("ScreenGui") or cg:FindFirstChild("Fluent")) then
+            isUiAlive = true
+        elseif pg and (pg:FindFirstChild("ScreenGui") or pg:FindFirstChild("Fluent")) then
+            isUiAlive = true
+        end
+    end)
+    
+    if isUiAlive then
+        warn("[PetDice Safe] Script is ALREADY loaded and running active. Duplicate startup blocked 100%.")
+        pcall(function()
+            if typeof(getgenv().PetDiceNotify) == "function" then
+                getgenv().PetDiceNotify("🛡️ ระบบความปลอดภัย", "สคริปต์เปิดทำงานอยู่แล้ว ระบบได้ป้องกันการรันซ้ำซ้อนเรียบร้อย!", 4)
+            end
+        end)
+        return
+    end
+end
+
+-- ล็อคสถานะทันที เพื่อไม่ให้สคริปต์ตัวที่ 2 ที่รันตอนเริ่มเกมเข้ามาทำงานซ้ำ
+getgenv().PetDiceScriptStarting = executionTime
+getgenv().PetDiceForceReload = nil
+
 if not game:IsLoaded() then 
     pcall(function() game.Loaded:Wait() end)
+    getgenv().PetDiceScriptStarting = tick() -- อัปเดตเวลาหลังโหลดแมพเสร็จ
 end
 
 local Players = game:GetService("Players")
@@ -39,9 +83,22 @@ if getgenv().PetDiceOldFluent then
     pcall(function() getgenv().PetDiceOldFluent:Destroy() end)
     getgenv().PetDiceOldFluent = nil
 end
+if getgenv().PetDiceFluent then
+    pcall(function() getgenv().PetDiceFluent:Destroy() end)
+    getgenv().PetDiceFluent = nil
+end
+if getgenv().PetDiceMobileToggleGui then
+    pcall(function() getgenv().PetDiceMobileToggleGui:Destroy() end)
+    getgenv().PetDiceMobileToggleGui = nil
+end
 pcall(function()
-    local oldToggle = LocalPlayer:WaitForChild("PlayerGui", 3):FindFirstChild("PetDiceMobileToggle")
-    if oldToggle then oldToggle:Destroy() end
+    local pg = LocalPlayer:WaitForChild("PlayerGui", 3)
+    if pg then
+        local oldToggle = pg:FindFirstChild("PetDiceMobileToggle")
+        if oldToggle then oldToggle:Destroy() end
+    end
+    local oldCgToggle = CG:FindFirstChild("PetDiceMobileToggle")
+    if oldCgToggle then oldCgToggle:Destroy() end
 end)
 
 getgenv().PetDiceScriptToken = tick()
@@ -476,6 +533,7 @@ ToggleGui.Name = "PetDiceMobileToggle"
 ToggleGui.ResetOnSpawn = false
 ToggleGui.DisplayOrder = 999999
 ToggleGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+getgenv().PetDiceMobileToggleGui = ToggleGui
 
 local ToggleBtn = Instance.new("TextButton")
 ToggleBtn.Size = UDim2.fromOffset(50, 50)
@@ -1103,8 +1161,13 @@ local function GetCurrentOrNextTowerId(advance)
 end
 
 pcall(function()
+    if getgenv().PetDiceBattleConn then
+        pcall(function() getgenv().PetDiceBattleConn:Disconnect() end)
+        getgenv().PetDiceBattleConn = nil
+    end
     local BattleRemote = PetDice:WaitForChild("Remotes"):WaitForChild("Battle")
-    BattleRemote.OnClientEvent:Connect(function(action, payload)
+    getgenv().PetDiceBattleConn = BattleRemote.OnClientEvent:Connect(function(action, payload)
+        if getgenv().PetDiceScriptToken ~= scriptToken then return end
         if action == "Floor" and typeof(payload) == "table" then
             LiveTower.Active = true
             LiveTower.TowerId = payload.Tower
@@ -2839,6 +2902,9 @@ Tabs.Settings:AddButton({
                 if fn then
                     Notify("✅ อัปเดตสำเร็จ!", "กำลังรันสคริปต์เวอร์ชันใหม่ล่าสุด...", 3)
                     task.wait(0.5)
+                    getgenv().PetDiceForceReload = true
+                    getgenv().PetDiceScriptLoaded = false
+                    getgenv().PetDiceScriptStarting = nil
                     getgenv().PetDiceScriptToken = tick()
                     if Fluent and Fluent.Destroy then
                         pcall(function() Fluent:Destroy() end)
@@ -3919,5 +3985,9 @@ task.spawn(function()
         end)
     end
 end)
+
+getgenv().PetDiceScriptLoaded = true
+getgenv().PetDiceScriptStarting = nil
+getgenv().PetDiceNotify = Notify
 
 Notify("🚀 สคริปต์พร้อมทำงาน", "Pet Dice Master Fluent Edition v4.5 โหลดสำเร็จ!", 4)
