@@ -1551,14 +1551,15 @@ local function SyncLiveTowerFromGame()
         return
     end
     
-    -- 2. ระบบรอช่วงเริ่มหอคอย (Grace Period ป้องกันความเข้าใจผิดระหว่างวาร์ป / โหลดเข้าหอ)
+    -- 2. ระบบรอช่วงเริ่มหอคอยหรือช่วงเปลี่ยนผ่านชั้น (Grace Period ป้องกันการหลุดระหว่างชั้น)
     local now = tick()
     local timeSinceStart = now - (LiveTower.LastStartTick or 0)
-    if LiveTower.Starting and timeSinceStart < 8.0 then
+    local timeSinceEvent = now - (LiveTower.LastEventTime or 0)
+    if (LiveTower.Starting and timeSinceStart < 8.0) or (LiveTower.Active and timeSinceEvent < 6.0) then
         return
     end
     
-    -- 3. หากไม่มี UI แสดงว่าตัวละครไม่ได้อยู่ในหอคอยจริง
+    -- 3. หากไม่มี UI และไม่มี Battle Event มาเกิน 6 วินาที แสดงว่าตัวละครไม่ได้อยู่ในหอคอยจริง
     LiveTower.Active = false
     LiveTower.Starting = false
     LiveTower.TowerId = nil
