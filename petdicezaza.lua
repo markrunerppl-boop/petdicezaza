@@ -385,7 +385,9 @@ local defaultCFG = {
     AutoUsePotionLuck = false,
     AutoUsePotionCash = false,
     AutoUsePotionSpeed = false,
-    AutoOpenLootBags = false
+    AutoOpenLootBags = false,
+    AutoSellPets = false,
+    KeepTopPetsCount = 100
 }
 
 getgenv().CFG = getgenv().CFG or {}
@@ -636,6 +638,217 @@ Tabs.Overview:AddButton({
     end
 })
 
+-- ==============================================================================
+-- 💰 AUTO SELL PETS ENGINE (ขายสัตว์เลี้ยงอัตโนมัติ เก็บเฉพาะ N ตัวที่ดีที่สุด)
+-- ==============================================================================
+local isAutoSellingActive = false
+local SliderKeepPetCount = nil
+local InputCustomKeepCount = nil
+local AutoSellStatusPara = nil
+
+local function ExecuteAutoSellPets(targetCountOverride)
+    if isAutoSellingActive then return false, "กำลังดำเนินการขายสัตว์เลี้ยงอยู่..." end
+    local data = State.Data
+    if not data or not data.Pets then return false, "ไม่มีข้อมูลสัตว์เลี้ยงในขณะนี้" end
+    
+    local targetKeep = targetCountOverride or CFG.KeepTopPetsCount or 100
+    targetKeep = math.max(1, math.floor(tonumber(targetKeep) or 100))
+    
+    local stacks = State.Stacks()
+    if not stacks or #stacks == 0 then return false, "ไม่พบรายการสัตว์เลี้ยงในกระเป๋า" end
+    
+    isAutoSellingActive = true
+    local success, totalSoldOrErr, keptCount = pcall(function()
+        local stackInfos = {}
+        for _, s in ipairs(stacks) do
+            local base = 0
+            pcall(function() base = Stats.PetBaseIncome(s.Item) end)
+            local def = PetData and PetData.ById and PetData.ById[s.Id]
+            local isLimited = (def and def.Limited) or false
+            
+            -- ตรวจสอบตัวที่ล็อคไว้ (Locked Pets)
+            local lockedCount = 0
+            if data.Locked then
+                if data.Locked[s.Key] then
+                    lockedCount = s.Count
+                else
+                    for _, uid in ipairs(s.Uids or {}) do
+                        if data.Locked[uid] then
+                            lockedCount = lockedCount + 1
+                        end
+                    end
+                end
+            end
+            
+            table.insert(stackInfos, {
+                stack = s,
+                key = s.Key,
+                id = s.Id,
+                count = s.Count,
+                equipped = s.Equipped or 0,
+                locked = lockedCount,
+                base = base,
+                isLimited = isLimited,
+                level = (s.Item and s.Item.L) or 1
+            })
+        end
+        
+        -- เรียงลำดับจากค่าพลัง Base มากที่สุดไปน้อยที่สุด (ตัวที่เก่งที่สุดจะถูกเก็บไว้)
+        table.sort(stackInfos, function(a, b)
+            if a.base ~= b.base then
+                return a.base > b.base
+            end
+            if a.level ~= b.level then
+                return a.level > b.level
+            end
+            return a.count > b.count
+        end)
+        
+        local kept = 0
+        local toSell = 0
+        local sellBatches = {}
+        local currentBatchKeys = {}
+        local currentBatchAmounts = {}
+        local batchCount = 0
+        
+        for _, info in ipairs(stackInfos) do
+            local s = info.stack
+            local totalInStack = info.count
+            local protectedCount = math.max(info.equipped, info.locked)
+            if info.isLimited then
+                protectedCount = totalInStack -- สัตว์เลี้ยง Limited ปลอดภัยเสมอ ไม่ขายเด็ดขาด
+            end
+            
+            local remainingToKeep = math.max(0, targetKeep - kept)
+            local keepFromStack = math.min(totalInStack, remainingToKeep)
+            keepFromStack = math.max(keepFromStack, protectedCount)
+            
+            local sellFromStack = totalInStack - keepFromStack
+            local unequippedAndUnlocked = totalInStack - info.equipped - info.locked
+            sellFromStack = math.clamp(sellFromStack, 0, math.max(0, unequippedAndUnlocked))
+            
+            kept = kept + (totalInStack - sellFromStack)
+            
+            if sellFromStack > 0 then
+                toSell = toSell + sellFromStack
+                table.insert(currentBatchKeys, s.Key)
+                if sellFromStack < (totalInStack - info.equipped) then
+                    currentBatchAmounts[s.Key] = sellFromStack
+                end
+                batchCount = batchCount + 1
+                if batchCount >= 25 then
+                    table.insert(sellBatches, { keys = currentBatchKeys, amounts = currentBatchAmounts })
+                    currentBatchKeys = {}
+                    currentBatchAmounts = {}
+                    batchCount = 0
+                end
+            end
+        end
+        
+        if #currentBatchKeys > 0 then
+            table.insert(sellBatches, { keys = currentBatchKeys, amounts = currentBatchAmounts })
+        end
+        
+        if toSell == 0 or #sellBatches == 0 then
+            return 0, kept
+        end
+        
+        -- ส่งคำสั่งขายแบบ Humanized Batch (ป้องกัน Anti-Cheat / Rate Limit 100%)
+        for bIndex, batch in ipairs(sellBatches) do
+            if getgenv().PetDiceScriptToken ~= scriptToken then break end
+            State.Send("SellKeys", batch.keys, batch.amounts)
+            if bIndex < #sellBatches then
+                Humanizer.Wait(0.18, 0.28)
+            end
+        end
+        
+        return toSell, kept
+    end)
+    isAutoSellingActive = false
+    
+    if not success then
+        return false, totalSoldOrErr
+    end
+    return true, totalSoldOrErr, keptCount
+end
+
+Tabs.Overview:AddSection("💰 ระบบขายสัตว์เลี้ยงอัตโนมัติ (Auto Sell Pets)")
+
+AutoSellStatusPara = Tabs.Overview:AddParagraph({
+    Title = "📊 สถานะระบบขายสัตว์เลี้ยง: กำลังคำนวณ...",
+    Content = "กำลังตรวจสอบจำนวนสัตว์เลี้ยงและค่าพลัง Base..."
+})
+
+local TogAutoSell = Tabs.Overview:AddToggle("TogAutoSellPets", {
+    Title = "💰 เปิดระบบขายสัตว์เลี้ยงอัตโนมัติ (Auto Sell Pets)",
+    Default = CFG.AutoSellPets or false,
+    Callback = function(v)
+        UpdateCFG("AutoSellPets", v)
+        if v then
+            Notify("💰 ขายสัตว์เลี้ยง", "เปิดระบบขายสัตว์เลี้ยงอัตโนมัติแล้ว! จะเก็บเฉพาะ " .. (CFG.KeepTopPetsCount or 100) .. " ตัวที่เก่งที่สุด", 3)
+            task.spawn(function()
+                ExecuteAutoSellPets()
+            end)
+        else
+            Notify("💰 ขายสัตว์เลี้ยง", "ปิดระบบขายสัตว์เลี้ยงอัตโนมัติเรียบร้อย", 2)
+        end
+    end
+})
+
+SliderKeepPetCount = Tabs.Overview:AddSlider("SliderKeepPetCount", {
+    Title = "🎯 จำนวนสัตว์เลี้ยงที่ต้องการเก็บไว้ (Keep Top Pets)",
+    Description = "เก็บเฉพาะตัวที่เก่งที่สุด เรียงจากค่าพลัง Base ส่วนที่เกินจะถูกขายอัตโนมัติ",
+    Default = CFG.KeepTopPetsCount or 100,
+    Min = 10,
+    Max = 500,
+    Rounding = 0,
+    Callback = function(val)
+        local n = math.floor(tonumber(val) or 100)
+        UpdateCFG("KeepTopPetsCount", n)
+    end
+})
+
+InputCustomKeepCount = Tabs.Overview:AddInput("InputCustomKeepCount", {
+    Title = "🔢 พิมพ์จำนวนที่ต้องการเก็บเอง (Custom Count)",
+    Default = tostring(CFG.KeepTopPetsCount or 100),
+    Placeholder = "เช่น 50, 100, 150, 200, 300",
+    Numeric = true,
+    Finished = true,
+    Callback = function(val)
+        local num = tonumber(val)
+        if num and num >= 1 then
+            num = math.floor(num)
+            UpdateCFG("KeepTopPetsCount", num)
+            pcall(function()
+                if SliderKeepPetCount then
+                    SliderKeepPetCount:SetValue(math.clamp(num, 10, 500))
+                end
+            end)
+            Notify("🎯 ตั้งค่าสำเร็จ", "ตั้งค่าเก็บสัตว์เลี้ยงที่ดีที่สุด " .. num .. " ตัวเรียบร้อย!", 2)
+        end
+    end
+})
+
+Tabs.Overview:AddButton({
+    Title = "⚡ สั่งขายส่วนเกินทันที (Sell Excess Pets Now)",
+    Description = "คัดแยกและขายสัตว์เลี้ยงที่เกินจากเป้าหมายทันทีตามค่าพลัง Base",
+    Callback = function()
+        task.spawn(function()
+            Notify("💰 กำลังคำนวณ", "กำลังตรวจสอบและคัดกรองสัตว์เลี้ยงตามค่าพลัง Base...", 2)
+            local ok, sold, kept = ExecuteAutoSellPets()
+            if ok then
+                if sold and sold > 0 then
+                    Notify("✅ ขายสำเร็จ", string.format("ขายสัตว์เลี้ยงส่วนเกินเรียบร้อย! ขายไป %s ตัว (คงเหลือ %s ตัวที่ดีที่สุด)", Format.Commas(sold), Format.Commas(kept)), 4)
+                else
+                    Notify("ℹ️ ไม่มีส่วนเกิน", "จำนวนสัตว์เลี้ยงปัจจุบันไม่เกินเป้าหมายที่ตั้งไว้ (" .. (CFG.KeepTopPetsCount or 100) .. " ตัว)", 3)
+                end
+            else
+                Notify("❌ เกิดข้อผิดพลาด", tostring(sold or "ไม่สามารถขายได้"), 3)
+            end
+        end)
+    end
+})
+
 local function UpdateOverviewTab()
     pcall(function()
         local data = State.Data
@@ -652,6 +865,18 @@ local function UpdateOverviewTab()
         
         OverviewStats:SetTitle(string.format("💰 เงิน: %s | 💎 เพชร: %s | 🔮 ชาร์ด: %s", moneyStr, gemsStr, shardsStr))
         OverviewStats:SetDesc(string.format("🏰 หอคอยชั้น: %d | 🐾 สัตว์เลี้ยงทั้งหมด: %d ตัว | 🍬 ลูกอม: %s", towerFloor, totalPets, candyStr))
+        
+        -- Update Auto Sell Stats
+        if AutoSellStatusPara then
+            local targetK = CFG.KeepTopPetsCount or 100
+            local excess = math.max(0, totalPets - targetK)
+            local statusText = CFG.AutoSellPets and "🟢 เปิดทำงานอัตโนมัติ" or "⚪ ปิดการทำงาน"
+            if isAutoSellingActive then
+                statusText = "🟡 กำลังดำเนินการขาย..."
+            end
+            AutoSellStatusPara:SetTitle(string.format("📊 สถานะ: %s | มีทั้งหมด: %s ตัว | เป้าหมายเก็บไว้: %s ตัว", statusText, Format.Commas(totalPets), Format.Commas(targetK)))
+            AutoSellStatusPara:SetDesc(string.format("ส่วนเกินที่จะขาย: %s ตัว (เรียงจากค่าพลัง Base สูงสุดลงไป | สัตว์เลี้ยงที่สวมใส่และล็อคจะได้รับการปกป้อง 100%%)", Format.Commas(excess)))
+        end
         
         -- Update Best Pets
         local count = CFG.EnhancePetCount or 4
@@ -4109,6 +4334,29 @@ task.spawn(function()
     if CFG.Tower and not IsTowerRunning() then
         local targetId = ResolveTowerId(CFG.SelectedTower)
         SwitchOrStartTower(targetId, true)
+    end
+end)
+
+-- 16. Auto Sell Pets Loop: ตรวจสอบและขายสัตว์เลี้ยงส่วนเกินอัตโนมัติ (เก็บเฉพาะ N ตัวแรกที่ค่าพลัง Base สูงสุด)
+task.spawn(function()
+    while true do
+        task.wait(10.0)
+        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0) continue end
+        
+        if CFG.AutoSellPets and not isAutoSellingActive then
+            pcall(function()
+                local data = State.Data
+                if not data or not data.Pets then return end
+                local totalPets = 0
+                for _ in pairs(data.Pets) do totalPets = totalPets + 1 end
+                
+                local targetK = CFG.KeepTopPetsCount or 100
+                if totalPets > targetK then
+                    ExecuteAutoSellPets(targetK)
+                end
+            end)
+        end
     end
 end)
 
