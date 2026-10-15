@@ -1336,6 +1336,7 @@ end
 
 local SwitchOrStartTower
 local isSwitchingTower = false
+local lastLoopStartAttempt = 0  -- shared across TogTower + supervisor loops
 
 local function ResolveTowerId(val)
     if not val or val == "" or val == "Meadow" then return "Infinity" end
@@ -1534,10 +1535,10 @@ local function SyncLiveTowerFromGame()
         return
     end
     
-    -- 2. ระบบรอช่วงเริ่มหอคอย (Grace Period สั้น ป้องกันความเข้าใจผิดระหว่างวาร์ป)
+    -- 2. ระบบรอช่วงเริ่มหอคอย (Grace Period ป้องกันความเข้าใจผิดระหว่างวาร์ป / โหลดเข้าหอ)
     local now = tick()
     local timeSinceStart = now - (LiveTower.LastStartTick or 0)
-    if LiveTower.Starting and timeSinceStart < 3.5 then
+    if LiveTower.Starting and timeSinceStart < 8.0 then
         return
     end
     
@@ -3475,7 +3476,6 @@ task.spawn(function()
     local wasTowerRunning = false
     local lastTowerId = nil
     local towerStartFloor = 0
-    local lastLoopStartAttempt = 0
     local consecutiveFailCount = 0
     
     while true do
@@ -4402,13 +4402,12 @@ task.spawn(function()
     end
 end)
 
--- 15. Continuous Tower Auto-Farm Engine & Supervisor Loop
+-- 15. Continuous Tower Auto-Farm Engine & Supervisor Loop (Backup / Secondary Check)
 task.spawn(function()
-    task.wait(1.5)
-    local lastLoopAttempt = 0
+    task.wait(2.0)
     
     while true do
-        task.wait(1.5)
+        task.wait(2.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
@@ -4420,6 +4419,12 @@ task.spawn(function()
             end
             
             local now = tick()
+            
+            -- ปลดล็อค isSwitchingTower อัตโนมัติหากค้างเกิน 6 วินาที
+            if isSwitchingTower and (now - (LiveTower.SwitchingTick or 0) > 6.0) then
+                isSwitchingTower = false
+            end
+            
             local isRunning = IsTowerRunning()
             local inArena = IsTowerInArena()
             
@@ -4433,29 +4438,30 @@ task.spawn(function()
             -- ตรวจสอบการเปิดโหมดเบื้องหลัง (Away Mode) หากผู้ใช้เปิด AutoExitArena ไว้
             if isRunning and inArena and CFG.AutoExitArena then
                 Fire("TowerExit")
-                Humanizer.Wait(0.4, 0.8)
+                task.wait(0.5)
             end
             
-            -- หากไม่ได้อยู่ในหอคอยจริง ให้เริ่มรอบใหม่ทันที
+            -- หากไม่ได้อยู่ในหอคอยจริง ให้เริ่มรอบใหม่ทันที (ใช้ shared lastLoopStartAttempt)
             if not isRunning then
-                local restartDelay = tonumber(CFG.TowerRestartDelay) or 2.5
-                if LiveTower.EndedTick and (now - LiveTower.EndedTick < restartDelay) then
-                    continue
-                end
+                local restartDelay = math.max(1.5, tonumber(CFG.TowerRestartDelay) or 2.5)
+                local sinceLastAttempt = now - lastLoopStartAttempt
+                local sinceEnded = LiveTower.EndedTick and (now - LiveTower.EndedTick) or math.huge
                 
-                if (now - lastLoopAttempt > 2.5) then
-                    lastLoopAttempt = now
+                if sinceLastAttempt >= restartDelay and sinceEnded >= restartDelay then
+                    lastLoopStartAttempt = now
                     local targetId = ResolveTowerId(CFG.SelectedTower)
                     SwitchOrStartTower(targetId, true)
                 end
             else
                 -- Anti-Stuck Watchdog: หากติดค้างนานเกิน 25 วินาทีในชั้นเดิม ให้รีเซ็ตและเริ่มใหม่
                 if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 25.0) then
+                    LiveTower.LastFloorTime = now
                     Fire("TowerLeave")
                     task.wait(1.0)
                     LiveTower.Active = false
                     LiveTower.Starting = false
                     local targetId = ResolveTowerId(CFG.SelectedTower)
+                    lastLoopStartAttempt = 0
                     SwitchOrStartTower(targetId, true)
                 end
             end
@@ -4485,6 +4491,29 @@ task.spawn(function()
         end
     end
 end)
+
+-- Expose core tower functions to global environment for external access and re-entry
+getgenv().PetDiceStartTower = function(towerId)
+    local targetId = ResolveTowerId(towerId or CFG.SelectedTower)
+    local towerDef = (Towers.ById and Towers.ById[targetId]) or Towers.List[1] or {Id=targetId, Name=targetId}
+    local team = GetTowerTeam(towerDef)
+    if not team or #team == 0 then
+        Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
+        return false
+    end
+    pcall(function()
+        if State.Data and State.Data.Settings and State.Data.Settings.TowerAutoplay then
+            Fire("SetSetting", "TowerAutoplay", false)
+        end
+    end)
+    Fire("TowerStart", towerDef.Id, team)
+    LiveTower.Active = true
+    LiveTower.Starting = true
+    LiveTower.LastStartTick = tick()
+    LiveTower.TowerId = towerDef.Id
+    LiveTower.LastEventTime = tick()
+    return true
+end
 
 getgenv().PetDiceScriptLoaded = true
 getgenv().PetDiceScriptStarting = nil
