@@ -381,6 +381,8 @@ if getgenv().CFG.TradeTarget == "[ เลือกทุกคนในห้อ
     getgenv().CFG.TradeTargetId = nil
 end
 
+local CFG = getgenv().CFG
+
 local function UpdateCFG(key, val)
     getgenv().CFG[key] = val
     if writefile then 
