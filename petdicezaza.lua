@@ -1554,7 +1554,7 @@ pcall(function()
                 task.spawn(function()
                     local delaySec = math.max(1.5, tonumber(CFG.TowerRestartDelay) or 2.5)
                     task.wait(delaySec)
-                    if CFG.Tower and getgenv().PetDiceScriptToken == scriptToken and not IsTowerRunning() then
+                    if CFG.Tower and getgenv().PetDiceScriptToken == scriptToken and not IsTowerRunning() and not getgenv().IsCandyStormActiveRunning then
                         local targetId = ResolveTowerId(CFG.SelectedTower)
                         lastLoopStartAttempt = tick()
                         SwitchOrStartTower(targetId, true)
@@ -1609,9 +1609,27 @@ local function GetCurrentTimestamp()
 end
 
 local function IsCandyStormActive()
+    local now = GetCurrentTimestamp()
+    
+    -- 1. ตรวจสอบจาก Attributes บน ReplicatedStorage.PetDice (ระบบหลักของเกม 100%)
+    local okAttr, isHappeningAttr, secLeftAttr = pcall(function()
+        local PetDice = RS:FindFirstChild("PetDice")
+        local attrStart = PetDice and PetDice:GetAttribute("CandyStorm")
+        local attrEnd = PetDice and PetDice:GetAttribute("CandyStormEnds")
+        if type(attrStart) == "number" and type(attrEnd) == "number" then
+            if now >= attrStart and now < attrEnd then
+                return true, math.max(0, attrEnd - now)
+            end
+        end
+        return false, 0
+    end)
+    if okAttr and isHappeningAttr then
+        return true, secLeftAttr
+    end
+    
+    -- 2. ระบบสำรอง: คำนวณจาก ScheduleConfig
     local cs = ScheduleConfig and ScheduleConfig.CandyStorm
     if not cs then return false, 0 end
-    local now = GetCurrentTimestamp()
     local curIdx = ScheduleConfig.Index(cs, now)
     local startOf = ScheduleConfig.StartOf(cs, curIdx)
     local isHappening = (now - startOf) < cs.Lasts
@@ -1620,9 +1638,26 @@ local function IsCandyStormActive()
 end
 
 local function GetSecondsUntilNextStorm()
+    local now = GetCurrentTimestamp()
+    
+    -- หากพายุกำลังเกิดอยู่ขณะนี้ ให้คืนค่า 0 ทันที
+    local isRunning, _ = IsCandyStormActive()
+    if isRunning then return 0 end
+    
+    -- ตรวจสอบจาก PetDice Attribute
+    local okAttr, secAttr = pcall(function()
+        local PetDice = RS:FindFirstChild("PetDice")
+        local attrStart = PetDice and PetDice:GetAttribute("CandyStorm")
+        if type(attrStart) == "number" and attrStart > now then
+            return math.max(0, attrStart - now)
+        end
+    end)
+    if okAttr and type(secAttr) == "number" then
+        return secAttr
+    end
+    
     local cs = ScheduleConfig and ScheduleConfig.CandyStorm
     if not cs then return 999 end
-    local now = GetCurrentTimestamp()
     local nextStorm = ScheduleConfig.Next(cs, now)
     return math.max(0, nextStorm - now)
 end
@@ -2012,7 +2047,7 @@ SwitchOrStartTower = function(targetTowerId, force)
         return false, "In World Boss"
     end
     
-    if not force and getgenv().IsCandyStormActiveRunning then
+    if getgenv().IsCandyStormActiveRunning then
         return false, "Candy Storm Active"
     end
     
@@ -4693,23 +4728,24 @@ task.spawn(function()
                     
                     targets = GetAvailableCandies()
                     local stormStillActive, _ = IsCandyStormActive()
+                    local secToNextWait = GetSecondsUntilNextStorm()
                     
                     if #targets == 0 then
-                        if stormStillActive or (GetSecondsUntilNextStorm() <= 5) then
+                        if stormStillActive or (secToNextWait <= 8) then
                             -- กำลังรอแคนดี้ระลอกถัดไปตกลงมา ให้เดินไปเตรียมพร้อมบริเวณศูนย์กลางพลาซ่าอย่างเป็นธรรมชาติ
                             local centerPos = Vector3.new(0, hrp.Position.Y, 0)
-                            if (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(0, 0, 0)).Magnitude > 12 then
+                            if (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(0, 0, 0)).Magnitude > 10 then
                                 hum:MoveTo(centerPos)
                             end
                             lastStormSeen = tick()
-                            task.wait(0.25)
+                            task.wait(0.3)
                             continue
                         else
                             -- พายุจบลงแล้ว และไม่มีแคนดี้เหลืออยู่บนพื้น
-                            if tick() - lastStormSeen > 2.5 then
+                            if tick() - lastStormSeen > 3.0 then
                                 break
                             end
-                            task.wait(0.25)
+                            task.wait(0.3)
                             continue
                         end
                     end
@@ -5339,6 +5375,11 @@ task.spawn(function()
             local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
             if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
                 task.wait(3.0)
+                continue
+            end
+            
+            if getgenv().IsCandyStormActiveRunning then
+                task.wait(2.0)
                 continue
             end
             
