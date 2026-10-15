@@ -1634,9 +1634,9 @@ local function GetAvailableCandies()
     local seen = {}
     local now = tick()
     
-    -- ล้างประวัติลูกอมที่เคยเก็บไปแล้วเกิน 8 วินาที
+    -- ล้างประวัติลูกอมที่เคยเก็บไปแล้วเกิน 10 วินาที
     for k, t in pairs(VisitedCandies) do
-        if now - t > 8.0 then VisitedCandies[k] = nil end
+        if now - t > 10.0 then VisitedCandies[k] = nil end
     end
     
     -- 1. จากรายการ ActiveCandies ที่ดักจับจากแพ็กเก็ต Remote
@@ -1651,7 +1651,7 @@ local function GetAvailableCandies()
                     Born = c.Born,
                     Key = id
                 })
-                seen[id] = true
+                seen[posKey] = true
             end
         else
             ActiveCandies[id] = nil
@@ -1665,25 +1665,19 @@ local function GetAvailableCandies()
         if pieces then
             for _, m in ipairs(pieces:GetChildren()) do
                 if m:IsA("Model") and not VisitedCandies[m] then
-                    local pivot = m:GetPivot()
-                    if pivot and pivot.Position then
-                        local posKey = string.format("%.1f_%.1f", pivot.Position.X, pivot.Position.Z)
-                        if not VisitedCandies[posKey] then
-                            local alreadyInList = false
-                            for _, existing in ipairs(list) do
-                                if (existing.Position - pivot.Position).Magnitude < 3.0 then
-                                    alreadyInList = true
-                                    break
-                                end
-                            end
-                            if not alreadyInList then
-                                table.insert(list, {
-                                    Model = m,
-                                    Position = pivot.Position,
-                                    Born = now,
-                                    Key = m
-                                })
-                            end
+                    local rootPart = m.PrimaryPart or m:FindFirstChild("Root") or m:FindFirstChildWhichIsA("BasePart")
+                    local pos = rootPart and rootPart.Position
+                    if pos and pos.Y > 1.0 and pos.Magnitude > 2.0 then
+                        local posKey = string.format("%.1f_%.1f", pos.X, pos.Z)
+                        if not VisitedCandies[posKey] and not seen[posKey] then
+                            table.insert(list, {
+                                Model = m,
+                                Kind = m.Name,
+                                Position = pos,
+                                Born = now,
+                                Key = m
+                            })
+                            seen[posKey] = true
                         end
                     end
                 end
@@ -4683,7 +4677,7 @@ task.spawn(function()
                     if not hum or not hrp then return end
                 end
                 
-                -- โหมดกวาดเก็บแคนดี้ความเร็วสูงแบบ Non-Stop Continuous Sprint (ความเร็วปกติของตัวเกม ปลอดภัย 100%)
+                -- โหมดกวาดเก็บแคนดี้ความเร็วสูงแบบ Smart Safe Sprint (ปลอดภัย 100% จากระบบตรวจจับ)
                 local lastStormSeen = tick()
                 while CFG.HalloweenAutoCollectCandy do
                     if getgenv().PetDiceScriptToken ~= scriptToken then break end
@@ -4702,60 +4696,133 @@ task.spawn(function()
                     
                     if #targets == 0 then
                         if stormStillActive or (GetSecondsUntilNextStorm() <= 5) then
-                            -- กำลังรอแคนดี้ระลอกถัดไปตกลงมา
+                            -- กำลังรอแคนดี้ระลอกถัดไปตกลงมา ให้เดินไปเตรียมพร้อมบริเวณศูนย์กลางพลาซ่าอย่างเป็นธรรมชาติ
+                            local centerPos = Vector3.new(0, hrp.Position.Y, 0)
+                            if (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(0, 0, 0)).Magnitude > 12 then
+                                hum:MoveTo(centerPos)
+                            end
                             lastStormSeen = tick()
-                            task.wait(0.2)
+                            task.wait(0.25)
                             continue
                         else
                             -- พายุจบลงแล้ว และไม่มีแคนดี้เหลืออยู่บนพื้น
-                            if tick() - lastStormSeen > 2.0 then
+                            if tick() - lastStormSeen > 2.5 then
                                 break
                             end
-                            task.wait(0.2)
+                            task.wait(0.25)
                             continue
                         end
                     end
                     
                     lastStormSeen = tick()
                     
-                    -- ค้นหาแคนดี้ที่อยู่ใกล้ตัวละครที่สุด (Nearest-Neighbor)
+                    -- คัดเลือกเป้าหมายที่คุ้มค่าและใกล้ที่สุดอย่างชาญฉลาด (Smart Weighted Nearest-Neighbor)
+                    -- ให้ความสำคัญกับ Pumpkin Bucket (15 ชิ้น), Candy Bag (5 ชิ้น), Lollipop (2 ชิ้น), Candy Corn (1 ชิ้น)
                     local curPos = hrp.Position
-                    local bestIdx = 1
-                    local bestDist = (targets[1].Position - curPos).Magnitude
-                    for i = 2, #targets do
-                        local d = (targets[i].Position - curPos).Magnitude
-                        if d < bestDist then
-                            bestDist = d
-                            bestIdx = i
+                    local bestCandy = nil
+                    local bestScore = math.huge
+                    
+                    for _, c in ipairs(targets) do
+                        if c and c.Position then
+                            local d = (Vector3.new(c.Position.X, 0, c.Position.Z) - Vector3.new(curPos.X, 0, curPos.Z)).Magnitude
+                            if d <= 90 then
+                                local weight = 1.0
+                                local kind = c.Kind or (c.Model and c.Model.Name) or ""
+                                if kind:find("Bucket") then
+                                    weight = 3.0 -- Bucket มีค่าสูงสุด 15 ลูกอม
+                                elseif kind:find("Bag") then
+                                    weight = 1.8 -- Bag มีค่า 5 ลูกอม
+                                elseif kind:find("Lollipop") then
+                                    weight = 1.2 -- Lollipop มีค่า 2 ลูกอม
+                                end
+                                
+                                local score = d / weight
+                                if score < bestScore then
+                                    bestScore = score
+                                    bestCandy = c
+                                end
+                            end
                         end
                     end
                     
-                    local targetCandy = targets[bestIdx]
-                    if targetCandy and targetCandy.Position then
-                        -- วิ่งตรงเข้าหาแคนดี้ด้วยความเร็วของตัวเกมจริง (WalkSpeed = 41 studs/sec)
-                        -- ระยะเก็บของเกมคือ 8 studs ดังนั้นเมื่อเข้าใกล้ระยะ 7.5 studs ตัวเกมจะเก็บอัตโนมัติทันที
-                        local targetGroundPos = Vector3.new(targetCandy.Position.X, hrp.Position.Y, targetCandy.Position.Z)
-                        hum:MoveTo(targetGroundPos)
+                    if bestCandy and bestCandy.Position then
+                        local targetCandy = bestCandy
+                        local targetPos = targetCandy.Position
+                        local groundTarget = Vector3.new(targetPos.X, hrp.Position.Y, targetPos.Z)
+                        local startDist = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
+                        
+                        -- คำนวณเวลาการเดินตามระยะทางจริง + เผื่อเวลา (ไม่ตัดบทกลางคัน ป้องกันเดินกระตุก/เปลี่ยนทิศมั่ว)
+                        local moveSpeed = math.max(16, hum.WalkSpeed)
+                        local walkTimeout = math.clamp((startDist / moveSpeed) * 1.35 + 1.8, 1.8, 6.5)
+                        
+                        -- สั่งเดินตรงไปยังจุดหมาย
+                        hum:MoveTo(groundTarget)
                         
                         local moveStart = tick()
-                        while (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetCandy.Position.X, 0, targetCandy.Position.Z)).Magnitude > 7.5 and (tick() - moveStart < 2.0) do
-                            task.wait(0.05)
+                        local lastCheckPos = hrp.Position
+                        local lastCheckTime = tick()
+                        local isCollected = false
+                        
+                        while (tick() - moveStart < walkTimeout) do
+                            task.wait(0.04)
+                            if getgenv().PetDiceScriptToken ~= scriptToken then break end
+                            if not CFG.HalloweenAutoCollectCandy then break end
+                            
                             char = LocalPlayer.Character or Character
                             hum = char and char:FindFirstChildOfClass("Humanoid")
                             hrp = char and char:FindFirstChild("HumanoidRootPart")
                             if not hum or not hrp or hum.Health <= 0 then break end
+                            
+                            -- ตรวจสอบว่าแคนดี้ถูกเก็บไปแล้วหรือยัง (ผ่าน Grabbed Packet หรือตัวเกมเก็บไปแล้ว)
+                            if targetCandy.Id and not ActiveCandies[targetCandy.Id] then
+                                isCollected = true
+                                break
+                            end
+                            
+                            local curDist = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
+                            
+                            -- ระยะเก็บแคนดี้ที่ปลอดภัย 100%: เข้าสู่ระยะ 4.0 studs (อยู่ภายใน TouchRange 8.0 ของเกม)
+                            if curDist <= 4.0 then
+                                if targetCandy.Id then
+                                    Fire("CandyGrab", targetCandy.Id)
+                                end
+                                isCollected = true
+                                break
+                            end
+                            
+                            -- ระบบตรวจจับการติดสิ่งกีดขวาง (Smart Anti-Stuck & Auto-Jump)
+                            local nowTime = tick()
+                            if nowTime - lastCheckTime >= 0.35 then
+                                local deltaMoved = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(lastCheckPos.X, 0, lastCheckPos.Z)).Magnitude
+                                lastCheckPos = hrp.Position
+                                lastCheckTime = nowTime
+                                
+                                if deltaMoved < 0.8 and curDist > 4.5 then
+                                    -- ตัวละครติดสิ่งกีดขวาง (รั้ว/ฟักทอง/เสา) ให้กระโดดข้ามอย่างเป็นธรรมชาติ
+                                    hum.Jump = true
+                                    hum:MoveTo(groundTarget)
+                                else
+                                    -- อัปเดตคำสั่งเดินอย่างต่อเนื่องเพื่อไม่ให้ Humanoid หยุดชะงัก
+                                    hum:MoveTo(groundTarget)
+                                end
+                            end
                         end
                         
-                        -- เก็บชิ้นนี้เรียบร้อยแล้ว ลงทะเบียนใน VisitedCandies และเคลียร์ออกจากคิวทันที
-                        collectedThisRound = collectedThisRound + 1
+                        -- บันทึกสถานะการเก็บ
                         local candyKey = targetCandy.Key or targetCandy.Id or targetCandy.Model or string.format("%.1f_%.1f", targetCandy.Position.X, targetCandy.Position.Z)
-                        VisitedCandies[candyKey] = tick()
-                        if targetCandy.Id then
-                            ActiveCandies[targetCandy.Id] = nil
+                        if isCollected then
+                            collectedThisRound = collectedThisRound + 1
+                            VisitedCandies[candyKey] = tick()
+                            if targetCandy.Id then
+                                ActiveCandies[targetCandy.Id] = nil
+                            end
+                        else
+                            -- หากหมดเวลาแต่ยังไม่ถึง (เช่น ทางตัน) ให้แบล็คลิสต์ชั่วคราวเพียง 3 วินาที เพื่อไม่ให้เดินซ้ำจุดเดิมทันที
+                            VisitedCandies[candyKey] = tick() - 7.0
                         end
                         
-                        -- ป้องกัน Tight Loop 100%: ต้องมี yield เสมอทุกรอบการเก็บ
-                        task.wait(0.05)
+                        -- Yield เล็กน้อยเพื่อให้เอนจินเกมอัปเดตอย่างสมูท ต่อเนื่องโดยไม่สะดุด
+                        task.wait(0.04)
                     else
                         task.wait(0.1)
                     end
