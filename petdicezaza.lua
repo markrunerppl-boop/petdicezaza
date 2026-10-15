@@ -5,47 +5,16 @@
 -- ==============================================================================
 
 -- ==============================================================================
--- [0] STRICT SINGLETON STARTUP GATEKEEPER (ป้องกันรันสคริปต์ 2 รอบตอนเริ่มเกม 100%)
+-- [0] CLEAN STARTUP & HOT-RELOAD GATEKEEPER
 -- ==============================================================================
 local executionTime = tick()
 
--- 1. หากมีเธรดอื่นกำลังเริ่มต้นโหลดสคริปต์อยู่ (ภายใน 20 วินาที) ให้ยกเลิกการรันซ้ำซ้อนทันที
-if getgenv().PetDiceScriptStarting and (executionTime - getgenv().PetDiceScriptStarting < 20) then
-    warn("[PetDice Safe] Script is already initializing in another thread. Duplicate startup blocked 100%.")
+-- ป้องกันการยิงสคริปต์ 2 เธรดพร้อมกันในเสี้ยววินาทีเดียวกัน (Debounce 1.5 วินาที)
+if getgenv().PetDiceScriptStarting and (executionTime - getgenv().PetDiceScriptStarting < 1.5) then
+    warn("[PetDice Safe] Duplicate execution within 1.5s blocked.")
     return
 end
-
--- 2. หากสคริปต์ทำงานอยู่แล้ว (มี UI ทำงานอยู่ และผู้ใช้ไม่ได้สั่ง Force Reload)
-if getgenv().PetDiceScriptLoaded and getgenv().PetDiceFluent and not getgenv().PetDiceForceReload then
-    local cg = game:GetService("CoreGui")
-    local lp = game:GetService("Players").LocalPlayer
-    local pg = lp and lp:FindFirstChild("PlayerGui")
-    local isUiAlive = false
-    
-    pcall(function()
-        if getgenv().PetDiceFluent and getgenv().PetDiceFluent.GUI and getgenv().PetDiceFluent.GUI.Parent then
-            isUiAlive = true
-        elseif cg and (cg:FindFirstChild("ScreenGui") or cg:FindFirstChild("Fluent")) then
-            isUiAlive = true
-        elseif pg and (pg:FindFirstChild("ScreenGui") or pg:FindFirstChild("Fluent")) then
-            isUiAlive = true
-        end
-    end)
-    
-    if isUiAlive then
-        warn("[PetDice Safe] Script is ALREADY loaded and running active. Duplicate startup blocked 100%.")
-        pcall(function()
-            if typeof(getgenv().PetDiceNotify) == "function" then
-                getgenv().PetDiceNotify("🛡️ ระบบความปลอดภัย", "สคริปต์เปิดทำงานอยู่แล้ว ระบบได้ป้องกันการรันซ้ำซ้อนเรียบร้อย!", 4)
-            end
-        end)
-        return
-    end
-end
-
--- ล็อคสถานะทันที เพื่อไม่ให้สคริปต์ตัวที่ 2 ที่รันตอนเริ่มเกมเข้ามาทำงานซ้ำ
 getgenv().PetDiceScriptStarting = executionTime
-getgenv().PetDiceForceReload = nil
 
 if not game:IsLoaded() then 
     pcall(function() game.Loaded:Wait() end)
@@ -1143,15 +1112,19 @@ end
 local SwitchOrStartTower
 local isSwitchingTower = false
 
-local function GetSelectedTowerId()
-    local selected = CFG.SelectedTower or "Infinity"
-    local id = towerIdByOption[selected]
-    if id then return id end
-    if typeof(selected) == "string" then
-        local matched = selected:match("%[([%w_]+)%]")
-        if matched then return matched end
+local function ResolveTowerId(val)
+    if not val or val == "" or val == "Meadow" then return "Infinity" end
+    if Towers and Towers.ById and Towers.ById[val] then return val end
+    if towerIdByOption and towerIdByOption[val] then return towerIdByOption[val] end
+    if typeof(val) == "string" then
+        local matched = val:match("%[([%w_]+)%]")
+        if matched and Towers and Towers.ById and Towers.ById[matched] then return matched end
     end
-    return selected
+    return "Infinity"
+end
+
+local function GetSelectedTowerId()
+    return ResolveTowerId(CFG.SelectedTower)
 end
 
 local function GetCurrentOrNextTowerId(advance)
@@ -1440,8 +1413,8 @@ SwitchOrStartTower = function(targetTowerId, force)
         return false
     end
     
-    targetTowerId = targetTowerId or CFG.SelectedTower or GetCurrentOrNextTowerId(false)
-    local towerDef = (Towers.ById and Towers.ById[targetTowerId]) or (Towers.List and Towers.List[1])
+    targetTowerId = ResolveTowerId(targetTowerId or CFG.SelectedTower)
+    local towerDef = (Towers.ById and Towers.ById[targetTowerId]) or (Towers.ById and Towers.ById["Infinity"]) or (Towers.List and Towers.List[1])
     if not towerDef then 
         Notify("⚠️ ข้อผิดพลาด", "ไม่พบข้อมูลหอคอย: " .. tostring(targetTowerId), 3)
         return false 
@@ -3226,65 +3199,57 @@ task.spawn(function()
         end
         
         if CFG.Tower then
-            CircuitBreaker.Execute("Tower", function()
-                if isSwitchingTower then return end
-                local data = State.Data
-                if not data then return end
-                
+            local data = State.Data
+            if data then
                 -- ตรวจสอบและเปิดการตั้งค่า Auto Tower ในตัวเกมเพื่อให้ระบบปีนชั้นเอง
                 if data.Settings and not data.Settings.TowerAutoplay then
                     Fire("SetSetting", "TowerAutoplay", true)
                 end
                 
+                -- ปลดล็อค isSwitchingTower อัตโนมัติหากค้างเกิน 5 วินาที
+                if isSwitchingTower and (tick() - (LiveTower.SwitchingTick or 0) > 5.0) then
+                    isSwitchingTower = false
+                end
+                
                 local isRunning = IsTowerRunning()
                 local activeId = GetActiveTowerId()
-                local targetId = GetSelectedTowerId()
+                local targetId = ResolveTowerId(CFG.SelectedTower)
                 
                 -- ตรวจสอบเงื่อนไขการพักหอคอยเมื่อกำลังต่อสู้กับบอสโลก
                 local isBossJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-                if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isBossJoined or IsEnteringBossPortal == true) then
-                    return
-                end
-                
-                if isRunning then
-                    -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย
-                    if activeId and activeId ~= targetId then
-                        SwitchOrStartTower(targetId, true)
-                        return
-                    end
-                    
-                    -- หากอยู่ในอารีน่า และเปิดออโต้ออกจากอารีน่า ให้ส่งคำสั่งออกสู่ Away Mode
-                    if IsTowerInArena() and CFG.AutoExitArena then
-                        Fire("TowerExit")
-                        Humanizer.Wait(1.5, 2.5)
-                    end
-                else
-                    -- หากเซิร์ฟเวอร์กำลังนับถอยหลัง Autoplay (เช่น NEXT RUN IN 5...) ให้รอเซิร์ฟเวอร์เริ่มเองตามระบบทางการ
-                    local now = tick()
-                    if LiveTower.JustEnded then
-                        local autoWait = (LiveTower.EndAutoCountdown or 5) + 3.0
-                        if (now - (LiveTower.EndedTick or 0) < autoWait) then
-                            return
-                        else
-                            LiveTower.JustEnded = false
-                            LiveTower.EndAutoCountdown = nil
+                if not (CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isBossJoined or IsEnteringBossPortal == true)) then
+                    if isRunning then
+                        -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย
+                        if activeId and activeId ~= targetId and not isSwitchingTower then
+                            SwitchOrStartTower(targetId, true)
+                        end
+                        
+                        -- หากอยู่ในอารีน่า และเปิดออโต้ออกจากอารีน่า ให้ส่งคำสั่งออกสู่ Away Mode
+                        if IsTowerInArena() and CFG.AutoExitArena then
+                            Fire("TowerExit")
+                            Humanizer.Wait(1.5, 2.5)
+                        end
+                    else
+                        -- หากเซิร์ฟเวอร์กำลังนับถอยหลัง Autoplay (เช่น NEXT RUN IN 5...) ให้รอเซิร์ฟเวอร์เริ่มเองตามระบบทางการ
+                        local now = tick()
+                        if LiveTower.JustEnded then
+                            local autoWait = (LiveTower.EndAutoCountdown or 5) + 3.0
+                            if (now - (LiveTower.EndedTick or 0) < autoWait) then
+                                -- กำลังนับถอยหลัง
+                            else
+                                LiveTower.JustEnded = false
+                                LiveTower.EndAutoCountdown = nil
+                            end
+                        end
+                        
+                        -- หอคอยไม่ได้ทำงานอยู่: ให้เริ่มลงหอคอยเป้าหมายทันทีอย่างปลอดภัย (Debounce 3.0 วินาที)
+                        if not LiveTower.JustEnded and not isSwitchingTower and (now - lastLoopStartAttempt >= 3.0) then
+                            lastLoopStartAttempt = now
+                            SwitchOrStartTower(targetId, true)
                         end
                     end
-                    
-                    -- หอคอยไม่ได้ทำงานอยู่: ให้เริ่มลงหอคอยเป้าหมายอย่างปลอดภัย
-                    local delaySec = CFG.TowerRestartDelay or 3
-                    if delaySec > 0 then
-                        task.wait(delaySec)
-                    end
-                    if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.Tower then return end
-                    if IsTowerRunning() or isSwitchingTower then return end
-                    
-                    if now - lastLoopStartAttempt < 3.5 then return end
-                    lastLoopStartAttempt = now
-                    
-                    SwitchOrStartTower(targetId, false)
                 end
-            end)
+            end
         end
     end
 end)
@@ -4134,6 +4099,16 @@ task.spawn(function()
                 end)
             end
         end)
+    end
+end)
+
+-- 15. Startup Auto-Dispatcher: ตรวจสอบและเริ่มฟาร์มหอคอยทันทีเมื่อรันสคริปต์ (หากเปิด Auto Tower ไว้)
+task.spawn(function()
+    task.wait(1.5)
+    if getgenv().PetDiceScriptToken ~= scriptToken then return end
+    if CFG.Tower and not IsTowerRunning() then
+        local targetId = ResolveTowerId(CFG.SelectedTower)
+        SwitchOrStartTower(targetId, true)
     end
 end)
 
