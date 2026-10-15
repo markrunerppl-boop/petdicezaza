@@ -1,5 +1,5 @@
 -- ==============================================================================
--- 🎲 PET DICE MASTER SAFE EDITION v4.7 (FLUENT UI REBORN)
+-- 🎲 PET DICE MASTER SAFE EDITION v4.8 (FLUENT UI REBORN)
 -- 🛡️ Anti-AI Detection & High-Tier Protection System
 -- 🎨 Modern Windows 11 Fluent Acrylic Interface
 -- ==============================================================================
@@ -584,7 +584,7 @@ getgenv().PetDiceFluent = Fluent
 
 local Window = Fluent:CreateWindow({
     Title = "Pet Dice Pro Farm",
-    SubTitle = "Master Safe Edition v4.7",
+    SubTitle = "Master Safe Edition v4.8",
     TabWidth = 160,
     Size = UDim2.fromOffset(590, 480),
     Acrylic = false,
@@ -1467,6 +1467,8 @@ if not CFG.SelectedTower or CFG.SelectedTower == "" then
 end
 
 local SwitchOrStartTower
+local IsTowerRunning
+local IsTowerInArena
 local isSwitchingTower = false
 local lastLoopStartAttempt = 0  -- shared across TogTower + supervisor loops
 
@@ -1625,21 +1627,32 @@ local function GetSecondsUntilNextStorm()
     return math.max(0, nextStorm - now)
 end
 
+local VisitedCandies = {}
+
 local function GetAvailableCandies()
     local list = {}
     local seen = {}
     local now = tick()
     
+    -- ล้างประวัติลูกอมที่เคยเก็บไปแล้วเกิน 8 วินาที
+    for k, t in pairs(VisitedCandies) do
+        if now - t > 8.0 then VisitedCandies[k] = nil end
+    end
+    
     -- 1. จากรายการ ActiveCandies ที่ดักจับจากแพ็กเก็ต Remote
     for id, c in pairs(ActiveCandies) do
         if c and c.Position and (now - (c.Born or 0) < 65) then
-            table.insert(list, {
-                Id = id,
-                Kind = c.Kind,
-                Position = c.Position,
-                Born = c.Born
-            })
-            seen[id] = true
+            local posKey = string.format("%.1f_%.1f", c.Position.X, c.Position.Z)
+            if not VisitedCandies[id] and not VisitedCandies[posKey] then
+                table.insert(list, {
+                    Id = id,
+                    Kind = c.Kind,
+                    Position = c.Position,
+                    Born = c.Born,
+                    Key = id
+                })
+                seen[id] = true
+            end
         else
             ActiveCandies[id] = nil
         end
@@ -1651,22 +1664,26 @@ local function GetAvailableCandies()
         local pieces = folder and folder:FindFirstChild("Pieces")
         if pieces then
             for _, m in ipairs(pieces:GetChildren()) do
-                if m:IsA("Model") then
+                if m:IsA("Model") and not VisitedCandies[m] then
                     local pivot = m:GetPivot()
                     if pivot and pivot.Position then
-                        local alreadyInList = false
-                        for _, existing in ipairs(list) do
-                            if (existing.Position - pivot.Position).Magnitude < 3.0 then
-                                alreadyInList = true
-                                break
+                        local posKey = string.format("%.1f_%.1f", pivot.Position.X, pivot.Position.Z)
+                        if not VisitedCandies[posKey] then
+                            local alreadyInList = false
+                            for _, existing in ipairs(list) do
+                                if (existing.Position - pivot.Position).Magnitude < 3.0 then
+                                    alreadyInList = true
+                                    break
+                                end
                             end
-                        end
-                        if not alreadyInList then
-                            table.insert(list, {
-                                Model = m,
-                                Position = pivot.Position,
-                                Born = now
-                            })
+                            if not alreadyInList then
+                                table.insert(list, {
+                                    Model = m,
+                                    Position = pivot.Position,
+                                    Born = now,
+                                    Key = m
+                                })
+                            end
                         end
                     end
                 end
@@ -1798,12 +1815,12 @@ local function GetActiveTowerId()
     return nil
 end
 
-local function IsTowerRunning()
+IsTowerRunning = function()
     SyncLiveTowerFromGame()
     return LiveTower.Active == true
 end
 
-local function IsTowerInArena()
+IsTowerInArena = function()
     SyncLiveTowerFromGame()
     return LiveTower.Active == true and LiveTower.InArena == true
 end
@@ -3216,22 +3233,12 @@ local function UpdateHalloweenStatus()
     end)
 end
 
--- อัปเดตสถานะแบบเรียลไทม์ทุก 1 วินาที และซิงค์ทันทีเมื่อข้อมูลในเกมเปลี่ยน (Real-Time Live Status Engine)
+-- อัปเดตสถานะแบบเรียลไทม์ทุก 1 วินาทีอย่างราบรื่น (Smooth 1.0s Interval Engine ป้องกันกระตุก 100%)
 task.spawn(function()
     while true do
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         pcall(UpdateHalloweenStatus)
         task.wait(1.0)
-    end
-end)
-
-pcall(function()
-    if State and State.OnChanged then
-        State.OnChanged:Connect(function()
-            if getgenv().PetDiceScriptToken == scriptToken then
-                pcall(UpdateHalloweenStatus)
-            end
-        end)
     end
 end)
 
@@ -3496,14 +3503,19 @@ Tabs.Halloween:AddButton({
                             hum:MoveTo(targetCandy.Position)
                             local moveStart = tick()
                             while (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetCandy.Position.X, 0, targetCandy.Position.Z)).Magnitude > 7.5 and (tick() - moveStart < 2.0) do
-                                task.wait(0.04)
+                                task.wait(0.05)
                                 char = LocalPlayer.Character or Character
                                 hum = char and char:FindFirstChildOfClass("Humanoid")
                                 hrp = char and char:FindFirstChild("HumanoidRootPart")
                                 if not hum or not hrp or hum.Health <= 0 then break end
                             end
                             collected = collected + 1
+                            local candyKey = targetCandy.Key or targetCandy.Id or targetCandy.Model or string.format("%.1f_%.1f", targetCandy.Position.X, targetCandy.Position.Z)
+                            VisitedCandies[candyKey] = tick()
                             if targetCandy.Id then ActiveCandies[targetCandy.Id] = nil end
+                            task.wait(0.05)
+                        else
+                            task.wait(0.1)
                         end
                     end
                     Fire("Teleport", "Home")
@@ -4722,18 +4734,25 @@ task.spawn(function()
                         
                         local moveStart = tick()
                         while (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetCandy.Position.X, 0, targetCandy.Position.Z)).Magnitude > 7.5 and (tick() - moveStart < 2.0) do
-                            task.wait(0.04)
+                            task.wait(0.05)
                             char = LocalPlayer.Character or Character
                             hum = char and char:FindFirstChildOfClass("Humanoid")
                             hrp = char and char:FindFirstChild("HumanoidRootPart")
                             if not hum or not hrp or hum.Health <= 0 then break end
                         end
                         
-                        -- เก็บชิ้นนี้เรียบร้อยแล้ว เคลียร์ออกจากคิว แล้วเลี้ยววิ่งต่อชิ้นถัดไปทันทีโดยไม่ต้องหยุดรอ!
+                        -- เก็บชิ้นนี้เรียบร้อยแล้ว ลงทะเบียนใน VisitedCandies และเคลียร์ออกจากคิวทันที
                         collectedThisRound = collectedThisRound + 1
+                        local candyKey = targetCandy.Key or targetCandy.Id or targetCandy.Model or string.format("%.1f_%.1f", targetCandy.Position.X, targetCandy.Position.Z)
+                        VisitedCandies[candyKey] = tick()
                         if targetCandy.Id then
                             ActiveCandies[targetCandy.Id] = nil
                         end
+                        
+                        -- ป้องกัน Tight Loop 100%: ต้องมี yield เสมอทุกรอบการเก็บ
+                        task.wait(0.05)
+                    else
+                        task.wait(0.1)
                     end
                 end
                 
@@ -5347,4 +5366,4 @@ getgenv().PetDiceScriptLoaded = true
 getgenv().PetDiceScriptStarting = nil
 getgenv().PetDiceNotify = Notify
 
-Notify("🚀 สคริปต์พร้อมทำงาน", "Pet Dice Master Fluent Edition v4.7 โหลดสำเร็จ!", 4)
+Notify("🚀 สคริปต์พร้อมทำงาน", "Pet Dice Master Fluent Edition v4.8 โหลดสำเร็จ!", 4)
