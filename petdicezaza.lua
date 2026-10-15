@@ -3945,6 +3945,11 @@ Tabs.Settings:AddButton({
     end
 })
 
+-- ==============================================================================
+-- 🔒 [LOCKED CORE UPDATER - ห้ามแตะต้องหรือดัดแปลงโดยไม่ได้รับอนุญาต]
+-- ⚠️ DO NOT MODIFY THIS UPDATER BLOCK WITHOUT EXPLICIT PERMISSION FROM USER
+-- Handles live cache-busted fetch, compilation check, thread teardown, and instant hot-reload
+-- ==============================================================================
 Tabs.Settings:AddButton({
     Title = "🔄 อัปเดตสคริปต์จาก GitHub ทันที (Live Hot-Reload)",
     Description = "ดาวน์โหลดโค้ดล่าสุดจาก GitHub และเริ่มทำงานใหม่ทันที",
@@ -4288,7 +4293,7 @@ task.spawn(function()
                             local wbTimer = ReplicatedStorage:GetAttribute("WorldBossTimer") or 60
                             if wbTimer > 10 then
                                 task.wait(1.5)
-                                continue
+                                return
                             end
                         end
                         
