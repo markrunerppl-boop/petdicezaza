@@ -4818,10 +4818,8 @@ task.spawn(function()
                             local curDist = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
                             
                             -- ระยะเก็บแคนดี้ที่ปลอดภัย 100%: เข้าสู่ระยะ 4.0 studs (อยู่ภายใน TouchRange 8.0 ของเกม)
+                            -- ปล่อยให้สคริปต์ทางการของเกม (CandyStorm.luau) เป็นผู้ส่ง CandyGrab อัตโนมัติ 100% ป้องกันโดนเตะ Error 267
                             if curDist <= 4.0 then
-                                if targetCandy.Id then
-                                    Fire("CandyGrab", targetCandy.Id)
-                                end
                                 isCollected = true
                                 break
                             end
