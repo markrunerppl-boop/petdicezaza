@@ -1445,6 +1445,11 @@ SwitchOrStartTower = function(targetTowerId, force)
                         Fire("TowerExit") 
                     end
                 end)
+                task.delay(3.0, function() 
+                    if IsTowerInArena() then
+                        Fire("TowerExit") 
+                    end
+                end)
             end
             task.delay(0.5, UpdateTowerStatus)
             return true
@@ -1550,13 +1555,20 @@ local function UpdateTowerStatus()
             bossTitle = string.format("💤 บอสโลกรอบถัดไปจะเปิดรับสมัครใน: %s (เริ่มสู้ %s)", timeToJoinStr, timeStr)
         end
         
+        local isBossUnlocked = false
+        if Upgrades and Upgrades.IsOpen and data and data.Upgrades then
+            isBossUnlocked = Upgrades.IsOpen(data.Upgrades, "WorldBoss")
+        end
+        local unlockStatus = isBossUnlocked and "🟢 ปลดล็อคแล้ว" or "🔒 ยังไม่ปลดล็อค (ต้องการ 1 Qi)"
+        
         local playerStatus = isPlayerIn and "🟢 คุณเข้าร่วมแล้ว" or "⚪ ยังไม่ได้เข้าร่วม"
         local autoJoinStatus = CFG.AutoWorldBoss and "🟢 เปิดออโต้" or "🔴 ปิด"
         local pauseStatus = CFG.PauseTowerForBoss and "🟢 พักหอคอยเพื่อตีบอส" or "⚪ ฟาร์มปกติ"
         
-        local bossDesc = string.format("เป้าหมาย: ธาตุ %s | ระดับ %s\nสถานะของคุณ: %s | ผู้เล่นร่วมตี: %d คน\nระบบบอส: %s | %s",
+        local bossDesc = string.format("เป้าหมาย: ธาตุ %s | ระดับ %s\nความพร้อม: %s | สถานะ: %s (%d คน)\nระบบบอส: %s | %s",
             CFG.WorldBossElementFilter or "ทุกธาตุ",
             CFG.WorldBossDifficultyFilter or "ทุกระดับ",
+            unlockStatus,
             playerStatus,
             wbJoined,
             autoJoinStatus,
@@ -1896,6 +1908,34 @@ Tabs.Tower:AddButton({
     Title = "⚔️ กดเข้าร่วมตีบอสโลกทันที (Join World Boss Now)",
     Description = "เดินขึ้นบันไดตามธรรมชาติอย่างปลอดภัย และส่งคำสั่งเข้าร่วมบอสโลก",
     Callback = function()
+        local data = State.Data
+        local isBossUnlocked = false
+        if Upgrades and Upgrades.IsOpen and data and data.Upgrades then
+            isBossUnlocked = Upgrades.IsOpen(data.Upgrades, "WorldBoss")
+        end
+        
+        -- ตรวจสอบหากยังไม่ปลดล็อค แต่มีเงินพอซื้อ 1 Qi
+        if not isBossUnlocked and data and (data.Money or 0) >= 1e18 then
+            Notify("⚔️ บอสโลก", "กำลังปลดล็อค 'WORLD BOSSES' ในผังอัปเกรดให้อัตโนมัติ...", 3)
+            Fire("BuyUpgrade", "worldboss")
+            Humanizer.Wait(1.0, 1.5)
+            data = State.Data
+            if Upgrades and Upgrades.IsOpen and data and data.Upgrades then
+                isBossUnlocked = Upgrades.IsOpen(data.Upgrades, "WorldBoss")
+            end
+        end
+        
+        if not isBossUnlocked then
+            local curMoneyStr = (data and data.Money and Format and Format.Money) and Format.Money(data.Money) or tostring(data and data.Money or 0)
+            Notify("🔒 ยังไม่ปลดล็อค", "ต้องปลดล็อค 'WORLD BOSSES' ในผังอัปเกรดก่อน (ต้องการ 1 Qi - ปัจจุบันมี: " .. curMoneyStr .. ")", 4)
+            return
+        end
+        
+        if data and not data.PortalRepaired then
+            Fire("PortalRepair")
+            Humanizer.Wait(0.5, 1.0)
+        end
+        
         local wbState = ReplicatedStorage:GetAttribute("WorldBossState") or "Idle"
         local wbElem = ReplicatedStorage:GetAttribute("WorldBossElement") or "Random"
         local wbDiff = ReplicatedStorage:GetAttribute("WorldBossDifficulty") or "Normal"
@@ -1918,7 +1958,7 @@ Tabs.Tower:AddButton({
                     pcall(fireproximityprompt, prompt)
                 end
             end
-            Notify("⚔️ บอสโลก", "ส่งคำสั่งเข้าร่วมการตีบอสโลกเรียบร้อย!", 3)
+            Notify("⚔️ บอสโลก", string.format("ส่งคำสั่งเข้าร่วมบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 3)
         else
             -- คำนวณเวลานับถอยหลังที่เหลืออยู่จริงจนกว่าจะเปิดรับสมัคร
             local timeToJoin = 0
@@ -1933,9 +1973,7 @@ Tabs.Tower:AddButton({
             
             local m = math.floor(timeToJoin / 60)
             local s = math.floor(timeToJoin % 60)
-            Notify("⏳ บอสโลกยังไม่เปิด", string.format("จะเปิดรับสมัครในอีก %d นาที %d วินาที (พาวอล์คไปเตรียมพร้อมหน้าประตูอย่างปลอดภัย)", m, s), 4)
-            
-            SafeWalkToBossPortal()
+            Notify("⏳ ยังไม่ถึงเวลา", string.format("บอสโลกจะเปิดรับสมัครในอีก %d นาที %d วินาที (สถานะ: %s)", m, s, wbState), 4)
         end
         task.delay(0.2, UpdateTowerStatus)
     end
@@ -3165,6 +3203,7 @@ task.spawn(function()
     local wasTowerRunning = false
     local lastTowerId = nil
     local towerStartFloor = 0
+    local lastLoopStartAttempt = 0
     
     while true do
         task.wait(1.5)
@@ -3250,6 +3289,10 @@ task.spawn(function()
                     if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.Tower then return end
                     if IsTowerRunning() or isSwitchingTower then return end
                     
+                    local now = tick()
+                    if now - lastLoopStartAttempt < 4.0 then return end
+                    lastLoopStartAttempt = now
+                    
                     local targetId = CFG.SelectedTower or GetCurrentOrNextTowerId(false)
                     SwitchOrStartTower(targetId, true)
                 end
@@ -3282,11 +3325,12 @@ task.spawn(function()
             pcall(function()
                 Fire("Teleport", "Home")
             end)
-            Humanizer.Wait(1.0, 1.8)
+            Humanizer.Wait(1.5, 2.5)
             
             -- สั่งให้หอคอยกลับมาฟาร์มต่อทันทีโดยไม่ต้องรอนาน
             if CFG.Tower then
                 task.spawn(function()
+                    task.wait(1.0)
                     local targetId = CFG.SelectedTower or GetCurrentOrNextTowerId(false)
                     SwitchOrStartTower(targetId, true)
                 end)
@@ -3316,6 +3360,32 @@ task.spawn(function()
                         if now - lastBossJoinAttempt >= 5.0 then
                             lastBossJoinAttempt = now
                             CircuitBreaker.Execute("WorldBossJoin", function()
+                                local data = State.Data
+                                local isBossUnlocked = false
+                                if Upgrades and Upgrades.IsOpen and data and data.Upgrades then
+                                    isBossUnlocked = Upgrades.IsOpen(data.Upgrades, "WorldBoss")
+                                end
+                                
+                                -- ตรวจสอบหากยังไม่ปลดล็อค แต่มีเงินพอซื้อ 1 Qi
+                                if not isBossUnlocked and data and (data.Money or 0) >= 1e18 then
+                                    Notify("⚔️ บอสโลก", "กำลังปลดล็อค 'WORLD BOSSES' ในผังอัปเกรดให้อัตโนมัติ...", 3)
+                                    Fire("BuyUpgrade", "worldboss")
+                                    Humanizer.Wait(1.0, 1.5)
+                                    data = State.Data
+                                    if Upgrades and Upgrades.IsOpen and data and data.Upgrades then
+                                        isBossUnlocked = Upgrades.IsOpen(data.Upgrades, "WorldBoss")
+                                    end
+                                end
+                                
+                                -- ถ้ายังไม่ปลดล็อค ไม่ต้องออกจากหอคอย ไม่ต้องเดินไปประตูบอสโลก ให้ฟาร์มหอคอยต่อไปอย่างปลอดภัย 100%
+                                if not isBossUnlocked then return end
+                                
+                                -- ตรวจสอบการซ่อมแซมประตูบอสโลก
+                                if data and not data.PortalRepaired then
+                                    Fire("PortalRepair")
+                                    Humanizer.Wait(0.5, 1.0)
+                                end
+                                
                                 -- 1. พักหอคอยก่อนเพื่อให้สัตว์เลี้ยงว่างพร้อมตีบอส
                                 if CFG.PauseTowerForBoss and IsTowerRunning() then
                                     Fire("TowerLeave")
