@@ -432,6 +432,17 @@ if readfile and isfile and isfile(ConfigFile) then
         for k, v in pairs(saved) do getgenv().CFG[k] = v end
     end)
 end
+
+-- ป้องกันข้อผิดพลาดจากคอนฟิกเก่า: หอคอยด่าน 1-6 (Meadow ฯลฯ) ไม่สามารถรีเซ็ตเป็น 0 ได้ตามระบบเกม
+-- หากคอนฟิกในเครื่องบันทึกหอคอยด่าน 1-6 หรือว่างเปล่า ให้ปรับเป็น Infinity ด่าน 7 อัตโนมัติ เพื่อให้ฟาร์มชั้น 1 ต่อเนื่องได้ 100%
+if not getgenv().CFG.SelectedTower or getgenv().CFG.SelectedTower == "Meadow" or getgenv().CFG.SelectedTower == "" then
+    getgenv().CFG.SelectedTower = "Infinity"
+    getgenv().CFG.SelectedTowerOption = "ด่าน 7: INFINITY TOWER (ไร้สิ้นสุด) [Infinity]"
+end
+if not getgenv().CFG.SelectedTowerOption or getgenv().CFG.SelectedTowerOption:find("Meadow") then
+    getgenv().CFG.SelectedTowerOption = "ด่าน 7: INFINITY TOWER (ไร้สิ้นสุด) [Infinity]"
+end
+
 if getgenv().CFG.TradeTarget == "[ เลือกทุกคนในห้อง ]" then
     getgenv().CFG.TradeTargetId = nil
 end
@@ -1122,6 +1133,13 @@ if #dynamicTowerOptions == 0 then
     towerIdByOption[defaultTowerOpt] = "Infinity"
 end
 
+if not CFG.SelectedTower or CFG.SelectedTower == "Meadow" or CFG.SelectedTower == "" then
+    CFG.SelectedTower = "Infinity"
+    CFG.SelectedTowerOption = defaultTowerOpt
+elseif not CFG.SelectedTowerOption or CFG.SelectedTowerOption:find("Meadow") then
+    CFG.SelectedTowerOption = defaultTowerOpt
+end
+
 local SwitchOrStartTower
 local isSwitchingTower = false
 
@@ -1151,6 +1169,8 @@ pcall(function()
         if (action == "Floor" or action == "Start" or action == "Enter" or action == "Init") and typeof(payload) == "table" then
             LiveTower.Active = true
             LiveTower.Starting = false
+            LiveTower.JustEnded = false
+            LiveTower.EndAutoCountdown = nil
             LiveTower.TowerId = payload.Tower or LiveTower.TowerId
             LiveTower.Floor = tonumber(payload.Floor) or LiveTower.Floor
             if payload.Away ~= nil then
@@ -1176,32 +1196,16 @@ pcall(function()
             LiveTower.Starting = false
             LiveTower.JustEnded = true
             LiveTower.EndedTick = tick()
+            LiveTower.EndAutoCountdown = tonumber(payload.Auto) or nil
             LiveTower.LastResult = payload.Result
             LiveTower.LastFinishedId = payload.Tower or LiveTower.TowerId
             LiveTower.LastFloor = tonumber(payload.Floor) or LiveTower.Floor
             
-            local finishedId = LiveTower.LastFinishedId or LiveTower.TowerId
             LiveTower.TowerId = nil
             LiveTower.Floor = 0
             LiveTower.InArena = false
             LiveTower.Away = false
             LiveTower.LastEventTime = tick()
-            
-            -- เมื่อจบการลงหอคอยรอบปัจจุบัน หากเปิดออโต้ ให้เริ่มหอคอยที่เลือกไว้อีกครั้งอย่างปลอดภัย
-            if CFG.Tower then
-                task.spawn(function()
-                    local targetId = GetSelectedTowerId()
-                    local targetDef = Towers.ById and Towers.ById[targetId]
-                    local targetName = targetDef and targetDef.Name or targetId
-                    
-                    local delaySec = CFG.TowerRestartDelay or 3
-                    if delaySec > 0 then task.wait(delaySec) end
-                    if getgenv().PetDiceScriptToken == scriptToken and CFG.Tower and not IsTowerRunning() and not isSwitchingTower then
-                        Notify("🏰 หอคอย", "จบการลงรอบก่อนหน้า -> กำลังเริ่ม [" .. targetName .. "] รอบใหม่...", 3)
-                        SwitchOrStartTower(targetId, true)
-                    end
-                end)
-            end
         elseif action == "Stopped" or action == "Paused" then
             LiveTower.Active = false
             LiveTower.Starting = false
@@ -1215,7 +1219,6 @@ pcall(function()
 end)
 
 local function SyncLiveTowerFromGame()
-    local data = State.Data
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
     local hud = root and root:FindFirstChild("Hud")
@@ -1226,38 +1229,41 @@ local function SyncLiveTowerFromGame()
     local isAway = tracker and tracker.Visible == true
     local isArena = battle and battle.Visible == true
     
-    -- หากเพิ่งจบการลงหอคอย ไม่ให้ TowerTracker ที่กำลังนับถอยหลัง NEXT RUN IN ของเกมมาเข้าใจผิดว่าหอคอยเดิมยังเล่นอยู่
-    if LiveTower.JustEnded and (tick() - (LiveTower.EndedTick or 0) < 6.0) then
-        return
-    end
-    
-    -- ตรวจสอบข้อความบน TowerTracker หากแสดง NEXT RUN IN หรือ STARTING... แสดงว่าเกมกำลังรอเริ่มใหม่
+    -- ตรวจสอบว่า UI กำลังแสดงผลช่วงจบหรือนับถอยหลังรอบใหม่หรือไม่
+    local isCountdown = false
     if isAway and tracker then
         for _, lbl in ipairs(tracker:GetDescendants()) do
             if lbl:IsA("TextLabel") and lbl.Text ~= "" then
                 local txt = lbl.Text:upper()
                 if txt:find("NEXT RUN IN") or txt:find("STARTING...") or txt:find("VICTORY") or txt:find("DEFEAT") then
-                    return
+                    isCountdown = true
+                    break
+                end
+            end
+        end
+    end
+    if isArena and battle then
+        for _, lbl in ipairs(battle:GetDescendants()) do
+            if lbl:IsA("TextLabel") and lbl.Text ~= "" then
+                local txt = lbl.Text:upper()
+                if txt:find("NEXT RUN IN") or txt:find("STARTING...") or txt:find("VICTORY") or txt:find("DEFEAT") then
+                    isCountdown = true
+                    break
                 end
             end
         end
     end
     
-    -- 1. ดึงข้อมูลลึกแบบเรียลไทม์จากระบบเซิร์ฟเวอร์เกม (State.Data.TowerResume)
-    local resume = data and data.TowerResume
-    if resume and typeof(resume) == "table" then
-        LiveTower.Active = true
+    if isCountdown then
+        LiveTower.Active = false
         LiveTower.Starting = false
-        LiveTower.JustEnded = false
-        LiveTower.TowerId = resume.Tower or resume.TowerId or resume.Id or LiveTower.TowerId
-        LiveTower.Floor = tonumber(resume.Floor) or LiveTower.Floor
-        LiveTower.Away = (resume.Away == true) or (isAway == true)
-        LiveTower.InArena = (resume.Away ~= true) and (isArena == true or not isAway)
-        LiveTower.LastEventTime = tick()
+        LiveTower.TowerId = nil
+        LiveTower.InArena = false
+        LiveTower.Away = false
         return
     end
     
-    -- 2. ดึงข้อมูลจาก UI ของตัวเกม (TowerTracker บน HUD หรือ Battle ในอารีน่า)
+    -- 1. ดึงข้อมูลจาก UI จริงของตัวเกม (TowerTracker บน HUD หรือ Battle ในอารีน่า)
     if isAway or isArena then
         LiveTower.Active = true
         LiveTower.Starting = false
@@ -1282,21 +1288,20 @@ local function SyncLiveTowerFromGame()
             end
         end
         if not LiveTower.TowerId then
-            LiveTower.TowerId = GetCurrentOrNextTowerId(false) or "Infinity"
+            LiveTower.TowerId = GetSelectedTowerId() or "Infinity"
         end
         LiveTower.LastEventTime = tick()
         return
     end
     
-    -- 3. ระบบ Grace Period ช่วงเปลี่ยนผ่านหลังส่งคำสั่งเริ่มหอคอย ป้องกันบอทเข้าใจผิดว่าหอคอยดับ
+    -- 2. ระบบรอช่วงเริ่มหอคอย (Grace Period สั้น ป้องกันความเข้าใจผิดระหว่างวาร์ป)
     local now = tick()
     local timeSinceStart = now - (LiveTower.LastStartTick or 0)
-    local timeSinceEvent = now - (LiveTower.LastEventTime or 0)
-    if (LiveTower.Starting and timeSinceStart < 6.0) or (LiveTower.Active and timeSinceEvent < 4.5) then
+    if LiveTower.Starting and timeSinceStart < 3.5 then
         return
     end
     
-    -- 4. หากไม่มีข้อมูลใน TowerResume และไม่มี UI แสดงว่าตัวละครไม่ได้อยู่ในหอคอยจริง
+    -- 3. หากไม่มี UI แสดงว่าตัวละครไม่ได้อยู่ในหอคอยจริง
     LiveTower.Active = false
     LiveTower.Starting = false
     LiveTower.TowerId = nil
@@ -3254,6 +3259,18 @@ task.spawn(function()
                         Humanizer.Wait(1.5, 2.5)
                     end
                 else
+                    -- หากเซิร์ฟเวอร์กำลังนับถอยหลัง Autoplay (เช่น NEXT RUN IN 5...) ให้รอเซิร์ฟเวอร์เริ่มเองตามระบบทางการ
+                    local now = tick()
+                    if LiveTower.JustEnded then
+                        local autoWait = (LiveTower.EndAutoCountdown or 5) + 3.0
+                        if (now - (LiveTower.EndedTick or 0) < autoWait) then
+                            return
+                        else
+                            LiveTower.JustEnded = false
+                            LiveTower.EndAutoCountdown = nil
+                        end
+                    end
+                    
                     -- หอคอยไม่ได้ทำงานอยู่: ให้เริ่มลงหอคอยเป้าหมายอย่างปลอดภัย
                     local delaySec = CFG.TowerRestartDelay or 3
                     if delaySec > 0 then
@@ -3262,7 +3279,6 @@ task.spawn(function()
                     if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.Tower then return end
                     if IsTowerRunning() or isSwitchingTower then return end
                     
-                    local now = tick()
                     if now - lastLoopStartAttempt < 3.5 then return end
                     lastLoopStartAttempt = now
                     
