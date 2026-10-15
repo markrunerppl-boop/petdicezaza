@@ -419,13 +419,9 @@ if readfile and isfile and isfile(ConfigFile) then
     end)
 end
 
--- ป้องกันข้อผิดพลาดจากคอนฟิกเก่า: หอคอยด่าน 1-6 (Meadow ฯลฯ) ไม่สามารถรีเซ็ตเป็น 0 ได้ตามระบบเกม
--- หากคอนฟิกในเครื่องบันทึกหอคอยด่าน 1-6 หรือว่างเปล่า ให้ปรับเป็น Infinity ด่าน 7 อัตโนมัติ เพื่อให้ฟาร์มชั้น 1 ต่อเนื่องได้ 100%
-if not getgenv().CFG.SelectedTower or getgenv().CFG.SelectedTower == "Meadow" or getgenv().CFG.SelectedTower == "" then
+-- ตั้งค่าเริ่มต้นหากยังไม่มีการเลือกหอคอย
+if not getgenv().CFG.SelectedTower or getgenv().CFG.SelectedTower == "" then
     getgenv().CFG.SelectedTower = "Infinity"
-    getgenv().CFG.SelectedTowerOption = "ด่าน 7: INFINITY TOWER (ไร้สิ้นสุด) [Infinity]"
-end
-if not getgenv().CFG.SelectedTowerOption or getgenv().CFG.SelectedTowerOption:find("Meadow") then
     getgenv().CFG.SelectedTowerOption = "ด่าน 7: INFINITY TOWER (ไร้สิ้นสุด) [Infinity]"
 end
 
@@ -1360,10 +1356,8 @@ if #dynamicTowerOptions == 0 then
     towerIdByOption[defaultTowerOpt] = "Infinity"
 end
 
-if not CFG.SelectedTower or CFG.SelectedTower == "Meadow" or CFG.SelectedTower == "" then
+if not CFG.SelectedTower or CFG.SelectedTower == "" then
     CFG.SelectedTower = "Infinity"
-    CFG.SelectedTowerOption = defaultTowerOpt
-elseif not CFG.SelectedTowerOption or CFG.SelectedTowerOption:find("Meadow") then
     CFG.SelectedTowerOption = defaultTowerOpt
 end
 
@@ -1372,14 +1366,14 @@ local isSwitchingTower = false
 local lastLoopStartAttempt = 0  -- shared across TogTower + supervisor loops
 
 local function ResolveTowerId(val)
-    if not val or val == "" or val == "Meadow" then return "Infinity" end
+    if not val or val == "" then return "Infinity" end
     if Towers and Towers.ById and Towers.ById[val] then return val end
     if towerIdByOption and towerIdByOption[val] then return towerIdByOption[val] end
     if typeof(val) == "string" then
         local matched = val:match("%[([%w_]+)%]")
         if matched and Towers and Towers.ById and Towers.ById[matched] then return matched end
     end
-    return "Infinity"
+    return val
 end
 
 local function GetSelectedTowerId()
