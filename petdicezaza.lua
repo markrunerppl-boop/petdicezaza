@@ -74,6 +74,21 @@ getgenv().PetDiceScriptToken = tick()
 local scriptToken = getgenv().PetDiceScriptToken
 getgenv().TradeActiveSession = false
 
+-- Anti-AFK (VirtualUser) ป้องกันเซิร์ฟเวอร์เตะเมื่อฟาร์ม 24/7
+pcall(function()
+    if getgenv().PetDiceAntiAFKConn then
+        pcall(function() getgenv().PetDiceAntiAFKConn:Disconnect() end)
+        getgenv().PetDiceAntiAFKConn = nil
+    end
+    local VirtualUser = game:GetService("VirtualUser")
+    getgenv().PetDiceAntiAFKConn = LocalPlayer.Idled:Connect(function()
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end)
+end)
+
 -- โหลดโมดูลภายในของเกม Pet Dice
 local PetDice = RS:WaitForChild("PetDice")
 local Action = PetDice:WaitForChild("Remotes"):WaitForChild("Action")
@@ -1422,6 +1437,7 @@ pcall(function()
                     task.wait(delaySec)
                     if CFG.Tower and getgenv().PetDiceScriptToken == scriptToken and not IsTowerRunning() then
                         local targetId = ResolveTowerId(CFG.SelectedTower)
+                        lastLoopStartAttempt = tick()
                         SwitchOrStartTower(targetId, true)
                     end
                 end)
@@ -1756,6 +1772,11 @@ SwitchOrStartTower = function(targetTowerId, force)
         return false
     end
     
+    local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+    if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
+        return false, "In World Boss"
+    end
+    
     local nowTick = tick()
     if isSwitchingTower then
         if (nowTick - (LiveTower.SwitchingTick or 0) > 4.0) then
@@ -1766,7 +1787,7 @@ SwitchOrStartTower = function(targetTowerId, force)
     end
     
     local data = State.Data
-    if not data then 
+    if not data or not data.Pets then 
         Notify("⚠️ ข้อผิดพลาด", "ไม่พบข้อมูลผู้เล่น กำลังรอข้อมูล...", 3)
         return false 
     end
@@ -1791,25 +1812,41 @@ SwitchOrStartTower = function(targetTowerId, force)
     lastTowerStartTick = nowTick
     
     local ok, res = pcall(function()
-        -- หากกำลังลงหอคอยอื่นอยู่ ให้สั่งออกจากหอคอยเดิมก่อน
-        if isRunning and activeTower and activeTower ~= resolvedId then
+        -- หากกำลังลงหอคอยอยู่ ให้สั่งออกจากหอเดิมอย่างสมบูรณ์ก่อน
+        if isRunning then
             local oldDef = Towers.ById and Towers.ById[activeTower]
             local oldName = oldDef and oldDef.Name or activeTower
-            Notify("🏰 หอคอย", "กำลังเปลี่ยนจากหอคอย " .. tostring(oldName) .. " เป็น " .. tostring(towerDef.Name or resolvedId) .. "...", 2)
+            Notify("🏰 หอคอย", "กำลังออกจาก " .. tostring(oldName) .. " เพื่อเริ่มรอบใหม่...", 2)
             Fire("TowerLeave")
-            task.wait(0.3)
+            
+            -- รอจนกว่าตัวเกมจะออกจากหอคอยจริง (Battle และ TowerTracker หายไป) สูงสุด 3 วินาที
+            local leaveStart = tick()
+            while tick() - leaveStart < 3.0 do
+                task.wait(0.1)
+                if not IsTowerRunning() then break end
+            end
+            
+            -- ล้างหน้าต่างผลลัพธ์ BattleResults ทันที
+            pcall(function()
+                local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                local br = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Effects") and pg.PetDiceUI.Root.Effects:FindFirstChild("BattleResults")
+                if br and br.Visible then br.Visible = false end
+            end)
+            
+            -- หน่วงเวลา 0.8 วินาทีให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
+            task.wait(0.8)
         end
         
         local success = StartTowerDirect(resolvedId)
         if success then
             Notify("🏰 หอคอย", "เริ่มลง " .. tostring(towerDef.Name or resolvedId) .. " เรียบร้อย!", 3)
             if CFG.AutoExitArena then
-                task.delay(2.5, function() 
+                task.delay(1.5, function() 
                     if getgenv().PetDiceScriptToken == scriptToken and IsTowerInArena() then
                         Fire("TowerExit") 
                     end
                 end)
-                task.delay(4.5, function() 
+                task.delay(3.5, function() 
                     if getgenv().PetDiceScriptToken == scriptToken and IsTowerInArena() then
                         Fire("TowerExit") 
                     end
@@ -1955,7 +1992,10 @@ Tabs.Tower:AddButton({
         task.delay(0.2, UpdateTowerStatus)
         if CFG.Tower then
             task.spawn(function()
-                SwitchOrStartTower("Infinity", true)
+                local activeTower = GetActiveTowerId()
+                if not IsTowerRunning() or activeTower ~= "Infinity" then
+                    SwitchOrStartTower("Infinity", true)
+                end
             end)
         end
     end
@@ -1974,12 +2014,12 @@ DropdownTower = Tabs.Tower:AddDropdown("DropSelectTower", {
         Notify("🏰 หอคอย", "เลือกหอคอย: " .. tostring(id), 2)
         task.delay(0.2, UpdateTowerStatus)
         if CFG.Tower then
-            local activeTower = GetActiveTowerId()
-            if not IsTowerRunning() or activeTower ~= id then
-                task.spawn(function()
+            task.spawn(function()
+                local activeTower = GetActiveTowerId()
+                if not IsTowerRunning() or activeTower ~= id then
                     SwitchOrStartTower(id, true)
-                end)
-            end
+                end
+            end)
         end
     end
 })
@@ -1994,7 +2034,6 @@ Tabs.Tower:AddToggle("TogTower", {
                 -- ล้างค่าสถานะค้างทั้งหมด ให้พร้อมเริ่มทันที
                 isSwitchingTower = false
                 LiveTower.Starting = false
-                LiveTower.Active = false
                 lastTowerStartTick = 0
                 lastLoopStartAttempt = 0
                 
@@ -2006,7 +2045,18 @@ Tabs.Tower:AddToggle("TogTower", {
                 end
                 
                 local targetId = ResolveTowerId(CFG.SelectedTower)
-                -- สั่งเริ่มหอคอยทันทีแบบ force = true ไม่มีการข้ามเงื่อนไข
+                
+                -- หากตัวละครกำลังอยู่ในหอคอยเป้าหมายอยู่แล้ว ไม่ต้องออกจากหอ แค่เปิด Away mode
+                if IsTowerRunning() and GetActiveTowerId() == targetId then
+                    Notify("🏰 หอคอย", "เปิดระบบฟาร์มหอคอยต่อเนื่อง!", 2)
+                    if CFG.AutoExitArena and IsTowerInArena() then
+                        Fire("TowerExit")
+                    end
+                    task.delay(0.2, UpdateTowerStatus)
+                    return
+                end
+                
+                -- สั่งเริ่มหรือสลับหอคอยทันทีแบบ force = true
                 local started = SwitchOrStartTower(targetId, true)
                 if not started then
                     StartTowerDirect(targetId)
@@ -2018,6 +2068,28 @@ Tabs.Tower:AddToggle("TogTower", {
                 isSwitchingTower = false
                 Fire("TowerLeave")
                 pcall(function() Fire("SetSetting", "TowerAutoplay", false) end)
+                
+                -- รอจนกว่าตัวเกมจะออกจากหอคอยจริง (Battle และ TowerTracker หายไป)
+                local leaveStart = tick()
+                while tick() - leaveStart < 2.5 do
+                    task.wait(0.1)
+                    if not IsTowerRunning() then break end
+                end
+                
+                -- ล้างสถานะหอคอยทั้งหมด
+                LiveTower.Active = false
+                LiveTower.Starting = false
+                LiveTower.TowerId = nil
+                LiveTower.InArena = false
+                LiveTower.Away = false
+                
+                -- ปิดหน้าต่างผลลัพธ์ BattleResults UI ทันที
+                pcall(function()
+                    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                    local br = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Effects") and pg.PetDiceUI.Root.Effects:FindFirstChild("BattleResults")
+                    if br and br.Visible then br.Visible = false end
+                end)
+                
                 Notify("🏰 หอคอย", "ปิดระบบฟาร์มหอคอยอัตโนมัติแล้ว", 2)
                 task.delay(0.2, UpdateTowerStatus)
             end)
@@ -4495,24 +4567,7 @@ end)
 -- Expose core tower functions to global environment for external access and re-entry
 getgenv().PetDiceStartTower = function(towerId)
     local targetId = ResolveTowerId(towerId or CFG.SelectedTower)
-    local towerDef = (Towers.ById and Towers.ById[targetId]) or Towers.List[1] or {Id=targetId, Name=targetId}
-    local team = GetTowerTeam(towerDef)
-    if not team or #team == 0 then
-        Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
-        return false
-    end
-    pcall(function()
-        if State.Data and State.Data.Settings and State.Data.Settings.TowerAutoplay then
-            Fire("SetSetting", "TowerAutoplay", false)
-        end
-    end)
-    Fire("TowerStart", towerDef.Id, team)
-    LiveTower.Active = true
-    LiveTower.Starting = true
-    LiveTower.LastStartTick = tick()
-    LiveTower.TowerId = towerDef.Id
-    LiveTower.LastEventTime = tick()
-    return true
+    return SwitchOrStartTower(targetId, true)
 end
 
 getgenv().PetDiceScriptLoaded = true
