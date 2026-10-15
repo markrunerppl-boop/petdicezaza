@@ -1204,19 +1204,6 @@ pcall(function()
             LiveTower.InArena = false
             LiveTower.Away = false
             LiveTower.LastEventTime = tick()
-            
-            -- เมื่อหอคอยจบรอบ (ชนะ/แพ้/หมดเวลา) และอยู่ในโหมดวนลูป 1-7 ให้สลับไปหอคอยถัดไปทันที
-            if CFG.Tower and CFG.TowerLoopMode then
-                local selectedIds = GetSelectedTowerIds()
-                if #selectedIds > 1 and SwitchOrStartTower then
-                    task.spawn(function()
-                        task.wait(1.5)
-                        if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.Tower then return end
-                        local nextId = GetCurrentOrNextTowerId(true)
-                        SwitchOrStartTower(nextId, true)
-                    end)
-                end
-            end
         elseif action == "Stopped" or action == "Paused" then
             LiveTower.Active = false
             LiveTower.TowerId = nil
@@ -1415,6 +1402,13 @@ SwitchOrStartTower = function(targetTowerId, force)
     
     local ok, res = pcall(function()
         local activeTower = GetActiveTowerId()
+        if IsTowerRunning() and activeTower == targetTowerId then
+            if CFG.AutoExitArena and IsTowerInArena() then
+                Fire("TowerExit")
+            end
+            task.delay(0.2, UpdateTowerStatus)
+            return true
+        end
         if activeTower and activeTower ~= targetTowerId then
             local oldDef = Towers.ById and Towers.ById[activeTower]
             local oldName = oldDef and oldDef.Name or activeTower
@@ -1661,9 +1655,12 @@ DropdownTower = Tabs.Tower:AddDropdown("DropSelectTower", {
         Notify("🏰 หอคอย", "อัปเดตรายการหอคอย (" .. #ids .. " หอคอย)", 2)
         task.delay(0.2, UpdateTowerStatus)
         if CFG.Tower and #ids > 0 then
-            task.spawn(function()
-                SwitchOrStartTower(ids[1], true)
-            end)
+            local activeTower = GetActiveTowerId()
+            if not IsTowerRunning() or (activeTower and not table.find(ids, activeTower)) then
+                task.spawn(function()
+                    SwitchOrStartTower(ids[1], true)
+                end)
+            end
         end
     end
 })
@@ -3242,7 +3239,10 @@ task.spawn(function()
                 
                 if isRunning then
                     wasTowerRunning = true
-                    lastTowerId = activeId or lastTowerId
+                    if lastTowerId ~= activeId then
+                        lastTowerId = activeId
+                        towerStartFloor = 0
+                    end
                     
                     -- หากกำลังลงหอคอยที่ไม่ได้อยู่ในรายการที่เลือกไว้
                     if activeId and #selectedIds > 0 and not table.find(selectedIds, activeId) then
@@ -3309,7 +3309,9 @@ task.spawn(function()
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
-        if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
+        local char = LocalPlayer.Character or Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not char or not hum or hum.Health <= 0 then task.wait(2.0) continue end
         
         local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
         local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
@@ -3318,7 +3320,7 @@ task.spawn(function()
             if isJoined then wasInBoss = true end
         end
         
-        -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และให้หอคอยกลับมาฟาร์มต่อทันที
+        -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และให้ Loop Engine หอคอยกลับมาฟาร์มต่ออัตโนมัติ
         if wasInBoss and not isJoined then
             wasInBoss = false
             task.wait(1.5)
@@ -3326,15 +3328,7 @@ task.spawn(function()
                 Fire("Teleport", "Home")
             end)
             Humanizer.Wait(1.5, 2.5)
-            
-            -- สั่งให้หอคอยกลับมาฟาร์มต่อทันทีโดยไม่ต้องรอนาน
-            if CFG.Tower then
-                task.spawn(function()
-                    task.wait(1.0)
-                    local targetId = CFG.SelectedTower or GetCurrentOrNextTowerId(false)
-                    SwitchOrStartTower(targetId, true)
-                end)
-            end
+            Notify("🏰 หอคอย", "จบศึกบอสโลกเรียบร้อย กลับถึงบ้านแล้ว ระบบหอคอยจะเริ่มฟาร์มต่ออัตโนมัติ", 3)
         end
         
         if CFG.AutoWorldBoss then
