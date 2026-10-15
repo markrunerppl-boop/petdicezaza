@@ -1831,12 +1831,21 @@ SwitchOrStartTower = function(targetTowerId, force)
             local oldName = oldDef and oldDef.Name or activeTower
             Notify("🏰 หอคอย", "กำลังออกจาก " .. tostring(oldName) .. " เพื่อเริ่มรอบใหม่...", 2)
             Fire("TowerLeave")
+            LiveTower.Active = false
+            LiveTower.Starting = false
+            LiveTower.LastEventTime = 0
+            LiveTower.TowerId = nil
             
             -- รอจนกว่าตัวเกมจะออกจากหอคอยจริง (Battle และ TowerTracker หายไป) สูงสุด 3 วินาที
             local leaveStart = tick()
             while tick() - leaveStart < 3.0 do
                 task.wait(0.1)
-                if not IsTowerRunning() then break end
+                local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
+                local hud = root and root:FindFirstChild("Hud")
+                local away = hud and hud:FindFirstChild("TowerTracker") and hud.TowerTracker.Visible == true
+                local arena = hud and hud:FindFirstChild("Battle") and hud.Battle.Visible == true
+                if not away and not arena then break end
             end
             
             -- ล้างหน้าต่างผลลัพธ์ BattleResults ทันที
@@ -2080,20 +2089,25 @@ Tabs.Tower:AddToggle("TogTower", {
             task.spawn(function()
                 isSwitchingTower = false
                 Fire("TowerLeave")
+                LiveTower.Active = false
+                LiveTower.Starting = false
+                LiveTower.LastEventTime = 0
+                LiveTower.TowerId = nil
+                LiveTower.InArena = false
+                LiveTower.Away = false
                 pcall(function() Fire("SetSetting", "TowerAutoplay", false) end)
                 
                 -- รอจนกว่าตัวเกมจะออกจากหอคอยจริง (Battle และ TowerTracker หายไป)
                 local leaveStart = tick()
                 while tick() - leaveStart < 2.5 do
                     task.wait(0.1)
-                    if not IsTowerRunning() then break end
+                    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
+                    local hud = root and root:FindFirstChild("Hud")
+                    local away = hud and hud:FindFirstChild("TowerTracker") and hud.TowerTracker.Visible == true
+                    local arena = hud and hud:FindFirstChild("Battle") and hud.Battle.Visible == true
+                    if not away and not arena then break end
                 end
-                
-                -- ล้างสถานะหอคอยทั้งหมด
-                LiveTower.Active = false
-                LiveTower.Starting = false
-                LiveTower.TowerId = nil
-                LiveTower.InArena = false
                 LiveTower.Away = false
                 
                 -- ปิดหน้าต่างผลลัพธ์ BattleResults UI ทันที
