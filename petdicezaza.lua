@@ -203,6 +203,71 @@ local function WalkToPawcula()
     return (hrp.Position - targetStand).Magnitude <= 12
 end
 
+local function SafeFlyTo(targetPos, speed, maxWait)
+    local char = LocalPlayer.Character or Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not hum or not hrp or hum.Health <= 0 then return false end
+    
+    local dist = (hrp.Position - targetPos).Magnitude
+    if dist < 4 then return true end
+    
+    local moveSpeed = speed or (CFG and tonumber(CFG.CandyCollectSpeed)) or 260
+    local duration = math.clamp(dist / moveSpeed, 0.08, maxWait or 4.0)
+    
+    local jitter = Vector3.new((math.random() - 0.5) * 0.4, 0.4, (math.random() - 0.5) * 0.4)
+    local destCFrame = CFrame.new(targetPos + jitter)
+    
+    local noclipConn
+    noclipConn = RunService.Stepped:Connect(function()
+        pcall(function()
+            local c = LocalPlayer.Character or Character
+            if c then
+                for _, part in ipairs(c:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+    end)
+    
+    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
+    local tween = TweenService:Create(hrp, tweenInfo, { CFrame = destCFrame })
+    
+    local completed = false
+    local conn
+    conn = tween.Completed:Connect(function()
+        completed = true
+    end)
+    
+    tween:Play()
+    
+    local t0 = tick()
+    while not completed and (tick() - t0 < duration + 0.4) do
+        task.wait(0.04)
+        if not hrp or not hrp.Parent then break end
+    end
+    
+    pcall(function() conn:Disconnect() end)
+    pcall(function() noclipConn:Disconnect() end)
+    
+    pcall(function()
+        local c = LocalPlayer.Character or Character
+        if c then
+            for _, part in ipairs(c:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                    part.CanCollide = true
+                end
+            end
+        end
+    end)
+    
+    char = LocalPlayer.Character or Character
+    hrp = char and char:FindFirstChild("HumanoidRootPart")
+    return hrp and (hrp.Position - targetPos).Magnitude <= 10
+end
+
 local function GetStallCFrame(stallName)
     local stalls = workspace:FindFirstChild("Stalls")
     if not stalls then return nil end
@@ -378,6 +443,8 @@ local defaultCFG = {
     HalloweenAutoBuyLimitedPull = false,
     HalloweenAutoOpenBags = false,
     HalloweenAutoTrickOrTreat = false,
+    HalloweenAutoCollectCandy = true,
+    CandyCollectSpeed = 260,
     AutoDropItems = true, AutoReady = true,
     SenderMode = false, ReceiverMode = false, 
     TradeTarget = "[ เลือกทุกคนในห้อง ]", 
@@ -1465,6 +1532,83 @@ pcall(function()
         end
     end)
 end)
+
+-- ==============================================================================
+-- [HALLOWEEN CANDY STORM EVENT TRACKER]
+-- ==============================================================================
+local ActiveCandies = {}
+
+pcall(function()
+    if getgenv().PetDiceCandyConn then
+        pcall(function() getgenv().PetDiceCandyConn:Disconnect() end)
+        getgenv().PetDiceCandyConn = nil
+    end
+    local candyRemote = PetDice:WaitForChild("Remotes"):WaitForChild("CandyStorm", 15)
+    if candyRemote then
+        getgenv().PetDiceCandyConn = candyRemote.OnClientEvent:Connect(function(cmd, id, kind, pos)
+            if getgenv().PetDiceScriptToken ~= scriptToken then return end
+            if cmd == "Drop" and type(id) == "number" and typeof(pos) == "Vector3" then
+                ActiveCandies[id] = { Id = id, Kind = kind, Position = pos, Born = tick() }
+            elseif cmd == "Grabbed" and type(id) == "number" then
+                ActiveCandies[id] = nil
+            elseif cmd == "Clear" then
+                table.clear(ActiveCandies)
+            end
+        end)
+    end
+end)
+
+local function GetAvailableCandies()
+    local list = {}
+    local seen = {}
+    local now = tick()
+    
+    -- 1. จากรายการ ActiveCandies ที่ดักจับจากแพ็กเก็ต Remote
+    for id, c in pairs(ActiveCandies) do
+        if c and c.Position and (now - (c.Born or 0) < 65) then
+            table.insert(list, {
+                Id = id,
+                Kind = c.Kind,
+                Position = c.Position,
+                Born = c.Born
+            })
+            seen[id] = true
+        else
+            ActiveCandies[id] = nil
+        end
+    end
+    
+    -- 2. สำรวจจาก workspace.PetDiceCandy.Pieces ในกรณีที่สคริปต์เพิ่งโหลดตอนพายุกำลังตกอยู่
+    pcall(function()
+        local folder = workspace:FindFirstChild("PetDiceCandy")
+        local pieces = folder and folder:FindFirstChild("Pieces")
+        if pieces then
+            for _, m in ipairs(pieces:GetChildren()) do
+                if m:IsA("Model") then
+                    local pivot = m:GetPivot()
+                    if pivot and pivot.Position then
+                        local alreadyInList = false
+                        for _, existing in ipairs(list) do
+                            if (existing.Position - pivot.Position).Magnitude < 3.0 then
+                                alreadyInList = true
+                                break
+                            end
+                        end
+                        if not alreadyInList then
+                            table.insert(list, {
+                                Model = m,
+                                Position = pivot.Position,
+                                Born = now
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    
+    return list
+end
 
 local function SyncLiveTowerFromGame()
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
@@ -3013,6 +3157,32 @@ Tabs.Halloween:AddToggle("TogHalTrick", {
     Callback = function(V) UpdateCFG("HalloweenAutoTrickOrTreat", V) end
 })
 
+Tabs.Halloween:AddToggle("TogHalCollectCandy", {
+    Title = "6. เก็บแคนดี้พายุลูกกวาดอัตโนมัติ (Auto Collect Candy Storm)",
+    Description = "บินเก็บแคนดี้ (Candy Corn, Lollipop, Candy Bag, Bucket) อัตโนมัติเมื่อพายุเริ่ม ปลอดภัย 100% ไร้การกระโดดวาปผิดธรรมชาติ",
+    Default = CFG.HalloweenAutoCollectCandy,
+    Callback = function(V)
+        UpdateCFG("HalloweenAutoCollectCandy", V)
+        if V then
+            Notify("🍬 แคนดี้ฮาโลวีน", "เปิดระบบเก็บแคนดี้พายุลูกกวาดอัตโนมัติแล้ว!", 3)
+        else
+            Notify("🍬 แคนดี้ฮาโลวีน", "ปิดระบบเก็บแคนดี้พายุลูกกวาด", 2)
+        end
+    end
+})
+
+Tabs.Halloween:AddSlider("SliderCandySpeed", {
+    Title = "ความเร็วในการบินเก็บ (Studs/วินาที)",
+    Description = "ปรับความเร็วการบินเก็บแคนดี้แบบคงที่ ปลอดภัยจากการตรวจจับ Speedhack (แนะนำ 240 - 280)",
+    Default = CFG.CandyCollectSpeed or 260,
+    Min = 150,
+    Max = 300,
+    Rounding = 0,
+    Callback = function(V)
+        UpdateCFG("CandyCollectSpeed", V)
+    end
+})
+
 -- ------------------------------------------------------------------------------
 -- 🤝 TAB 8: SAFE AUTO TRADE
 -- ------------------------------------------------------------------------------
@@ -3995,6 +4165,90 @@ task.spawn(function()
                 end
             end
         end)
+    end
+end)
+
+-- 8.1. Auto Candy Storm Collector (100% Anti-Detection Safe Navigation & Real-Time Grabber)
+task.spawn(function()
+    local lastOriginPos = nil
+    
+    while true do
+        task.wait(0.5)
+        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        
+        if not CFG.HalloweenAutoCollectCandy then 
+            task.wait(1.5)
+            continue 
+        end
+        
+        -- ป้องกันการทำงานแทรกแซงระหว่างเทรด หรือระหว่างสู้อยู่ในอารีน่า
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if isJoined or IsEnteringBossPortal == true then task.wait(2.0) continue end
+        if IsTowerInArena() then task.wait(2.0) continue end
+        
+        local char = LocalPlayer.Character or Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not char or not hum or not hrp or hum.Health <= 0 then task.wait(1.5) continue end
+        
+        -- ตรวจสอบว่ามีแคนดี้ที่สามารถเก็บได้ในพื้นที่หรือไม่
+        local targets = GetAvailableCandies()
+        if #targets > 0 then
+            -- บันทึกจุดยืนเดิมไว้ เพื่อพากลับมาจุดเดิมอย่างปลอดภัยหลังจากเก็บแคนดี้จนหมด
+            if not lastOriginPos then
+                lastOriginPos = hrp.Position
+            end
+            
+            while #targets > 0 and CFG.HalloweenAutoCollectCandy do
+                if getgenv().PetDiceScriptToken ~= scriptToken then break end
+                if IsInTrade() or getgenv().TradeActiveSession then break end
+                if IsTowerInArena() then break end
+                local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+                if isBoss or IsEnteringBossPortal == true then break end
+                
+                char = LocalPlayer.Character or Character
+                hum = char and char:FindFirstChildOfClass("Humanoid")
+                hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if not char or not hum or not hrp or hum.Health <= 0 then break end
+                
+                -- เรียงลำดับจากแคนดี้ที่อยู่ใกล้ที่สุดก่อน (Nearest-First Pathing เพื่อความสมจริงและปลอดภัย)
+                local curPos = hrp.Position
+                table.sort(targets, function(a, b)
+                    return (a.Position - curPos).Magnitude < (b.Position - curPos).Magnitude
+                end)
+                
+                local nextCandy = table.remove(targets, 1)
+                if nextCandy and nextCandy.Position then
+                    -- บินด้วยความเร็วที่กำหนด (Safe Linear Tween + Auto-Noclip)
+                    local speed = tonumber(CFG.CandyCollectSpeed) or 260
+                    local arrived = SafeFlyTo(nextCandy.Position, speed, 4.0)
+                    
+                    if arrived then
+                        -- หากมี Id ส่งคำสั่งยืนยัน CandyGrab
+                        if nextCandy.Id then
+                            Fire("CandyGrab", nextCandy.Id)
+                            ActiveCandies[nextCandy.Id] = nil
+                        end
+                        Humanizer.Wait(0.08, 0.16)
+                    end
+                end
+                
+                -- ดึงรายการแคนดี้ล่าสุด
+                targets = GetAvailableCandies()
+            end
+            
+            -- บินกลับจุดยืนเดิมอย่างปลอดภัยเมื่อเก็บหมดรอบ
+            if lastOriginPos then
+                local speed = tonumber(CFG.CandyCollectSpeed) or 260
+                SafeFlyTo(lastOriginPos, speed, 4.0)
+                lastOriginPos = nil
+                task.wait(0.5)
+            end
+        else
+            lastOriginPos = nil
+            task.wait(1.0)
+        end
     end
 end)
 
