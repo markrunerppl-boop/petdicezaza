@@ -4571,6 +4571,18 @@ getgenv().PetDiceStartTower = function(towerId)
     return SwitchOrStartTower(targetId, true)
 end
 
+-- Startup Auto-Dispatcher: เริ่มหอคอยอัตโนมัติทันทีเมื่อเปิดสคริปต์ หากเปิดตั้งค่าไว้
+task.delay(1.5, function()
+    if getgenv().PetDiceScriptToken == scriptToken and CFG.Tower then
+        pcall(function()
+            if not IsTowerRunning() then
+                local targetId = ResolveTowerId(CFG.SelectedTower)
+                SwitchOrStartTower(targetId, true)
+            end
+        end)
+    end
+end)
+
 getgenv().PetDiceScriptLoaded = true
 getgenv().PetDiceScriptStarting = nil
 getgenv().PetDiceNotify = Notify
