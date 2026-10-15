@@ -252,10 +252,11 @@ local function WalkToPawcula()
     local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
     local targetStand = Vector3.new(36.5, 2.25, -36.0)
     
-    -- หากตัวละครอยู่ไกลเกิน 45 studs ให้ใช้วาร์ปทางการของเกมไปที่ Hub (พลาซ่า) ก่อน ปลอดภัย 100%
-    if (hrp.Position - pawculaPos).Magnitude > 45 then
+    -- หากตัวละครไม่ได้อยู่ในพลาซ่า ให้ใช้วาร์ปทางการของเกมไปที่ Hub (พลาซ่า) ก่อน ปลอดภัย 100%
+    local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 120
+    if not isAlreadyInHub then
         Fire("Teleport", "Hub")
-        Humanizer.Wait(1.5, 2.2)
+        Humanizer.Wait(2.0, 2.8)
         char = LocalPlayer.Character or Character
         hum = char and char:FindFirstChildOfClass("Humanoid")
         hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -3197,15 +3198,23 @@ end
 
 local function CanTrickOrTreat()
     local data = State.Data
-    if not data then return true end
+    if not data then return false end
     local entry = GetHalloweenEntry()
-    if not entry or not entry.TreatDay then return true end
+    if not entry then return false end
+    if not entry.TreatDay then return true end
+    
     local now = workspace:GetServerTimeNow()
-    local nowDay = math.floor(now / 86400)
-    if entry.TreatDay >= nowDay then
-        return false
+    local okSeason, currentDay = pcall(function()
+        if Season and type(Season.TreatDay) == "function" then
+            return Season.TreatDay(now)
+        end
+    end)
+    if okSeason and type(currentDay) == "number" then
+        return entry.TreatDay < currentDay
     end
-    return true
+    
+    local nowDay = math.floor(now / 86400)
+    return entry.TreatDay < nowDay
 end
 
 local HalloweenStatusPara = Tabs.Halloween:AddParagraph({
@@ -3227,6 +3236,14 @@ local function UpdateHalloweenStatus()
         
         local dayNow = math.floor(now / 86400)
         local resetSeconds = math.max(0, ((dayNow + 1) * 86400) - now)
+        pcall(function()
+            if Season and type(Season.TreatReset) == "function" then
+                local sReset = Season.TreatReset(now)
+                if type(sReset) == "number" and sReset > 0 then
+                    resetSeconds = sReset
+                end
+            end
+        end)
         local resetMins = math.floor(resetSeconds / 60)
         local resetSecs = math.floor(resetSeconds % 60)
         local countdown = string.format("%d:%02d", resetMins, resetSecs)
@@ -4745,11 +4762,13 @@ task.spawn(function()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0) continue end
         local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isJoined or IsEnteringBossPortal == true then task.wait(3.0) continue end
-        if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(3.0) continue end
+        local char = LocalPlayer.Character or Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not char or not hum or hum.Health <= 0 then task.wait(3.0) continue end
         
         CircuitBreaker.Execute("AutoHalloween", function()
-            local entry, seasonInfo = GetHalloweenEntry()
-            if not entry or not seasonInfo then return end
+            local entry = GetHalloweenEntry()
+            if not entry then return end
             
             -- 1. Auto Claim Goals: ตรวจสอบความพร้อม 100% ตามเงื่อนไขทางการของตัวเกมก่อนเริ่มยิงคำสั่ง
             if CFG.HalloweenAutoClaim and HalloweenConfig.Goals then
@@ -4776,10 +4795,10 @@ task.spawn(function()
             
             -- 2. Auto Buy Limited Pull (800 Candy): ให้สิทธิ์ตั๋วจำกัดก่อน ตรวจสอบโควต้าสูงสุด 5 ครั้ง และลูกอม 800
             local nowTick = tick()
-            if CFG.HalloweenAutoBuyLimitedPull and (nowTick - lastHalloweenLimitedPullTick > 12) then
-                local boughtPulls = entry.Bought and entry.Bought.LimitedPull or 0
-                local currentCandy = entry.Candy or 0
-                if boughtPulls < 5 and currentCandy >= 800 and (not Season.Leaving or not Season.Leaving()) then
+            if CFG.HalloweenAutoBuyLimitedPull and (nowTick - lastHalloweenLimitedPullTick > 8) then
+                local boughtPulls = entry.Bought and (entry.Bought.LimitedPull or entry.Bought.HalloweenPull or entry.Bought.SinglePull) or 0
+                local currentCandy = entry.Candy or (State.Data and State.Data.Season and State.Data.Season.Candy) or 0
+                if boughtPulls < 5 and currentCandy >= 800 and (not Season or not Season.Leaving or not Season.Leaving()) then
                     lastHalloweenLimitedPullTick = nowTick
                     Fire("SpookyBuy", "LimitedPull")
                     Notify("🎟️ ฮาโลวีน", "ซื้อ Limited Pull สำเร็จ! (" .. (boughtPulls + 1) .. "/5) (เหลือลูกอม: " .. (currentCandy - 800) .. ")", 3)
@@ -4789,9 +4808,9 @@ task.spawn(function()
             
             -- 3. Auto Buy Bags (270 Candy): ตรวจสอบยอดลูกอมจริงและสถานะร้านค้าก่อนซื้อ
             nowTick = tick()
-            if CFG.HalloweenAutoBuyBags and (nowTick - lastHalloweenBagBuyTick > 12) then
-                local currentCandy = entry.Candy or 0
-                if currentCandy >= 270 and (not Season.Leaving or not Season.Leaving()) then
+            if CFG.HalloweenAutoBuyBags and (nowTick - lastHalloweenBagBuyTick > 6) then
+                local currentCandy = entry.Candy or (State.Data and State.Data.Season and State.Data.Season.Candy) or 0
+                if currentCandy >= 270 and (not Season or not Season.Leaving or not Season.Leaving()) then
                     lastHalloweenBagBuyTick = nowTick
                     Fire("SpookyBuy", "HalloweenBag10")
                     Notify("🛍️ ฮาโลวีน", "ซื้อแพ็ค 10 กระเป๋าฮาโลวีนเรียบร้อย! (เหลือลูกอม: " .. (currentCandy - 270) .. ")", 2)
