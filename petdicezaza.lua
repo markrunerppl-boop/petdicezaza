@@ -1096,7 +1096,9 @@ local LiveTower = {
     LastFinishedId = nil,
     LastEventTime = 0,
     LastStartTick = 0,
-    SwitchingTick = 0
+    SwitchingTick = 0,
+    JustEnded = false,
+    EndedTick = 0
 }
 
 local IsEnteringBossPortal = false
@@ -1243,14 +1245,37 @@ pcall(function()
         elseif action == "End" and typeof(payload) == "table" then
             LiveTower.Active = false
             LiveTower.Starting = false
+            LiveTower.JustEnded = true
+            LiveTower.EndedTick = tick()
             LiveTower.LastResult = payload.Result
             LiveTower.LastFinishedId = payload.Tower or LiveTower.TowerId
             LiveTower.LastFloor = tonumber(payload.Floor) or LiveTower.Floor
+            
+            local finishedId = LiveTower.LastFinishedId or LiveTower.TowerId
             LiveTower.TowerId = nil
             LiveTower.Floor = 0
             LiveTower.InArena = false
             LiveTower.Away = false
             LiveTower.LastEventTime = tick()
+            
+            -- เมื่อจบการลงหอคอยรอบปัจจุบัน ให้สลับไปหอคอยถัดไปในเพลย์ลิสต์ 1-7 ทันที
+            if CFG.Tower and CFG.TowerLoopMode then
+                local selectedIds = GetSelectedTowerIds()
+                if #selectedIds > 1 then
+                    task.spawn(function()
+                        local nextId = GetCurrentOrNextTowerId(true)
+                        local nextDef = Towers.ById and Towers.ById[nextId]
+                        local nextName = nextDef and nextDef.Name or nextId
+                        Notify("🔄 คิวหอคอย", "จบการลง " .. tostring(finishedId or "หอคอย") .. " -> เตรียมลง " .. nextName .. " ต่อไป", 3)
+                        
+                        local delaySec = CFG.TowerRestartDelay or 3
+                        if delaySec > 0 then task.wait(delaySec) end
+                        if getgenv().PetDiceScriptToken == scriptToken and CFG.Tower then
+                            SwitchOrStartTower(nextId, true)
+                        end
+                    end)
+                end
+            end
         elseif action == "Stopped" or action == "Paused" then
             LiveTower.Active = false
             LiveTower.Starting = false
@@ -1275,11 +1300,29 @@ local function SyncLiveTowerFromGame()
     local isAway = tracker and tracker.Visible == true
     local isArena = battle and battle.Visible == true
     
+    -- หากเพิ่งจบการลงหอคอย ไม่ให้ TowerTracker ที่กำลังนับถอยหลัง NEXT RUN IN ของเกมมาเข้าใจผิดว่าหอคอยเดิมยังเล่นอยู่
+    if LiveTower.JustEnded and (tick() - (LiveTower.EndedTick or 0) < 6.0) then
+        return
+    end
+    
+    -- ตรวจสอบข้อความบน TowerTracker หากแสดง NEXT RUN IN หรือ STARTING... แสดงว่าเกมกำลังรอเริ่มใหม่
+    if isAway and tracker then
+        for _, lbl in ipairs(tracker:GetDescendants()) do
+            if lbl:IsA("TextLabel") and lbl.Text ~= "" then
+                local txt = lbl.Text:upper()
+                if txt:find("NEXT RUN IN") or txt:find("STARTING...") or txt:find("VICTORY") or txt:find("DEFEAT") then
+                    return
+                end
+            end
+        end
+    end
+    
     -- 1. ดึงข้อมูลลึกแบบเรียลไทม์จากระบบเซิร์ฟเวอร์เกม (State.Data.TowerResume)
     local resume = data and data.TowerResume
     if resume and typeof(resume) == "table" then
         LiveTower.Active = true
         LiveTower.Starting = false
+        LiveTower.JustEnded = false
         LiveTower.TowerId = resume.Tower or resume.TowerId or resume.Id or LiveTower.TowerId
         LiveTower.Floor = tonumber(resume.Floor) or LiveTower.Floor
         LiveTower.Away = (resume.Away == true) or (isAway == true)
@@ -1292,6 +1335,7 @@ local function SyncLiveTowerFromGame()
     if isAway or isArena then
         LiveTower.Active = true
         LiveTower.Starting = false
+        LiveTower.JustEnded = false
         LiveTower.InArena = isArena
         LiveTower.Away = isAway
         
