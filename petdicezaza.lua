@@ -181,10 +181,10 @@ local function WalkToPawcula()
     local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
     local targetStand = Vector3.new(36.5, 2.25, -36.0)
     
-    -- หากตัวละครอยู่ไกลเกิน 60 studs ให้ใช้ระบบวาร์ปทางการของตัวเกมกลับบ้านก่อน เพื่อความปลอดภัย
-    if (hrp.Position - targetStand).Magnitude > 60 then
-        Fire("Teleport", "Home")
-        Humanizer.Wait(1.2, 2.0)
+    -- หากตัวละครอยู่ไกลเกิน 45 studs ให้ใช้วาร์ปทางการของเกมไปที่ Hub (พลาซ่า) ก่อน ปลอดภัย 100%
+    if (hrp.Position - pawculaPos).Magnitude > 45 then
+        Fire("Teleport", "Hub")
+        Humanizer.Wait(1.5, 2.2)
         char = LocalPlayer.Character or Character
         hum = char and char:FindFirstChildOfClass("Humanoid")
         hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -211,69 +211,32 @@ local function WalkToPawcula()
     return false
 end
 
-local function SafeFlyTo(targetPos, speed, maxWait)
+local function SafeWalkTo(targetPos, maxWait)
     local char = LocalPlayer.Character or Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not char or not hum or not hrp or hum.Health <= 0 then return false end
     
-    local dist = (hrp.Position - targetPos).Magnitude
-    if dist < 4 then return true end
+    local dist = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
+    if dist < 6 then return true end
     
-    local moveSpeed = speed or (CFG and tonumber(CFG.CandyCollectSpeed)) or 260
-    local duration = math.clamp(dist / moveSpeed, 0.08, maxWait or 4.0)
-    
-    local jitter = Vector3.new((math.random() - 0.5) * 0.4, 0.4, (math.random() - 0.5) * 0.4)
-    local destCFrame = CFrame.new(targetPos + jitter)
-    
-    local noclipConn
-    noclipConn = RunService.Stepped:Connect(function()
-        pcall(function()
-            local c = LocalPlayer.Character or Character
-            if c then
-                for _, part in ipairs(c:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        part.CanCollide = false
-                    end
-                end
-            end
-        end)
-    end)
-    
-    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
-    local tween = TweenService:Create(hrp, tweenInfo, { CFrame = destCFrame })
-    
-    local completed = false
-    local conn
-    conn = tween.Completed:Connect(function()
-        completed = true
-    end)
-    
-    tween:Play()
+    -- เดินด้วย Humanoid:MoveTo ตามระบบฟิสิกส์ปกติของตัวเกมบนระนาบพื้นปกติ ป้องกันการติดในวัตถุ/ใต้แมพ 100%
+    local walkTarget = Vector3.new(targetPos.X, hrp.Position.Y, targetPos.Z)
+    hum:MoveTo(walkTarget)
     
     local t0 = tick()
-    while not completed and (tick() - t0 < duration + 0.4) do
-        task.wait(0.04)
-        if not hrp or not hrp.Parent then break end
+    local waitLimit = maxWait or 3.5
+    while (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude > 6 and (tick() - t0 < waitLimit) do
+        task.wait(0.12)
+        char = LocalPlayer.Character or Character
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp or hum.Health <= 0 then break end
     end
-    
-    pcall(function() conn:Disconnect() end)
-    pcall(function() noclipConn:Disconnect() end)
-    
-    pcall(function()
-        local c = LocalPlayer.Character or Character
-        if c then
-            for _, part in ipairs(c:GetDescendants()) do
-                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-                    part.CanCollide = true
-                end
-            end
-        end
-    end)
     
     char = LocalPlayer.Character or Character
     hrp = char and char:FindFirstChild("HumanoidRootPart")
-    return hrp and (hrp.Position - targetPos).Magnitude <= 10
+    return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude <= 8
 end
 
 local function GetStallCFrame(stallName)
@@ -452,7 +415,6 @@ local defaultCFG = {
     HalloweenAutoOpenBags = false,
     HalloweenAutoTrickOrTreat = false,
     HalloweenAutoCollectCandy = true,
-    CandyCollectSpeed = 260,
     AutoDropItems = true, AutoReady = true,
     SenderMode = false, ReceiverMode = false, 
     TradeTarget = "[ เลือกทุกคนในห้อง ]", 
@@ -3208,8 +3170,8 @@ Tabs.Halloween:AddButton({
                 Notify("⚠️ กำลังทำกิจกรรมอื่น", "กรุณาจบการเทรดก่อนเดินไปขอขนม", 3)
                 return
             end
-            if IsTowerInArena() then
-                Notify("⚠️ กำลังอยู่ในหอคอย", "กรุณารอออกจากหอคอยก่อนเดินไปขอขนม", 3)
+            if IsTowerRunning() or IsTowerInArena() then
+                Notify("⚠️ กำลังลงหอคอย", "กรุณาจบหรือหยุดหอคอยก่อนเดินไปขอขนม", 3)
                 return
             end
             Notify("🚶 กำลังเดิน", "กำลังเดินไปยังเคานต์พาวคูลาอย่างปลอดภัย...", 2)
@@ -3263,7 +3225,7 @@ Tabs.Halloween:AddToggle("TogHalTrick", {
 
 Tabs.Halloween:AddToggle("TogHalCollectCandy", {
     Title = "6. เก็บแคนดี้พายุลูกกวาดอัตโนมัติ (Auto Collect Candy Storm)",
-    Description = "บินเก็บแคนดี้ (Candy Corn, Lollipop, Candy Bag, Bucket) อัตโนมัติเมื่อพายุเริ่ม ปลอดภัย 100% ไร้การกระโดดวาปผิดธรรมชาติ",
+    Description = "เดินเก็บแคนดี้ (Candy Corn, Lollipop, Candy Bag, Bucket) ในพลาซ่าอัตโนมัติเมื่อพายุเริ่ม ปลอดภัย 100% ด้วยระบบฟิสิกส์เดินปกติ ไร้การบิน/Tween และกลับบ้านอัตโนมัติ",
     Default = CFG.HalloweenAutoCollectCandy,
     Callback = function(V)
         UpdateCFG("HalloweenAutoCollectCandy", V)
@@ -3272,18 +3234,6 @@ Tabs.Halloween:AddToggle("TogHalCollectCandy", {
         else
             Notify("🍬 แคนดี้ฮาโลวีน", "ปิดระบบเก็บแคนดี้พายุลูกกวาด", 2)
         end
-    end
-})
-
-Tabs.Halloween:AddSlider("SliderCandySpeed", {
-    Title = "ความเร็วในการบินเก็บ (Studs/วินาที)",
-    Description = "ปรับความเร็วการบินเก็บแคนดี้แบบคงที่ ปลอดภัยจากการตรวจจับ Speedhack (แนะนำ 240 - 280)",
-    Default = CFG.CandyCollectSpeed or 260,
-    Min = 150,
-    Max = 300,
-    Rounding = 0,
-    Callback = function(V)
-        UpdateCFG("CandyCollectSpeed", V)
     end
 })
 
@@ -4269,7 +4219,7 @@ task.spawn(function()
             
             -- 5. Auto Trick or Treat: ตรวจสอบสิทธิ์ประจำวัน และเดินด้วยระบบฟิสิกส์ปกติ ปลอดภัย 100%
             if CFG.HalloweenAutoTrickOrTreat and CanTrickOrTreat() then
-                if not IsTowerInArena() and not IsInTrade() and not (LocalPlayer:GetAttribute("WorldBossJoined") == true) then
+                if not IsTowerInArena() and not IsTowerRunning() and not IsInTrade() and not (LocalPlayer:GetAttribute("WorldBossJoined") == true) then
                     Notify("🍬 ขอขนมฮาโลวีน", "กำลังเดินไปหาเคานต์พาวคูลาเพื่อขอขนมประจำวัน...", 2)
                     local arrived = WalkToPawcula()
                     if arrived and CanTrickOrTreat() then
@@ -4286,24 +4236,22 @@ task.spawn(function()
     end
 end)
 
--- 8.1. Auto Candy Storm Collector (100% Anti-Detection Safe Navigation & Real-Time Grabber)
+-- 8.1. Auto Candy Storm Collector (100% Anti-Detection Legitimate Walking & Auto Return)
 task.spawn(function()
-    local lastOriginPos = nil
-    
     while true do
-        task.wait(0.5)
+        task.wait(1.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         
         if not CFG.HalloweenAutoCollectCandy then 
-            task.wait(1.5)
+            task.wait(2.0)
             continue 
         end
         
-        -- ป้องกันการทำงานแทรกแซงระหว่างเทรด หรือระหว่างสู้อยู่ในอารีน่า
+        -- ป้องกันการทำงานแทรกแซงระหว่างเทรด หรือระหว่างสู้อยู่ในอารีน่า/หอคอย
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isJoined or IsEnteringBossPortal == true then task.wait(2.0) continue end
-        if IsTowerInArena() then task.wait(2.0) continue end
+        if IsTowerInArena() or IsTowerRunning() then task.wait(2.0) continue end
         
         local char = LocalPlayer.Character or Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -4313,15 +4261,21 @@ task.spawn(function()
         -- ตรวจสอบว่ามีแคนดี้ที่สามารถเก็บได้ในพื้นที่หรือไม่
         local targets = GetAvailableCandies()
         if #targets > 0 then
-            -- บันทึกจุดยืนเดิมไว้ เพื่อพากลับมาจุดเดิมอย่างปลอดภัยหลังจากเก็บแคนดี้จนหมด
-            if not lastOriginPos then
-                lastOriginPos = hrp.Position
+            -- 1. หากตัวละครไม่ได้อยู่ในพลาซ่า (ระยะจากกึ่งกลางพลาซ่า > 65 studs) ใช้วาร์ปทางการของเกมไปที่ Hub
+            local distFromCenter = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude
+            if distFromCenter > 65 then
+                Fire("Teleport", "Hub")
+                Humanizer.Wait(1.5, 2.2)
+                char = LocalPlayer.Character or Character
+                hum = char and char:FindFirstChildOfClass("Humanoid")
+                hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if not hum or not hrp then continue end
             end
             
             while #targets > 0 and CFG.HalloweenAutoCollectCandy do
                 if getgenv().PetDiceScriptToken ~= scriptToken then break end
                 if IsInTrade() or getgenv().TradeActiveSession then break end
-                if IsTowerInArena() then break end
+                if IsTowerInArena() or IsTowerRunning() then break end
                 local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
                 if isBoss or IsEnteringBossPortal == true then break end
                 
@@ -4330,7 +4284,7 @@ task.spawn(function()
                 hrp = char and char:FindFirstChild("HumanoidRootPart")
                 if not char or not hum or not hrp or hum.Health <= 0 then break end
                 
-                -- เรียงลำดับจากแคนดี้ที่อยู่ใกล้ที่สุดก่อน (Nearest-First Pathing เพื่อความสมจริงและปลอดภัย)
+                -- เรียงลำดับจากแคนดี้ที่อยู่ใกล้ที่สุดก่อน (Nearest-First เดินเก็บตามลำดับ)
                 local curPos = hrp.Position
                 table.sort(targets, function(a, b)
                     return (a.Position - curPos).Magnitude < (b.Position - curPos).Magnitude
@@ -4338,17 +4292,13 @@ task.spawn(function()
                 
                 local nextCandy = table.remove(targets, 1)
                 if nextCandy and nextCandy.Position then
-                    -- บินด้วยความเร็วที่กำหนด (Safe Linear Tween + Auto-Noclip)
-                    local speed = tonumber(CFG.CandyCollectSpeed) or 260
-                    local arrived = SafeFlyTo(nextCandy.Position, speed, 4.0)
-                    
+                    -- เดินตามฟิสิกส์ปกติของตัวเกมบนพื้นพลาซ่า ปลอดภัย 100% ไร้การ Tween/Noclip/แอบแก้ CFrame
+                    local arrived = SafeWalkTo(nextCandy.Position, 3.5)
                     if arrived then
-                        -- หากมี Id ส่งคำสั่งยืนยัน CandyGrab
-                        if nextCandy.Id then
-                            Fire("CandyGrab", nextCandy.Id)
-                            ActiveCandies[nextCandy.Id] = nil
-                        end
-                        Humanizer.Wait(0.08, 0.16)
+                        -- หมายเหตุ: ระบบ CandyStorm.luau ทางการของตัวเกมจะส่ง State.Send("CandyGrab", id) อัตโนมัติเมื่อตัวละครเข้าใกล้ 8 studs
+                        -- การไม่ยิงแพ็กเก็ตซ้ำซ้อนจากภายนอกจะช่วยป้องกัน Error 267 / Duplicate Grab Flag 100%
+                        ActiveCandies[nextCandy.Id] = nil
+                        Humanizer.Wait(0.1, 0.25)
                     end
                 end
                 
@@ -4356,16 +4306,11 @@ task.spawn(function()
                 targets = GetAvailableCandies()
             end
             
-            -- บินกลับจุดยืนเดิมอย่างปลอดภัยเมื่อเก็บหมดรอบ
-            if lastOriginPos then
-                local speed = tonumber(CFG.CandyCollectSpeed) or 260
-                SafeFlyTo(lastOriginPos, speed, 4.0)
-                lastOriginPos = nil
-                task.wait(0.5)
-            end
+            -- 2. เมื่อเก็บแคนดี้หมดรอบ ให้ใช้วาร์ปทางการของเกมกลับบ้าน (Home) อย่างปลอดภัย
+            Fire("Teleport", "Home")
+            Humanizer.Wait(1.2, 1.8)
         else
-            lastOriginPos = nil
-            task.wait(1.0)
+            task.wait(1.5)
         end
     end
 end)
