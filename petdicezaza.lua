@@ -526,6 +526,30 @@ end
 ApplySolidWindowStyle(Window)
 getgenv().PetDiceOldFluent = Fluent
 
+-- ป้องกันหน้าต่างหลุดออกนอกจอ (Auto-Clamp Window to Viewport)
+local function EnsureWindowInViewport(win)
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+        local frame = win and (win.Frame or (win.Root and win.Root.Parent))
+        if frame and frame:IsA("GuiObject") then
+            local w = frame.AbsoluteSize.X > 100 and frame.AbsoluteSize.X or 590
+            local h = frame.AbsoluteSize.Y > 100 and frame.AbsoluteSize.Y or 480
+            local curX = frame.Position.X.Offset
+            local curY = frame.Position.Y.Offset
+            if curX < 0 or curX > (vp.X - 100) or curY < 0 or curY > (vp.Y - 100) then
+                local posX = math.max(20, math.floor((vp.X - w) / 2))
+                local posY = math.max(20, math.floor((vp.Y - h) / 2))
+                frame.Position = UDim2.fromOffset(posX, posY)
+            end
+        end
+    end)
+end
+task.spawn(function()
+    task.wait(0.3)
+    EnsureWindowInViewport(Window)
+end)
+
 local function Notify(title, content, duration)
     pcall(function()
         Fluent:Notify({
