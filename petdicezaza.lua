@@ -1599,10 +1599,6 @@ pcall(function()
 end)
 
 local function GetCurrentTimestamp()
-    if State and type(State.Now) == "function" then
-        local ok, t = pcall(State.Now)
-        if ok and t then return t end
-    end
     local ok, t = pcall(function() return workspace:GetServerTimeNow() end)
     if ok and t then return t end
     return os.time()
@@ -2764,23 +2760,24 @@ local function UpdatePotionStatus()
     pcall(function()
         local data = State.Data
         if not data then return end
-        local now = State.Now and State.Now() or os.time()
+        local now = workspace:GetServerTimeNow()
         local potions = data.Potions or {}
         local ends = data.PotionEnds or {}
         
         local function GetTimeStr(endT)
-            if not endT or endT <= now then return "❌ หมดอายุแล้ว" end
-            local left = math.floor(endT - now)
+            local numEnd = tonumber(endT)
+            if not numEnd or numEnd <= now then return "❌ หมดอายุแล้ว" end
+            local left = math.floor(numEnd - now)
             local mins = math.floor(left / 60)
             local secs = left % 60
             return string.format("✅ เหลืออีก %d:%02d นาที", mins, secs)
         end
         
-        local luckCount = potions.Luck or 0
-        local cashCount = potions.Cash or 0
-        local speedCount = potions.Speed or 0
-        local lootBags = data.LootBags or 0
-        local halloweenBags = (data.SeasonBags and data.SeasonBags.Halloween) or 0
+        local luckCount = tonumber(potions.Luck) or 0
+        local cashCount = tonumber(potions.Cash) or 0
+        local speedCount = tonumber(potions.Speed) or 0
+        local lootBags = tonumber(data.LootBags) or 0
+        local halloweenBags = tonumber(data.SeasonBags and data.SeasonBags.Halloween) or 0
         
         local desc = string.format("🍀 น้ำยาโชคดี: มี %d ขวด | บัฟ: %s\n💰 น้ำยาเงิน: มี %d ขวด | บัฟ: %s\n⚡ น้ำยาความเร็ว: มี %d ขวด | บัฟ: %s\n🎒 ถุงสมบัติ: %d ใบ | 🎃 ถุงฮาโลวีน: %d ใบ",
             luckCount, GetTimeStr(ends.Luck),
@@ -2789,8 +2786,15 @@ local function UpdatePotionStatus()
             lootBags, halloweenBags
         )
         
-        PotionStatusPara:SetTitle("🧪 สถานะน้ำยา & ไอเทมปัจจุบัน")
-        PotionStatusPara:SetDesc(desc)
+        local title = "🧪 สถานะน้ำยา & ไอเทมปัจจุบัน (นับถอยหลังวินาที)"
+        local okT = pcall(function() PotionStatusPara:SetTitle(title) end)
+        if not okT and PotionStatusPara and PotionStatusPara.TitleLabel then
+            pcall(function() PotionStatusPara.TitleLabel.Text = title end)
+        end
+        local okD = pcall(function() PotionStatusPara:SetDesc(desc) end)
+        if not okD and PotionStatusPara and PotionStatusPara.DescLabel then
+            pcall(function() PotionStatusPara.DescLabel.Text = desc end)
+        end
     end)
 end
 
@@ -2799,7 +2803,7 @@ task.spawn(function()
     while true do
         task.wait(1.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        UpdatePotionStatus()
+        pcall(UpdatePotionStatus)
     end
 end)
 
@@ -3154,19 +3158,25 @@ Tabs.Expedition:AddToggle("TogCutscene", {
 Tabs.Halloween:AddSection("🎃 กิจกรรมฮาโลวีน (Halloween Event)")
 
 local function GetHalloweenEntry()
-    local seasonInfo = Season and Season.Halloween and Season.Halloween()
-    if not seasonInfo or not State.Data then return nil end
-    return Season.Entry and Season.Entry(State.Data, seasonInfo.Id), seasonInfo
+    local data = State.Data
+    if not data or not data.Seasons then return nil end
+    if data.Seasons.Halloween2026 then return data.Seasons.Halloween2026 end
+    for k, v in pairs(data.Seasons) do
+        if string.find(tostring(k), "Halloween") then
+            return v
+        end
+    end
+    return nil
 end
 
 local function CanTrickOrTreat()
-    local s = Season and Season.Halloween and Season.Halloween()
-    if not s or not State.Data then return false end
-    local entry = Season.Entry and Season.Entry(State.Data, s.Id)
-    if not entry then return false end
-    local nowDay = Season.TreatDay and Season.TreatDay(State.Now and State.Now() or os.time())
-    if not nowDay then return false end
-    if entry.TreatDay and entry.TreatDay >= nowDay then
+    local data = State.Data
+    if not data then return true end
+    local entry = GetHalloweenEntry()
+    if not entry or not entry.TreatDay then return true end
+    local now = workspace:GetServerTimeNow()
+    local nowDay = math.floor(now / 86400)
+    if entry.TreatDay >= nowDay then
         return false
     end
     return true
@@ -3179,30 +3189,36 @@ local HalloweenStatusPara = Tabs.Halloween:AddParagraph({
 
 local function UpdateHalloweenStatus()
     pcall(function()
-        local entry, sInfo = GetHalloweenEntry()
+        local entry = GetHalloweenEntry()
         local data = State.Data
+        local now = workspace:GetServerTimeNow()
         
         local candy = (entry and entry.Candy) or (data and data.Season and data.Season.Candy) or 0
         local stormCandy = (entry and entry.StormCandy) or 0
         local bags = (data and data.SeasonBags and data.SeasonBags.Halloween) or 0
-        local boughtPulls = (entry and entry.Bought and entry.Bought.LimitedPull) or 0
+        local boughtPulls = (entry and entry.Bought and (entry.Bought.LimitedPull or entry.Bought.HalloweenPull or entry.Bought.SinglePull)) or 0
         local canTreat = CanTrickOrTreat()
         
-        local resetTime = 0
-        pcall(function()
-            if Season and Season.TreatReset then
-                resetTime = Season.TreatReset(GetCurrentTimestamp())
-            end
-        end)
-        local countdown = "ไม่ทราบเวลา"
-        pcall(function()
-            if Season and Season.Countdown and resetTime > 0 then
-                countdown = Season.Countdown(resetTime)
-            end
-        end)
+        local dayNow = math.floor(now / 86400)
+        local resetSeconds = math.max(0, ((dayNow + 1) * 86400) - now)
+        local resetMins = math.floor(resetSeconds / 60)
+        local resetSecs = math.floor(resetSeconds % 60)
+        local countdown = string.format("%d:%02d", resetMins, resetSecs)
         
-        local isStormActive, stormSecLeft = IsCandyStormActive()
-        local secToNext = GetSecondsUntilNextStorm()
+        local isStormActive = PetDice and PetDice:GetAttribute("CandyStorm") == true
+        local stormEnds = PetDice and PetDice:GetAttribute("CandyStormEnds")
+        local stormSecLeft = (stormEnds and stormEnds > now) and (stormEnds - now) or 0
+        
+        local secToNext = 0
+        local stormNext = PetDice and PetDice:GetAttribute("CandyStormNext")
+        if isStormActive then
+            secToNext = 0
+        elseif stormNext and stormNext > now then
+            secToNext = stormNext - now
+        else
+            secToNext = 1200 - (now % 1200)
+        end
+        
         local stormStatusStr = ""
         if isStormActive then
             stormStatusStr = string.format("🚨 พายุกำลังตก! (เหลืออีก %d วิ) 🌪️ วิ่งกวาดลูกอม", math.ceil(stormSecLeft))
@@ -3216,14 +3232,18 @@ local function UpdateHalloweenStatus()
             end
         end
         
-        local treatStatusStr = canTreat and "✅ พร้อมขอขนมฟรี! (เดินไปหาเคานต์พาวคูลาได้เลย)" or ("⏳ ขอของวันนี้แล้ว (รีเซ็ตในอีก " .. tostring(countdown) .. ")")
+        local treatStatusStr = canTreat and "✅ พร้อมขอขนมฟรี! (เดินไปหาเคานต์พาวคูลาได้เลย)" or ("⏳ ขอของวันนี้แล้ว (รีเซ็ตในอีก " .. countdown .. ")")
         local bagStr = bags > 0 and (tostring(bags) .. " ใบ (พร้อมกดเปิดทันที!)") or "0 ใบ"
         
         -- ประสานงานระบบหอคอย & บอสโลก & เก็บลูกอม (Safety 100%)
         local coordStatusStr = ""
         local inBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true) or (IsEnteringBossPortal == true)
-        local inArena = IsTowerInArena()
-        local isTowerRun = IsTowerRunning()
+        local inArena = false
+        local isTowerRun = false
+        pcall(function()
+            if type(IsTowerInArena) == "function" then inArena = IsTowerInArena() end
+            if type(IsTowerRunning) == "function" then isTowerRun = IsTowerRunning() end
+        end)
         
         if inBoss then
             coordStatusStr = "⚔️ กำลังต่อสู้กับบอสโลก (พักหอคอย & พักเก็บลูกอมชั่วคราวเพื่อความปลอดภัย 100%)"
@@ -3241,7 +3261,8 @@ local function UpdateHalloweenStatus()
             coordStatusStr = "💤 สแตนด์บายที่บ้าน (พร้อมเริ่มหอคอยรอบใหม่ & เก็บแคนดี้เมื่อพายุมา)"
         end
         
-        local title = string.format("🎃 อีเวนต์ฮาโลวีน | 🍬 ลูกอม: %s | 🎒 กระเป๋า: %d ใบ", Format and Format.Commas and Format.Commas(candy) or tostring(candy), bags)
+        local candyStr = (Format and Format.Commas and Format.Commas(candy)) or tostring(candy)
+        local title = string.format("🎃 อีเวนต์ฮาโลวีน | 🍬 ลูกอม: %s | 🎒 กระเป๋า: %d ใบ", candyStr, bags)
         local desc = string.format(
             "🍬 ยอดลูกอมปัจจุบัน: %s ลูก (ซื้อกระเป๋าใช้ 270 | ซื้อตั๋วใช้ 800)\n" ..
             "🎒 กระเป๋าฮาโลวีนในตัว: %s\n" ..
@@ -3249,7 +3270,7 @@ local function UpdateHalloweenStatus()
             "🧛 สิทธิ์ขอขนมฟรี: %s\n" ..
             "🎟️ โควต้า Limited Pull: %d/5 ครั้ง\n" ..
             "⚡ ประสานงานระบบ: %s",
-            Format and Format.Commas and Format.Commas(candy) or tostring(candy),
+            candyStr,
             bagStr,
             stormStatusStr,
             stormCandy,
@@ -3257,17 +3278,24 @@ local function UpdateHalloweenStatus()
             boughtPulls,
             coordStatusStr
         )
-        HalloweenStatusPara:SetTitle(title)
-        HalloweenStatusPara:SetDesc(desc)
+        
+        local okTitle = pcall(function() HalloweenStatusPara:SetTitle(title) end)
+        if not okTitle and HalloweenStatusPara and HalloweenStatusPara.TitleLabel then
+            pcall(function() HalloweenStatusPara.TitleLabel.Text = title end)
+        end
+        local okDesc = pcall(function() HalloweenStatusPara:SetDesc(desc) end)
+        if not okDesc and HalloweenStatusPara and HalloweenStatusPara.DescLabel then
+            pcall(function() HalloweenStatusPara.DescLabel.Text = desc end)
+        end
     end)
 end
 
--- อัปเดตสถานะแบบเรียลไทม์ทุก 1 วินาทีอย่างราบรื่น (Smooth 1.0s Interval Engine ป้องกันกระตุก 100%)
+task.spawn(UpdateHalloweenStatus)
 task.spawn(function()
     while true do
+        task.wait(1.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         pcall(UpdateHalloweenStatus)
-        task.wait(1.0)
     end
 end)
 
@@ -4078,6 +4106,11 @@ pcall(function()
                     UpdatePotionStatus()
                 end
                 
+                -- อัปเดตสถานะฮาโลวีนทันทีเมื่อลูกอม กระเป๋า หรือข้อมูลซีซั่นเปลี่ยน
+                if UpdateHalloweenStatus and (syncData.Full or syncData.Season or syncData.Seasons or syncData.SeasonBags) then
+                    UpdateHalloweenStatus()
+                end
+                
                 -- สวมใส่สัตว์เลี้ยงที่ดีที่สุดทันทีแบบเรียลไทม์ เมื่อได้รับสัตว์เลี้ยงใหม่หรือสัตว์เลี้ยงเปลี่ยน
                 if CFG.AutoEquipBest and (syncData.Full or syncData.Pets or syncData.PetAdds or syncData.PetDels) then
                     local now = tick()
@@ -4105,6 +4138,18 @@ pcall(function()
         if getgenv().PetDiceScriptToken ~= scriptToken then return end
         if UpdateTowerStatus then task.delay(0.2, UpdateTowerStatus) end
     end)
+    
+    local PetDice = RS:FindFirstChild("PetDice")
+    if PetDice then
+        PetDice:GetAttributeChangedSignal("CandyStorm"):Connect(function()
+            if getgenv().PetDiceScriptToken ~= scriptToken then return end
+            if UpdateHalloweenStatus then task.delay(0.1, UpdateHalloweenStatus) end
+        end)
+        PetDice:GetAttributeChangedSignal("CandyStormEnds"):Connect(function()
+            if getgenv().PetDiceScriptToken ~= scriptToken then return end
+            if UpdateHalloweenStatus then task.delay(0.1, UpdateHalloweenStatus) end
+        end)
+    end
 end)
 
 -- ==============================================================================
