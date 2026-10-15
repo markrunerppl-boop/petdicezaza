@@ -1003,6 +1003,103 @@ local LiveTower = {
     LastEventTime = 0
 }
 
+local IsEnteringBossPortal = false
+
+-- ดึงรายชื่อหอคอยทั้งหมด 1-7 จากตัวเกมจริง
+local elemThai = {
+    Nature = "พืช/ธรรมชาติ",
+    Fire = "ไฟ",
+    Water = "น้ำ",
+    Ice = "น้ำแข็ง",
+    Electric = "สายฟ้า",
+    Cosmic = "คอสมิก"
+}
+local dynamicTowerOptions = {}
+local towerIdByOption = {}
+local defaultTowerOpt = "ด่าน 7: INFINITY TOWER (ไร้สิ้นสุด) [Infinity]"
+
+if Towers and Towers.List then
+    for i, t in ipairs(Towers.List) do
+        local elemName = t.Element and (elemThai[t.Element] or tostring(t.Element)) or "ไร้สิ้นสุด"
+        local optName = string.format("ด่าน %d: %s (%s) [%s]", t.Index or i, t.Name, elemName, t.Id)
+        table.insert(dynamicTowerOptions, optName)
+        towerIdByOption[optName] = t.Id
+        if t.Id == "Infinity" then
+            defaultTowerOpt = optName
+        end
+    end
+end
+if #dynamicTowerOptions == 0 then
+    defaultTowerOpt = "ด่าน 7: INFINITY TOWER (ไร้สิ้นสุด) [Infinity]"
+    dynamicTowerOptions = { defaultTowerOpt }
+    towerIdByOption[defaultTowerOpt] = "Infinity"
+end
+
+local currentRotationIndex = 1
+
+local function GetSelectedTowerIds()
+    local selected = CFG.SelectedTowers
+    local ids = {}
+    if typeof(selected) == "table" then
+        for opt, val in pairs(selected) do
+            if val == true then
+                local id = towerIdByOption[opt]
+                if not id and typeof(opt) == "string" then
+                    id = opt:match("%[([%w_]+)%]")
+                    if not id then
+                        for _, t in ipairs(Towers.List or {}) do
+                            if opt:find(t.Id) or opt:find(t.Name) then
+                                id = t.Id
+                                break
+                            end
+                        end
+                    end
+                end
+                if id and not table.find(ids, id) then
+                    table.insert(ids, id)
+                end
+            end
+        end
+    end
+    if #ids == 0 then
+        local singleId = CFG.SelectedTower or "Infinity"
+        table.insert(ids, singleId)
+    end
+    -- จัดเรียงลำดับ ids ตามลำดับด่าน 1-7 (Meadow -> Ember -> Coral -> Frost -> Storm -> Shadow -> Infinity)
+    local orderedIds = {}
+    if Towers and Towers.List then
+        for _, t in ipairs(Towers.List) do
+            if table.find(ids, t.Id) then
+                table.insert(orderedIds, t.Id)
+            end
+        end
+    end
+    return (#orderedIds > 0) and orderedIds or ids
+end
+
+local function GetCurrentOrNextTowerId(advance)
+    local ids = GetSelectedTowerIds()
+    if #ids == 0 then return "Infinity" end
+    
+    if not CFG.TowerLoopMode or #ids == 1 then
+        currentRotationIndex = 1
+        return ids[1]
+    end
+    
+    if advance then
+        currentRotationIndex = currentRotationIndex + 1
+        if currentRotationIndex > #ids then
+            currentRotationIndex = 1
+        end
+    end
+    
+    if currentRotationIndex < 1 or currentRotationIndex > #ids then
+        currentRotationIndex = 1
+    end
+    
+    return ids[currentRotationIndex]
+end
+
 pcall(function()
     local BattleRemote = PetDice:WaitForChild("Remotes"):WaitForChild("Battle")
     BattleRemote.OnClientEvent:Connect(function(action, payload)
@@ -1012,6 +1109,15 @@ pcall(function()
             LiveTower.Floor = tonumber(payload.Floor) or LiveTower.Floor
             LiveTower.Away = payload.Away == true
             LiveTower.InArena = not payload.Away
+            LiveTower.LastEventTime = tick()
+        elseif action == "Away" and typeof(payload) == "table" then
+            if payload.Away then
+                LiveTower.Away = true
+                LiveTower.InArena = false
+            else
+                LiveTower.InArena = true
+                LiveTower.Away = false
+            end
             LiveTower.LastEventTime = tick()
         elseif action == "Clear" and typeof(payload) == "table" then
             LiveTower.Active = true
@@ -1060,7 +1166,7 @@ local function SyncLiveTowerFromGame()
             if lbl:IsA("TextLabel") and lbl.Text ~= "" then
                 local txt = lbl.Text:upper()
                 for _, t in ipairs(Towers.List or {}) do
-                    if txt:find(t.Name:upper()) then
+                    if txt:find(t.Name:upper(), 1, true) or (t.Id and txt:find(t.Id:upper(), 1, true)) then
                         LiveTower.TowerId = t.Id
                         break
                     end
@@ -1070,6 +1176,9 @@ local function SyncLiveTowerFromGame()
                     LiveTower.Floor = tonumber(f) or LiveTower.Floor
                 end
             end
+        end
+        if not LiveTower.TowerId then
+            LiveTower.TowerId = GetCurrentOrNextTowerId(false) or "Infinity"
         end
     else
         -- หากทั้ง TowerTracker และ Battle มองไม่เห็น แสดงว่าตัวละครไม่ได้อยู่ในหอคอย
@@ -1082,15 +1191,15 @@ end
 
 local function GetActiveTowerId()
     SyncLiveTowerFromGame()
-    if LiveTower.Active and LiveTower.TowerId then
-        return LiveTower.TowerId
+    if LiveTower.Active then
+        return LiveTower.TowerId or GetCurrentOrNextTowerId(false) or "Infinity"
     end
     return nil
 end
 
 local function IsTowerRunning()
     SyncLiveTowerFromGame()
-    return LiveTower.Active == true and LiveTower.TowerId ~= nil
+    return LiveTower.Active == true
 end
 
 local function IsTowerInArena()
@@ -1116,135 +1225,77 @@ local BossStatusPara = Tabs.Tower:AddParagraph({
     Content = "กำลังตรวจสอบกำหนดการและระดับของบอสโลก..."
 })
 
--- ดึงรายชื่อหอคอยทั้งหมดจากตัวเกมจริง
-local dynamicTowerOptions = {}
-local towerIdByOption = {}
-local defaultTowerOpt = "7. INFINITY TOWER (Endless) [Infinity]"
-
-if Towers and Towers.List then
-    for _, t in ipairs(Towers.List) do
-        local elemStr = t.Element and (" (" .. tostring(t.Element) .. ")") or " (Endless)"
-        local optName = string.format("%d. %s%s [%s]", t.Index or 0, t.Name, elemStr, t.Id)
-        table.insert(dynamicTowerOptions, optName)
-        towerIdByOption[optName] = t.Id
-        if t.Id == "Infinity" then
-            defaultTowerOpt = optName
+local function SafeWalkToBossPortal()
+    IsEnteringBossPortal = true
+    local ok, res = pcall(function()
+        local char = LocalPlayer.Character or Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not char or not hum or not hrp or hum.Health <= 0 then return false end
+        
+        local portalModel = workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")
+        local promptSpot = portalModel and portalModel:FindFirstChild("PromptSpot")
+        local targetPos = promptSpot and promptSpot.Position or Vector3.new(0, 20.43, -298)
+        
+        -- หากตัวละครอยู่ไกลเกิน 45 studs ใช้ระบบการเดินทางอย่างเป็นทางการของตัวเกม (Teleport: Portal)
+        -- ซึ่งเซิร์ฟเวอร์ตัวเกมจะนำพาตัวละครมาส่งที่หน้าบันไดพิกัด (0, 5.35, -254) อย่างถูกต้อง 100% ไร้การปรับแต่ง CFrame
+        if (hrp.Position - targetPos).Magnitude > 45 then
+            Humanizer.Wait(0.5, 1.0)
+            Fire("Teleport", "Portal")
+            
+            local t0 = tick()
+            while tick() - t0 < 3.5 do
+                task.wait(0.1)
+                char = LocalPlayer.Character or Character
+                hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp and (hrp.Position - Vector3.new(0, 5.35, -254)).Magnitude < 15 then
+                    break
+                end
+            end
+            -- หน่วงเวลาพักหลังลงจอด เลียนแบบผู้เล่นจริง
+            Humanizer.Wait(0.5, 0.9)
         end
-    end
-end
-if #dynamicTowerOptions == 0 then
-    dynamicTowerOptions = {"7. INFINITY TOWER (Endless) [Infinity]"}
-    towerIdByOption["7. INFINITY TOWER (Endless) [Infinity]"] = "Infinity"
-end
-
-local currentRotationIndex = 1
-
-local function GetSelectedTowerIds()
-    local selected = CFG.SelectedTowers
-    local ids = {}
-    if typeof(selected) == "table" then
-        for _, opt in ipairs(dynamicTowerOptions) do
-            if selected[opt] == true then
-                local id = towerIdByOption[opt]
-                if id then
-                    table.insert(ids, id)
+        
+        char = LocalPlayer.Character or Character
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp then return false end
+        
+        -- เดินก้าวขึ้นบันไดตามความชันจริงด้วย Humanoid:MoveTo ไปยังแท่นชานชาลา TopTile (0, 20.43, -288)
+        if (hrp.Position - Vector3.new(0, 20.43, -288)).Magnitude > 6 then
+            hum:MoveTo(Vector3.new(0, 20.43, -288))
+            local walkStart = tick()
+            while tick() - walkStart < 3.0 do
+                task.wait(0.05)
+                if not hum or not hrp then break end
+                if (hrp.Position - Vector3.new(0, 20.43, -288)).Magnitude <= 5 then
+                    break
                 end
             end
         end
-    end
-    if #ids == 0 then
-        local singleId = CFG.SelectedTower or "Infinity"
-        table.insert(ids, singleId)
-    end
-    return ids
-end
-
-local function GetCurrentOrNextTowerId(advance)
-    local ids = GetSelectedTowerIds()
-    if #ids == 0 then return "Infinity" end
-    
-    if not CFG.TowerLoopMode or #ids == 1 then
-        currentRotationIndex = 1
-        return ids[1]
-    end
-    
-    if advance then
-        currentRotationIndex = (currentRotationIndex % #ids) + 1
-    end
-    
-    if currentRotationIndex < 1 or currentRotationIndex > #ids then
-        currentRotationIndex = 1
-    end
-    
-    return ids[currentRotationIndex]
-end
-
-local function SafeWalkToBossPortal()
-    local char = LocalPlayer.Character or Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not char or not hum or not hrp or hum.Health <= 0 then return false end
-    
-    local portalModel = workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")
-    local promptSpot = portalModel and portalModel:FindFirstChild("PromptSpot")
-    local targetPos = promptSpot and promptSpot.Position or Vector3.new(0, 20.43, -298)
-    
-    -- หากตัวละครอยู่ไกลเกิน 45 studs ใช้ระบบการเดินทางอย่างเป็นทางการของตัวเกม (Teleport: Portal)
-    -- ซึ่งเซิร์ฟเวอร์ตัวเกมจะนำพาตัวละครมาส่งที่หน้าบันไดพิกัด (0, 5.35, -254) อย่างถูกต้อง 100% ไร้การปรับแต่ง CFrame
-    if (hrp.Position - targetPos).Magnitude > 45 then
-        Humanizer.Wait(0.5, 1.0)
-        Fire("Teleport", "Portal")
         
-        local t0 = tick()
-        while tick() - t0 < 3.5 do
-            task.wait(0.1)
-            char = LocalPlayer.Character or Character
-            hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if hrp and (hrp.Position - Vector3.new(0, 5.35, -254)).Magnitude < 15 then
-                break
+        -- เดินก้าวเท้าเข้าสู่โซนประตู JoinZone / Prompt (0, 20.43, -298) อย่างเป็นธรรมชาติ
+        if hum and hrp then
+            hum:MoveTo(targetPos)
+            local walkStart = tick()
+            while tick() - walkStart < 2.0 do
+                task.wait(0.05)
+                if not hum or not hrp then break end
+                if (hrp.Position - targetPos).Magnitude <= 5 then
+                    break
+                end
             end
         end
-        -- หน่วงเวลาพักหลังลงจอด เลียนแบบผู้เล่นจริง
-        Humanizer.Wait(0.5, 0.9)
-    end
-    
-    char = LocalPlayer.Character or Character
-    hum = char and char:FindFirstChildOfClass("Humanoid")
-    hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hum or not hrp then return false end
-    
-    -- เดินก้าวขึ้นบันไดตามความชันจริงด้วย Humanoid:MoveTo ไปยังแท่นชานชาลา TopTile (0, 20.43, -288)
-    if (hrp.Position - Vector3.new(0, 20.43, -288)).Magnitude > 6 then
-        hum:MoveTo(Vector3.new(0, 20.43, -288))
-        local walkStart = tick()
-        while tick() - walkStart < 3.0 do
-            task.wait(0.05)
-            if not hum or not hrp then break end
-            if (hrp.Position - Vector3.new(0, 20.43, -288)).Magnitude <= 5 then
-                break
-            end
-        end
-    end
-    
-    -- เดินก้าวเท้าเข้าสู่โซนประตู JoinZone / Prompt (0, 20.43, -298) อย่างเป็นธรรมชาติ
-    if hum and hrp then
-        hum:MoveTo(targetPos)
-        local walkStart = tick()
-        while tick() - walkStart < 2.0 do
-            task.wait(0.05)
-            if not hum or not hrp then break end
-            if (hrp.Position - targetPos).Magnitude <= 5 then
-                break
-            end
-        end
-    end
-    
-    return true
+        
+        return true
+    end)
+    IsEnteringBossPortal = false
+    return ok and res
 end
 
 local lastTowerStartTick = 0
 
-local function SwitchOrStartTower(targetTowerId)
+local function SwitchOrStartTower(targetTowerId, force)
     if IsInTrade() or getgenv().TradeActiveSession then
         return false
     end
@@ -1255,7 +1306,7 @@ local function SwitchOrStartTower(targetTowerId)
     end
     
     local nowTick = tick()
-    if nowTick - lastTowerStartTick < 5.0 then
+    if not force and (nowTick - lastTowerStartTick < 3.5) then
         return false
     end
     
@@ -1266,10 +1317,9 @@ local function SwitchOrStartTower(targetTowerId)
         return false 
     end
     
-    local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
     local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-    if CFG.PauseTowerForBoss and (wbState == "Joining" or wbState == "Fighting" or isJoined) then
-        Notify("⚔️ บอสโลก", "ขณะนี้กำลังสู้บอสโลก ระบบจะเริ่มลง " .. towerDef.Name .. " ทันทีที่บอสโลกจบลง", 3)
+    if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
+        Notify("⚔️ บอสโลก", "ขณะนี้อยู่ในห้องบอสโลก ระบบจะเริ่มลง " .. towerDef.Name .. " ทันทีที่ออกจากบอส", 3)
         return false
     end
     
@@ -1305,7 +1355,7 @@ local function SwitchOrStartTower(targetTowerId)
 end
 
 local function StartSelectedTower()
-    SwitchOrStartTower(GetCurrentOrNextTowerId(false))
+    SwitchOrStartTower(GetCurrentOrNextTowerId(false), true)
 end
 
 local function UpdateTowerStatus()
@@ -1334,7 +1384,7 @@ local function UpdateTowerStatus()
         local isPlayerIn = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         
         local statusText
-        if CFG.PauseTowerForBoss and (wbState == "Joining" or wbState == "Fighting" or isPlayerIn) then
+        if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isPlayerIn or IsEnteringBossPortal == true) then
             statusText = "⏸️ พักหอคอยชั่วคราว (กำลังร่วมศึกบอสโลก — จะลงต่อทันทีที่บอสจบ)"
         elseif isRunning then
             local modeStr = inArena and "ในอารีน่า (Arena)" or "โหมดเบื้องหลัง (Away)"
@@ -1425,8 +1475,46 @@ end)
 
 Tabs.Tower:AddSection("🏰 ระบบฟาร์มหอคอย (Tower Progression & Auto Farm)")
 
-local DropdownTower = Tabs.Tower:AddDropdown("DropSelectTower", {
-    Title = "เลือกหอคอยที่ต้องการลง (เลือกหลายหอคอยเพื่อลงวนลูป)",
+local DropdownTower
+local TogTowerLoopMode
+
+Tabs.Tower:AddButton({
+    Title = "🎯 เลือกลงวนลูปหอคอย 1-7 ทั้งหมด (Select All 1-7 Loop)",
+    Description = "เลือกหอคอยทุกด่าน (ด่าน 1 ถึง 7) เพื่อให้บอทลงวนลูปสลับกันอย่างต่อเนื่องแบบเรียลไทม์",
+    Callback = function()
+        local allSelected = {}
+        for _, opt in ipairs(dynamicTowerOptions) do
+            allSelected[opt] = true
+        end
+        if DropdownTower and DropdownTower.SetValue then
+            pcall(function() DropdownTower:SetValue(allSelected) end)
+        end
+        UpdateCFG("SelectedTowers", allSelected)
+        UpdateCFG("TowerLoopMode", true)
+        if TogTowerLoopMode and TogTowerLoopMode.SetValue then
+            pcall(function() TogTowerLoopMode:SetValue(true) end)
+        end
+        Notify("🎯 หอคอย", "เลือกหอคอยด่าน 1-7 ทั้งหมดเรียบร้อย! (โหมดวนลูปเปิดทำงาน)", 3)
+        task.delay(0.2, UpdateTowerStatus)
+    end
+})
+
+Tabs.Tower:AddButton({
+    Title = "🎯 เลือกลงเฉพาะหอคอย Infinity ด่าน 7 (Infinity Only)",
+    Description = "เลือกเฉพาะหอคอย Infinity ด่าน 7 เหมาะสำหรับการฟาร์มของและ Infinity Bags ต่อเนื่อง",
+    Callback = function()
+        local infSelected = { [defaultTowerOpt] = true }
+        if DropdownTower and DropdownTower.SetValue then
+            pcall(function() DropdownTower:SetValue(infSelected) end)
+        end
+        UpdateCFG("SelectedTowers", infSelected)
+        Notify("🎯 หอคอย", "เลือกเฉพาะหอคอย Infinity ด่าน 7 เรียบร้อย!", 3)
+        task.delay(0.2, UpdateTowerStatus)
+    end
+})
+
+DropdownTower = Tabs.Tower:AddDropdown("DropSelectTower", {
+    Title = "เลือกหอคอยที่ต้องการลง (เลือกหลายหอคอยเพื่อลงวนลูป 1-7)",
     Description = "ติ๊กถูกหอคอยที่ต้องการให้บอทลงวนลูปสลับกันตามลำดับ (ดึงข้อมูลระดับทั้งหมดจากเกม)",
     Values = dynamicTowerOptions,
     Default = CFG.SelectedTowers or { [defaultTowerOpt] = true },
@@ -1442,7 +1530,7 @@ local DropdownTower = Tabs.Tower:AddDropdown("DropSelectTower", {
     end
 })
 
-Tabs.Tower:AddToggle("TogTowerLoopMode", {
+TogTowerLoopMode = Tabs.Tower:AddToggle("TogTowerLoopMode", {
     Title = "🔄 โหมดวนลูปตามรายการที่เลือก (Tower Playlist Loop)",
     Description = "เมื่อลงหอคอยหนึ่งจบ จะสลับไปลงหอคอยถัดไปในรายการที่เลือกโดยอัตโนมัติ",
     Default = CFG.TowerLoopMode ~= false,
@@ -1457,7 +1545,7 @@ Tabs.Tower:AddButton({
     Description = "ข้ามหอคอยปัจจุบันและเริ่มลงหอคอยลำดับถัดไปในคิวทันที",
     Callback = function()
         local nextId = GetCurrentOrNextTowerId(true)
-        SwitchOrStartTower(nextId)
+        SwitchOrStartTower(nextId, true)
         Notify("⏭️ หอคอย", "ข้ามไปยังหอคอย: " .. tostring(nextId), 3)
         task.delay(0.2, UpdateTowerStatus)
     end
@@ -1472,10 +1560,9 @@ Tabs.Tower:AddToggle("TogTower", {
             task.spawn(function()
                 Fire("SetSetting", "TowerAutoplay", true)
                 
-                local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
                 local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-                if CFG.PauseTowerForBoss and (wbState == "Joining" or wbState == "Fighting" or isJoined) then
-                    Notify("🏰 หอคอย", "เปิดระบบฟาร์มหอคอยแล้ว! (ขณะนี้อยู่ในช่วงบอสโลก จะเริ่มลงหอคอยอัตโนมัติทันทีที่บอสจบ)", 4)
+                if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
+                    Notify("🏰 หอคอย", "เปิดระบบฟาร์มหอคอยแล้ว! (ขณะนี้อยู่ในห้องบอสโลก จะเริ่มลงหอคอยอัตโนมัติทันทีที่ออกจากบอส)", 4)
                     task.delay(0.2, UpdateTowerStatus)
                     return
                 end
@@ -1485,11 +1572,11 @@ Tabs.Tower:AddToggle("TogTower", {
                 local targetId = GetCurrentOrNextTowerId(false)
                 
                 if not isRunning then
-                    SwitchOrStartTower(targetId)
+                    SwitchOrStartTower(targetId, true)
                 else
                     local selectedIds = GetSelectedTowerIds()
                     if activeId and #selectedIds > 0 and not table.find(selectedIds, activeId) then
-                        SwitchOrStartTower(targetId)
+                        SwitchOrStartTower(targetId, true)
                     else
                         if CFG.AutoExitArena and IsTowerInArena() then
                             Fire("TowerExit")
@@ -2932,31 +3019,20 @@ task.spawn(function()
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
-        if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
         
-        -- ตรวจสอบเงื่อนไข World Boss: หากตั้งค่าให้พักหอคอยเพื่อตีบอส
-        local wbState = ReplicatedStorage:GetAttribute("WorldBossState")
+        local char = LocalPlayer.Character or Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not char or not hum or hum.Health <= 0 then task.wait(1.5) continue end
+        
+        -- ตรวจสอบเงื่อนไข World Boss: พักหอคอยเฉพาะตอนที่ตัวละครอยู่ในบอสโลกจริง หรือกำลังเดินทางเข้าประตูบอส
         local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        
-        if CFG.PauseTowerForBoss and (CFG.AutoWorldBoss or isJoined) then
-            local timeToJoin = 999
-            if ScheduleConfig and ScheduleConfig.WorldBoss then
-                local now = workspace:GetServerTimeNow()
-                local wb = ScheduleConfig.WorldBoss
-                local nextIdx = ScheduleConfig.Index(wb, now) + 1
-                local nextStart = ScheduleConfig.StartOf(wb, nextIdx)
-                local joinSec = WorldBossConfig and WorldBossConfig.JoinSeconds or 45
-                timeToJoin = (nextStart - joinSec) - now
+        if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
+            if IsTowerRunning() then
+                Fire("TowerLeave")
+                Humanizer.Wait(1.0, 1.5)
             end
-            
-            if wbState == "Joining" or wbState == "Fighting" or (timeToJoin > 0 and timeToJoin <= 15) then
-                if IsTowerRunning() then
-                    Fire("TowerLeave")
-                    Humanizer.Wait(1.0, 1.8)
-                end
-                task.wait(2.5)
-                continue
-            end
+            task.wait(2.0)
+            continue
         end
         
         if CFG.Tower then
@@ -3045,7 +3121,7 @@ task.spawn(function()
             if CFG.Tower then
                 task.spawn(function()
                     local targetId = GetCurrentOrNextTowerId(false)
-                    SwitchOrStartTower(targetId)
+                    SwitchOrStartTower(targetId, true)
                 end)
             end
         end
