@@ -383,6 +383,7 @@ local defaultCFG = {
     SelectedTowers = { ["7. INFINITY TOWER (Endless) [Infinity]"] = true },
     TowerLoopMode = true,
     TowerRestartDelay = 3,
+    TowerMaxStagesPerRun = 25,
     AutoWorldBoss = false,
     WorldBossElementFilter = "[ ตีทุกธาตุ (All Elements) ]",
     WorldBossDifficultyFilter = "[ ตีทุกระดับ (All Difficulties) ]",
@@ -1095,6 +1096,8 @@ if #dynamicTowerOptions == 0 then
     towerIdByOption[defaultTowerOpt] = "Infinity"
 end
 
+local SwitchOrStartTower
+local isSwitchingTower = false
 local currentRotationIndex = 1
 
 local function GetSelectedTowerIds()
@@ -1102,13 +1105,14 @@ local function GetSelectedTowerIds()
     local ids = {}
     if typeof(selected) == "table" then
         for opt, val in pairs(selected) do
-            if val == true then
-                local id = towerIdByOption[opt]
-                if not id and typeof(opt) == "string" then
-                    id = opt:match("%[([%w_]+)%]")
+            if val == true or typeof(val) == "string" then
+                local searchKey = (val == true) and opt or val
+                local id = towerIdByOption[searchKey]
+                if not id and typeof(searchKey) == "string" then
+                    id = searchKey:match("%[([%w_]+)%]")
                     if not id then
                         for _, t in ipairs(Towers.List or {}) do
-                            if opt:find(t.Id) or opt:find(t.Name) then
+                            if searchKey:find(t.Id) or searchKey:find(t.Name) then
                                 id = t.Id
                                 break
                             end
@@ -1143,7 +1147,7 @@ local function GetCurrentOrNextTowerId(advance)
     
     if not CFG.TowerLoopMode or #ids == 1 then
         currentRotationIndex = 1
-        return ids[1]
+        return CFG.SelectedTower or ids[1]
     end
     
     if advance then
@@ -1157,7 +1161,9 @@ local function GetCurrentOrNextTowerId(advance)
         currentRotationIndex = 1
     end
     
-    return ids[currentRotationIndex]
+    local targetId = ids[currentRotationIndex]
+    CFG.SelectedTower = targetId
+    return targetId
 end
 
 pcall(function()
@@ -1198,6 +1204,19 @@ pcall(function()
             LiveTower.InArena = false
             LiveTower.Away = false
             LiveTower.LastEventTime = tick()
+            
+            -- เมื่อหอคอยจบรอบ (ชนะ/แพ้/หมดเวลา) และอยู่ในโหมดวนลูป 1-7 ให้สลับไปหอคอยถัดไปทันที
+            if CFG.Tower and CFG.TowerLoopMode then
+                local selectedIds = GetSelectedTowerIds()
+                if #selectedIds > 1 and SwitchOrStartTower then
+                    task.spawn(function()
+                        task.wait(1.5)
+                        if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.Tower then return end
+                        local nextId = GetCurrentOrNextTowerId(true)
+                        SwitchOrStartTower(nextId, true)
+                    end)
+                end
+            end
         elseif action == "Stopped" or action == "Paused" then
             LiveTower.Active = false
             LiveTower.TowerId = nil
@@ -1360,8 +1379,11 @@ end
 
 local lastTowerStartTick = 0
 
-local function SwitchOrStartTower(targetTowerId, force)
+SwitchOrStartTower = function(targetTowerId, force)
     if IsInTrade() or getgenv().TradeActiveSession then
+        return false
+    end
+    if isSwitchingTower and not force then
         return false
     end
     local data = State.Data
@@ -1371,11 +1393,11 @@ local function SwitchOrStartTower(targetTowerId, force)
     end
     
     local nowTick = tick()
-    if not force and (nowTick - lastTowerStartTick < 3.5) then
+    if not force and (nowTick - lastTowerStartTick < 3.0) then
         return false
     end
     
-    targetTowerId = targetTowerId or GetCurrentOrNextTowerId(false)
+    targetTowerId = targetTowerId or CFG.SelectedTower or GetCurrentOrNextTowerId(false)
     local towerDef = (Towers.ById and Towers.ById[targetTowerId]) or (Towers.List and Towers.List[1])
     if not towerDef then 
         Notify("⚠️ ข้อผิดพลาด", "ไม่พบข้อมูลหอคอย: " .. tostring(targetTowerId), 3)
@@ -1388,39 +1410,56 @@ local function SwitchOrStartTower(targetTowerId, force)
         return false
     end
     
-    local activeTower = GetActiveTowerId()
-    if activeTower and activeTower ~= targetTowerId then
-        local oldDef = Towers.ById and Towers.ById[activeTower]
-        local oldName = oldDef and oldDef.Name or activeTower
-        Notify("🏰 หอคอย", "กำลังเปลี่ยนจากหอคอย " .. tostring(oldName) .. " เป็น " .. tostring(towerDef.Name) .. "...", 3)
-        Fire("TowerLeave")
-        Humanizer.Wait(1.5, 2.2)
-    end
+    isSwitchingTower = true
+    lastTowerStartTick = nowTick
     
-    local teamSize = Towers.TeamSizeFor(data)
-    local team = TeamPairs.Best(data, towerDef, teamSize)
-    if #team > 0 then
-        lastTowerStartTick = nowTick
-        Fire("SetSetting", "TowerAutoplay", true)
-        Fire("TowerStart", towerDef.Id, team)
-        Notify("🏰 หอคอย", "เริ่มลง " .. towerDef.Name .. " เรียบร้อย!", 3)
-        if CFG.AutoExitArena then
-            task.delay(2.0, function() 
-                if IsTowerInArena() then
-                    Fire("TowerExit") 
-                end
-            end)
+    local ok, res = pcall(function()
+        local activeTower = GetActiveTowerId()
+        if activeTower and activeTower ~= targetTowerId then
+            local oldDef = Towers.ById and Towers.ById[activeTower]
+            local oldName = oldDef and oldDef.Name or activeTower
+            Notify("🏰 หอคอย", "กำลังเปลี่ยนจากหอคอย " .. tostring(oldName) .. " เป็น " .. tostring(towerDef.Name) .. "...", 3)
+            Fire("TowerLeave")
+            
+            -- รอให้ระบบออกจากหอคอยเดิมอย่างปลอดภัย
+            local leaveWait = tick()
+            while tick() - leaveWait < 2.5 do
+                task.wait(0.1)
+                if not IsTowerRunning() then break end
+            end
+            Humanizer.Wait(0.4, 0.8)
         end
-        task.delay(0.5, UpdateTowerStatus)
-        return true
-    else
-        Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
-        return false
-    end
+        
+        local teamSize = Towers.TeamSizeFor(data)
+        local team = TeamPairs.Best(data, towerDef, teamSize)
+        if #team > 0 then
+            Fire("SetSetting", "TowerAutoplay", true)
+            Fire("TowerStart", towerDef.Id, team)
+            LiveTower.Active = true
+            LiveTower.TowerId = towerDef.Id
+            LiveTower.LastEventTime = tick()
+            Notify("🏰 หอคอย", "เริ่มลง " .. towerDef.Name .. " เรียบร้อย!", 3)
+            if CFG.AutoExitArena then
+                task.delay(1.5, function() 
+                    if IsTowerInArena() then
+                        Fire("TowerExit") 
+                    end
+                end)
+            end
+            task.delay(0.5, UpdateTowerStatus)
+            return true
+        else
+            Notify("⚠️ ไม่มีสัตว์เลี้ยง", "กรุณาสุ่มสัตว์เลี้ยงก่อนลงหอคอย", 3)
+            return false
+        end
+    end)
+    isSwitchingTower = false
+    return ok and res
 end
 
 local function StartSelectedTower()
-    SwitchOrStartTower(GetCurrentOrNextTowerId(false), true)
+    local targetId = CFG.SelectedTower or GetCurrentOrNextTowerId(false)
+    SwitchOrStartTower(targetId, true)
 end
 
 local function UpdateTowerStatus()
@@ -1556,11 +1595,21 @@ Tabs.Tower:AddButton({
         end
         UpdateCFG("SelectedTowers", allSelected)
         UpdateCFG("TowerLoopMode", true)
+        currentRotationIndex = 1
+        local ids = GetSelectedTowerIds()
+        if #ids > 0 then
+            UpdateCFG("SelectedTower", ids[1])
+        end
         if TogTowerLoopMode and TogTowerLoopMode.SetValue then
             pcall(function() TogTowerLoopMode:SetValue(true) end)
         end
         Notify("🎯 หอคอย", "เลือกหอคอยด่าน 1-7 ทั้งหมดเรียบร้อย! (โหมดวนลูปเปิดทำงาน)", 3)
         task.delay(0.2, UpdateTowerStatus)
+        if CFG.Tower and #ids > 0 then
+            task.spawn(function()
+                SwitchOrStartTower(ids[1], true)
+            end)
+        end
     end
 })
 
@@ -1573,8 +1622,15 @@ Tabs.Tower:AddButton({
             pcall(function() DropdownTower:SetValue(infSelected) end)
         end
         UpdateCFG("SelectedTowers", infSelected)
+        UpdateCFG("SelectedTower", "Infinity")
+        currentRotationIndex = 1
         Notify("🎯 หอคอย", "เลือกเฉพาะหอคอย Infinity ด่าน 7 เรียบร้อย!", 3)
         task.delay(0.2, UpdateTowerStatus)
+        if CFG.Tower then
+            task.spawn(function()
+                SwitchOrStartTower("Infinity", true)
+            end)
+        end
     end
 })
 
@@ -1592,6 +1648,11 @@ DropdownTower = Tabs.Tower:AddDropdown("DropSelectTower", {
         end
         Notify("🏰 หอคอย", "อัปเดตรายการหอคอย (" .. #ids .. " หอคอย)", 2)
         task.delay(0.2, UpdateTowerStatus)
+        if CFG.Tower and #ids > 0 then
+            task.spawn(function()
+                SwitchOrStartTower(ids[1], true)
+            end)
+        end
     end
 })
 
@@ -1634,13 +1695,22 @@ Tabs.Tower:AddToggle("TogTower", {
                 
                 local isRunning = IsTowerRunning()
                 local activeId = GetActiveTowerId()
-                local targetId = GetCurrentOrNextTowerId(false)
+                local targetId = CFG.SelectedTower or GetCurrentOrNextTowerId(false)
+                local selectedIds = GetSelectedTowerIds()
                 
                 if not isRunning then
                     SwitchOrStartTower(targetId, true)
                 else
-                    local selectedIds = GetSelectedTowerIds()
-                    if activeId and #selectedIds > 0 and not table.find(selectedIds, activeId) then
+                    if not CFG.TowerLoopMode or #selectedIds == 1 then
+                        if activeId ~= targetId then
+                            SwitchOrStartTower(targetId, true)
+                        else
+                            local curFloor = GetCurrentTowerFloor() or 0
+                            local towerDef = Towers.ById and Towers.ById[activeId]
+                            local tName = towerDef and towerDef.Name or activeId
+                            Notify("🏰 หอคอย", "เปิดระบบฟาร์มหอคอยแล้ว (กำลังฟาร์ม " .. tName .. " ชั้น " .. curFloor .. ")", 3)
+                        end
+                    elseif activeId and #selectedIds > 0 and not table.find(selectedIds, activeId) then
                         SwitchOrStartTower(targetId, true)
                     else
                         if CFG.AutoExitArena and IsTowerInArena() then
@@ -1689,6 +1759,18 @@ Tabs.Tower:AddInput("InputTowerDelay", {
             UpdateCFG("TowerRestartDelay", clamped)
             Notify("⏱️ ตั้งค่าเวลา", "กำหนดเวลารีสตาร์ทหอคอยเป็น: " .. clamped .. " วินาที", 2)
         end
+    end
+})
+
+Tabs.Tower:AddSlider("SlideTowerStagesPerRun", {
+    Title = "สลับหอคอยทุกๆ (จำนวนชั้น) ในโหมดวนลูป",
+    Description = "เมื่อลงหอคอยครบตามจำนวนชั้นที่กำหนด จะสลับไปหอคอยถัดไปในคิว 1-7 อัตโนมัติ (ตั้ง 0 เพื่อรอให้จบหรือแพ้)",
+    Default = CFG.TowerMaxStagesPerRun or 25,
+    Min = 0,
+    Max = 100,
+    Rounding = 0,
+    Callback = function(val)
+        UpdateCFG("TowerMaxStagesPerRun", val)
     end
 })
 
@@ -3082,6 +3164,7 @@ end)
 task.spawn(function()
     local wasTowerRunning = false
     local lastTowerId = nil
+    local towerStartFloor = 0
     
     while true do
         task.wait(1.5)
@@ -3105,6 +3188,7 @@ task.spawn(function()
         
         if CFG.Tower then
             CircuitBreaker.Execute("Tower", function()
+                if isSwitchingTower then return end
                 local data = State.Data
                 if not data then return end
                 
@@ -3123,9 +3207,22 @@ task.spawn(function()
                     
                     -- หากกำลังลงหอคอยที่ไม่ได้อยู่ในรายการที่เลือกไว้
                     if activeId and #selectedIds > 0 and not table.find(selectedIds, activeId) then
-                        local targetId = GetCurrentOrNextTowerId(false)
-                        SwitchOrStartTower(targetId)
+                        local targetId = CFG.SelectedTower or GetCurrentOrNextTowerId(false)
+                        SwitchOrStartTower(targetId, true)
                         return
+                    end
+                    
+                    -- ตรวจสอบการสลับหอคอยตามจำนวนชั้น (Stages Per Run) ในโหมดวนลูป 1-7
+                    if CFG.TowerLoopMode and #selectedIds > 1 and CFG.TowerMaxStagesPerRun and CFG.TowerMaxStagesPerRun > 0 then
+                        local curFloor = GetCurrentTowerFloor()
+                        if towerStartFloor == 0 and curFloor > 0 then
+                            towerStartFloor = curFloor
+                        elseif curFloor > 0 and (curFloor - towerStartFloor >= CFG.TowerMaxStagesPerRun) then
+                            towerStartFloor = 0
+                            local nextId = GetCurrentOrNextTowerId(true)
+                            SwitchOrStartTower(nextId, true)
+                            return
+                        end
                     end
                     
                     if IsTowerInArena() and CFG.AutoExitArena then
@@ -3134,6 +3231,7 @@ task.spawn(function()
                     end
                 else
                     -- หอคอยไม่ได้ทำงานอยู่
+                    towerStartFloor = 0
                     if wasTowerRunning then
                         wasTowerRunning = false
                         if CFG.TowerLoopMode and #selectedIds > 1 then
@@ -3150,9 +3248,10 @@ task.spawn(function()
                         task.wait(delaySec)
                     end
                     if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.Tower then return end
+                    if IsTowerRunning() or isSwitchingTower then return end
                     
-                    local targetId = GetCurrentOrNextTowerId(false)
-                    SwitchOrStartTower(targetId)
+                    local targetId = CFG.SelectedTower or GetCurrentOrNextTowerId(false)
+                    SwitchOrStartTower(targetId, true)
                 end
             end)
         end
@@ -3177,7 +3276,7 @@ task.spawn(function()
         end
         
         -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และให้หอคอยกลับมาฟาร์มต่อทันที
-        if wasInBoss and (wbState == "Idle" or wbState == "Result") and not isJoined then
+        if wasInBoss and not isJoined then
             wasInBoss = false
             task.wait(1.5)
             pcall(function()
@@ -3188,7 +3287,7 @@ task.spawn(function()
             -- สั่งให้หอคอยกลับมาฟาร์มต่อทันทีโดยไม่ต้องรอนาน
             if CFG.Tower then
                 task.spawn(function()
-                    local targetId = GetCurrentOrNextTowerId(false)
+                    local targetId = CFG.SelectedTower or GetCurrentOrNextTowerId(false)
                     SwitchOrStartTower(targetId, true)
                 end)
             end
