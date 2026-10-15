@@ -117,8 +117,29 @@ local CombatConfig = PetDice.Configs:FindFirstChild("CombatConfig") and require(
 local LootBagController = (PetDice.Client:FindFirstChild("Cutscenes") and PetDice.Client.Cutscenes:FindFirstChild("LootBagController") and require(PetDice.Client.Cutscenes.LootBagController)) or nil
 local CutsceneDirector = (PetDice.Client:FindFirstChild("Cutscenes") and PetDice.Client.Cutscenes:FindFirstChild("CutsceneDirector") and require(PetDice.Client.Cutscenes.CutsceneDirector)) or nil
 
+local LastRemoteFire = {}
+local RemoteRateLimits = {
+    RollTrait = 0.28,        -- สอดคล้องกับ Config.RateLimit Cost=0.5 ป้องกัน remote burst
+    RollGrade = 0.28,        -- สอดคล้องกับ Config.RateLimit Cost=0.5
+    UpgradePet = 0.35,       -- ปลอดภัยจากการยิงรัวคำสั่งอัปเลเวล
+    UpgradePetLevels = 0.35,
+    BuyAllUpgrades = 1.50    -- ป้องกันการยิงรัวซื้ออัปเกรดต้นไม้
+}
+
 local function Fire(...) 
-    Action:FireServer(unpack({...})) 
+    local args = {...}
+    local action = args[1]
+    if typeof(action) == "string" and RemoteRateLimits[action] then
+        local now = tick()
+        local minInterval = RemoteRateLimits[action]
+        local lastTime = LastRemoteFire[action] or 0
+        local diff = now - lastTime
+        if diff < minInterval then
+            task.wait(minInterval - diff)
+        end
+        LastRemoteFire[action] = tick()
+    end
+    Action:FireServer(unpack(args)) 
 end
 
 -- ==============================================================================
@@ -1104,17 +1125,18 @@ InputCustomEnhancePetCount = Tabs.Enhance:AddInput("InputCustomEnhancePetCount",
 })
 
 SliderRollSpeed = Tabs.Enhance:AddSlider("SliderRollSpeed", {
-    Title = "⚡ ความเร็วในการสุ่มบัฟ/เกรด (0.15 - 1.00 วินาที)",
-    Description = "ความหน่วงระหว่างการสุ่ม (แนะนำ 0.20 - 0.30 วิ = เร็วสุดและปลอดภัยจากระบบตรวจจับ 100%)",
-    Default = CFG.RollSpeed or 0.25,
-    Min = 0.15,
+    Title = "⚡ ความเร็วในการสุ่มบัฟ/เกรด (0.25 - 1.00 วินาที)",
+    Description = "ความหน่วงระหว่างการสุ่ม (แนะนำ 0.30 - 0.40 วิ = ปลอดภัย 100% จากการตรวจจับของเกม)",
+    Default = CFG.RollSpeed or 0.35,
+    Min = 0.25,
     Max = 1.00,
     Rounding = 2,
     Callback = function(V)
-        UpdateCFG("RollSpeed", V)
+        local safeV = math.clamp(V, 0.25, 1.00)
+        UpdateCFG("RollSpeed", safeV)
         pcall(function()
-            if InputCustomRollSpeed and InputCustomRollSpeed.Value ~= tostring(V) then
-                InputCustomRollSpeed:SetValue(tostring(V))
+            if InputCustomRollSpeed and InputCustomRollSpeed.Value ~= tostring(safeV) then
+                InputCustomRollSpeed:SetValue(tostring(safeV))
             end
         end)
     end
@@ -1122,21 +1144,21 @@ SliderRollSpeed = Tabs.Enhance:AddSlider("SliderRollSpeed", {
 
 InputCustomRollSpeed = Tabs.Enhance:AddInput("InputCustomRollSpeed", {
     Title = "✏️ กำหนดความเร็วในการสุ่มเอง (พิมพ์วินาที)",
-    Default = tostring(CFG.RollSpeed or 0.25),
-    Placeholder = "พิมพ์ความเร็ว เช่น 0.20, 0.25...",
+    Default = tostring(CFG.RollSpeed or 0.35),
+    Placeholder = "พิมพ์ความเร็ว เช่น 0.30, 0.35...",
     Numeric = true,
     Finished = true,
     Callback = function(val)
         local n = tonumber(val)
         if n and n > 0 then
-            local safeN = math.max(0.12, math.floor(n * 100 + 0.5) / 100)
+            local safeN = math.clamp(math.floor(n * 100 + 0.5) / 100, 0.25, 5.0)
             UpdateCFG("RollSpeed", safeN)
             pcall(function()
-                if safeN >= 0.15 and safeN <= 1.00 and SliderRollSpeed then
+                if safeN >= 0.25 and safeN <= 1.00 and SliderRollSpeed then
                     SliderRollSpeed:SetValue(safeN)
                 end
             end)
-            Notify("⚡ ความเร็วสุ่ม", "ตั้งค่าความเร็วสุ่มเป็น " .. safeN .. " วินาที", 2)
+            Notify("⚡ ความเร็วสุ่ม", "ตั้งค่าความเร็วสุ่มเป็น " .. safeN .. " วินาที (ปลอดภัย 100%)", 2)
         end
     end
 })
@@ -1244,40 +1266,59 @@ Tabs.Enhance:AddDropdown("DropTargetTrait", {
 
 Tabs.Enhance:AddSection("⚡ สั่งการด่วน (1 คลิก - ปลอดภัย ไม่สุ่มทับตัวล็อค)")
 
+local isManualUpgrading = false
+local isManualRollingGrade = false
+local isManualRollingTrait = false
+
 Tabs.Enhance:AddButton({
     Title = "⭐ อัปเลเวลสัตว์เลี้ยงที่ดีที่สุดตามที่เลือก (1 คลิก)",
     Description = "อัปเลเวลสัตว์เลี้ยงตามเงื่อนไขเป้าหมายและจำนวนขั้นที่เลือก",
     Callback = function()
+        if isManualUpgrading then return end
+        isManualUpgrading = true
         task.spawn(function()
             local data = State.Data
-            if not data or not data.Pets or not data.Money then return end
+            if not data or not data.Pets or not data.Money or data.Money <= 0 then 
+                Notify("⚠️ เงินไม่พอ", "คุณมีเงินไม่พอสำหรับการอัปเลเวล", 3)
+                isManualUpgrading = false
+                return 
+            end
+            if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "petup") then
+                Notify("⚠️ ยังไม่ปลดล็อค", "กรุณาปลดล็อค Pet Upgrades ในต้นไม้ทักษะก่อนใช้งาน", 3)
+                isManualUpgrading = false
+                return
+            end
             local cap = Stats.PetLevelCap(data.Upgrades)
             local targetLvl = math.min(CFG.TargetPetLevel or cap, cap)
             local step = CFG.UpgradeLevelStep or 1
             local uids = GetTopBestPets(CFG.EnhancePetCount or 4)
             local upgradedPets = 0
             local totalLevels = 0
+            local virtualMoney = data.Money
             
             for _, uid in ipairs(uids) do
+                if virtualMoney <= 0 then break end
                 local pet = data.Pets[uid]
-                if pet and (pet.L or 0) < targetLvl then
+                if pet and IsPetEligibleForEnhance(pet) and (pet.L or 0) < targetLvl then
                     local curLvl = pet.L or 0
                     local needed = targetLvl - curLvl
                     local countToUpgrade = math.min(needed, step)
                     if step >= 999 then countToUpgrade = needed end
                     
-                    local affordable = FindAffordableLevels(pet, data.Upgrades, data.Money, countToUpgrade)
+                    local affordable = FindAffordableLevels(pet, data.Upgrades, virtualMoney, countToUpgrade)
                     if affordable > 0 then
-                        if affordable == 1 then
-                            Fire("UpgradePet", uid)
-                        else
-                            Fire("UpgradePetLevels", uid, affordable)
+                        local cost = affordable == 1 and Stats.PetLevelCost(pet, data.Upgrades) or Stats.PetLevelsCost(pet, data.Upgrades, affordable)
+                        if cost and virtualMoney >= cost then
+                            virtualMoney = virtualMoney - cost
+                            if affordable == 1 then
+                                Fire("UpgradePet", uid)
+                            else
+                                Fire("UpgradePetLevels", uid, affordable)
+                            end
+                            upgradedPets = upgradedPets + 1
+                            totalLevels = totalLevels + affordable
+                            Humanizer.Wait(0.35, 0.65)
                         end
-                        upgradedPets = upgradedPets + 1
-                        totalLevels = totalLevels + affordable
-                        Humanizer.Wait(0.4, 0.7)
-                        data = State.Data
-                        if not data or not data.Money or data.Money <= 0 then break end
                     end
                 end
             end
@@ -1287,6 +1328,7 @@ Tabs.Enhance:AddButton({
                 3
             )
             UpdateOverviewTab()
+            isManualUpgrading = false
         end)
     end
 })
@@ -1295,28 +1337,37 @@ Tabs.Enhance:AddButton({
     Title = "💎 สุ่มเกรดสัตว์เลี้ยงที่ดีที่สุด 1 ครั้งต่อตัว (ข้ามตัวล็อค)",
     Description = "สุ่มเฉพาะตัวที่ยังไม่ถึงเกรดเป้าหมาย ตัวที่ล็อคแล้วจะไม่โดนสุ่มทับ",
     Callback = function()
+        if isManualRollingGrade then return end
+        isManualRollingGrade = true
         task.spawn(function()
             local data = State.Data
             if not data or not data.Pets or not data.Gems or data.Gems < 1 then
                 Notify("⚠️ เพชรไม่พอ (Gems)", "คุณมีเพชรไม่พอสำหรับการสุ่มเกรด", 3)
+                isManualRollingGrade = false
+                return
+            end
+            if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "grades") then
+                Notify("⚠️ ยังไม่ปลดล็อค", "กรุณาปลดล็อค Grades ในต้นไม้ทักษะก่อนใช้งาน", 3)
+                isManualRollingGrade = false
                 return
             end
             local targetRank = CFG.TargetGradeRank or 8
             local uids = GetTopBestPets(CFG.EnhancePetCount or 4)
-            local rollDelay = math.clamp(CFG.RollSpeed or 0.25, 0.15, 1.0)
+            local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.0)
+            local virtualGems = data.Gems
             local rolled = 0
             local skipped = 0
             for _, uid in ipairs(uids) do
-                if not data or not data.Gems or data.Gems < 1 then break end
+                if virtualGems < 1 then break end
                 local pet = data.Pets[uid]
-                if pet then
+                if pet and IsPetEligibleForEnhance(pet) then
                     if IsPetGradeLocked(pet, targetRank) then
                         skipped = skipped + 1
                     else
+                        virtualGems = virtualGems - 1
                         Fire("RollGrade", uid)
                         rolled = rolled + 1
-                        Humanizer.Wait(math.max(0.12, rollDelay - 0.04), rollDelay + 0.04)
-                        data = State.Data
+                        Humanizer.Wait(math.max(0.25, rollDelay - 0.05), rollDelay + 0.08)
                     end
                 end
             end
@@ -1325,6 +1376,7 @@ Tabs.Enhance:AddButton({
                 3
             )
             UpdateOverviewTab()
+            isManualRollingGrade = false
         end)
     end
 })
@@ -1333,28 +1385,37 @@ Tabs.Enhance:AddButton({
     Title = "🔮 สุ่มคุณสมบัติ (Trait) สัตว์เลี้ยงที่ดีที่สุด 1 ครั้งต่อตัว (ข้ามตัวล็อค)",
     Description = "สุ่มเฉพาะตัวที่ยังไม่ถึงบัฟเป้าหมาย ตัวที่ได้บัฟเท่ากับหรือสูงกว่าจะถูกข้าม",
     Callback = function()
+        if isManualRollingTrait then return end
+        isManualRollingTrait = true
         task.spawn(function()
             local data = State.Data
             if not data or not data.Pets or not data.Shards or data.Shards < 1 then
                 Notify("⚠️ ชาร์ดไม่พอ (Shards)", "คุณมี Shards ไม่พอสำหรับการสุ่มคุณสมบัติ", 3)
+                isManualRollingTrait = false
+                return
+            end
+            if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "traits") then
+                Notify("⚠️ ยังไม่ปลดล็อค", "กรุณาปลดล็อค Traits ในต้นไม้ทักษะก่อนใช้งาน", 3)
+                isManualRollingTrait = false
                 return
             end
             local targetRank = CFG.TargetTraitRank or 6
             local uids = GetTopBestPets(CFG.EnhancePetCount or 4)
-            local rollDelay = math.clamp(CFG.RollSpeed or 0.25, 0.15, 1.0)
+            local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.0)
+            local virtualShards = data.Shards
             local rolled = 0
             local skipped = 0
             for _, uid in ipairs(uids) do
-                if not data or not data.Shards or data.Shards < 1 then break end
+                if virtualShards < 1 then break end
                 local pet = data.Pets[uid]
-                if pet then
+                if pet and IsPetEligibleForEnhance(pet) then
                     if IsPetTraitLocked(pet, targetRank) then
                         skipped = skipped + 1
                     else
+                        virtualShards = virtualShards - 1
                         Fire("RollTrait", uid)
                         rolled = rolled + 1
-                        Humanizer.Wait(math.max(0.12, rollDelay - 0.04), rollDelay + 0.04)
-                        data = State.Data
+                        Humanizer.Wait(math.max(0.25, rollDelay - 0.05), rollDelay + 0.08)
                     end
                 end
             end
@@ -1363,6 +1424,7 @@ Tabs.Enhance:AddButton({
                 3
             )
             UpdateOverviewTab()
+            isManualRollingTrait = false
         end)
     end
 })
@@ -2768,6 +2830,18 @@ Tabs.Rebirth:AddButton({
     Title = "🌳 ซื้ออัปเกรดต้นไม้ทั้งหมดทันที (Buy All Upgrades Now)",
     Description = "ส่งคำสั่งซื้ออัปเกรดต้นไม้ทั้งหมดที่สามารถซื้อได้ใน 1 คลิก",
     Callback = function()
+        local data = State.Data
+        if not data or not data.Upgrades or not data.Money or data.Money <= 0 then
+            Notify("⚠️ เงินไม่พอ", "คุณมีเงินไม่พอสำหรับการซื้ออัปเกรดในต้นไม้", 3)
+            return
+        end
+        if Upgrades and Upgrades.PlanBuyAll then
+            local planned, totalCost = Upgrades.PlanBuyAll(data.Upgrades, data.Money, 50)
+            if not planned or #planned == 0 then
+                Notify("⚠️ ไม่มีอัปเกรด", "ไม่มีอัปเกรดที่สามารถซื้อได้ในขณะนี้", 3)
+                return
+            end
+        end
         Fire("BuyAllUpgrades")
         Notify("🌳 อัปเกรด", "ส่งคำสั่งซื้ออัปเกรดต้นไม้ทั้งหมดสำเร็จ!", 2)
     end
@@ -4636,10 +4710,10 @@ task.spawn(function()
     end
 end)
 
--- 5. Auto Upgrade Skill Tree (Buy All Affordable Upgrades)
+-- 5. Auto Upgrade Skill Tree (Buy All Affordable Upgrades - Safe & Ready Checked)
 task.spawn(function()
     while true do
-        local delayTime = CFG.UpgradeTreeDelay or 3
+        local delayTime = math.max(3.0, CFG.UpgradeTreeDelay or 3)
         task.wait(delayTime)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
@@ -4647,18 +4721,21 @@ task.spawn(function()
         if CFG.UpgradeTree then
             CircuitBreaker.Execute("UpgradeTree", function()
                 local data = State.Data
-                if not data or not data.Upgrades or not data.Money then return end
+                if not data or not data.Upgrades or not data.Money or data.Money <= 0 then 
+                    task.wait(3.0)
+                    return 
+                end
                 
-                -- สแกนเรียลไทม์: ตรวจสอบว่ามีอัปเกรดที่เงินพอซื้อได้จริงหรือไม่
+                -- สแกนเรียลไทม์: ตรวจสอบความพร้อมใช้งานจริงว่ามีอัปเกรดที่เงินพอซื้อได้จริงหรือไม่
                 if Upgrades and Upgrades.PlanBuyAll then
                     local planned, totalCost = Upgrades.PlanBuyAll(data.Upgrades, data.Money, 50)
-                    if planned and #planned > 0 then
+                    if planned and #planned > 0 and totalCost and data.Money >= totalCost then
                         Fire("BuyAllUpgrades")
-                        Humanizer.Wait(1.5, 2.5)
+                        Humanizer.Wait(1.8, 2.8)
+                    else
+                        -- ไม่มีอัปเกรดที่เงินพอซื้อในขณะนี้ พัก 4 วินาที ไม่ยิงคำสั่งรัว
+                        task.wait(4.0)
                     end
-                else
-                    Fire("BuyAllUpgrades")
-                    Humanizer.Wait(2.0, 3.0)
                 end
             end)
         end
@@ -5099,7 +5176,7 @@ task.spawn(function()
     end
 end)
 
--- 10. Auto Upgrade Pet Levels (Target Level & Step Protected)
+-- 10. Auto Upgrade Pet Levels (Target Level & Step Protected - Safe & Ready Checked)
 task.spawn(function()
     while true do
         task.wait(2.5)
@@ -5109,35 +5186,63 @@ task.spawn(function()
         if CFG.AutoUpgradePetLevel then
             CircuitBreaker.Execute("AutoUpgradePetLevel", function()
                 local data = State.Data
-                if not data or not data.Pets or not data.Money then return end
+                if not data or not data.Pets or not data.Money or data.Money <= 0 then 
+                    task.wait(3.0)
+                    return 
+                end
+                
+                -- ตรวจสอบว่าปลดล็อคระบบอัปเลเวลในต้นไม้ทักษะแล้วหรือไม่ ("petup")
+                if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "petup") then
+                    task.wait(5.0) -- ยังไม่ปลดล็อค พักยาว 5 วินาที ไม่ส่งคำสั่ง
+                    return
+                end
+                
                 local cap = Stats.PetLevelCap(data.Upgrades)
+                if not cap or cap <= 0 then task.wait(3.0) return end
+                
                 local targetLvl = math.min(CFG.TargetPetLevel or cap, cap)
                 local step = CFG.UpgradeLevelStep or 1
                 local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
+                local virtualMoney = data.Money
+                local upgradedAny = false
                 
                 for _, uid in ipairs(targetUids) do
                     if IsInTrade() or getgenv().TradeActiveSession then break end
+                    if virtualMoney <= 0 then break end
+                    
                     local pet = data.Pets[uid]
-                    if pet and (pet.L or 0) < targetLvl then
+                    if pet and IsPetEligibleForEnhance(pet) and (pet.L or 0) < targetLvl then
                         local curLvl = pet.L or 0
                         local needed = targetLvl - curLvl
                         local countToUpgrade = math.min(needed, step)
                         if step >= 999 then countToUpgrade = needed end
                         
-                        local affordable = FindAffordableLevels(pet, data.Upgrades, data.Money, countToUpgrade)
+                        local affordable = FindAffordableLevels(pet, data.Upgrades, virtualMoney, countToUpgrade)
                         if affordable > 0 then
-                            if affordable == 1 then
-                                Fire("UpgradePet", uid)
-                            else
-                                Fire("UpgradePetLevels", uid, affordable)
+                            local cost = affordable == 1 and Stats.PetLevelCost(pet, data.Upgrades) or Stats.PetLevelsCost(pet, data.Upgrades, affordable)
+                            if cost and virtualMoney >= cost then
+                                virtualMoney = virtualMoney - cost
+                                if affordable == 1 then
+                                    Fire("UpgradePet", uid)
+                                else
+                                    Fire("UpgradePetLevels", uid, affordable)
+                                end
+                                upgradedAny = true
+                                Humanizer.Wait(0.40, 0.70)
                             end
-                            Humanizer.Wait(0.35, 0.65)
-                            data = State.Data
-                            if not data or not data.Money or data.Money <= 0 then break end
                         end
                     end
                 end
+                
+                if not upgradedAny then
+                    -- สัตว์เลี้ยงทั้งหมดถึงเป้าหมายแล้ว หรือเงินไม่พออัปเกรด พัก 3.5 วินาที
+                    task.wait(3.5)
+                else
+                    task.wait(1.5) -- หน่วงรอเซิร์ฟเวอร์อัปเดตข้อมูลสเตตัส
+                end
             end)
+        else
+            task.wait(2.0)
         end
     end
 end)
@@ -5146,7 +5251,7 @@ end)
 task.spawn(function()
     local consecutiveRolls = 0
     while true do
-        task.wait(0.20)
+        task.wait(0.35)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
@@ -5154,21 +5259,30 @@ task.spawn(function()
             CircuitBreaker.Execute("AutoRollGrade", function()
                 local data = State.Data
                 if not data or not data.Pets or not data.Gems or data.Gems < 1 then
-                    task.wait(2.0)
+                    task.wait(3.0)
                     return
                 end
+                
+                -- ตรวจสอบว่าปลดล็อคระบบเกรดในต้นไม้ทักษะแล้วหรือไม่ ("grades")
+                if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "grades") then
+                    task.wait(5.0) -- ยังไม่ปลดล็อค พักยาว 5 วินาที ไม่ส่งคำสั่ง
+                    return
+                end
+                
                 local targetRank = CFG.TargetGradeRank or 8
                 local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
                 local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.2)
+                local virtualGems = data.Gems
                 local anyRolled = false
                 
                 for _, uid in ipairs(targetUids) do
                     if IsInTrade() or getgenv().TradeActiveSession then break end
-                    if not data or not data.Gems or data.Gems < 1 then break end
+                    if virtualGems < 1 then break end
                     
                     local pet = data.Pets[uid]
                     if pet and IsPetEligibleForEnhance(pet) then
                         if not IsPetGradeLocked(pet, targetRank) then
+                            virtualGems = virtualGems - 1
                             Fire("RollGrade", uid)
                             anyRolled = true
                             consecutiveRolls = consecutiveRolls + 1
@@ -5176,24 +5290,25 @@ task.spawn(function()
                             -- Humanizer หน่วงเวลาแบบเป็นธรรมชาติ ปลอดภัยจากการตรวจจับของ Roblox
                             Humanizer.Wait(math.max(0.25, rollDelay - 0.05), rollDelay + 0.08)
                             
-                            -- พักสั้นๆ ทุก 12 ครั้งเพื่อจำลองพฤติกรรมมนุษย์ ป้องกัน Remote Burst
-                            if consecutiveRolls >= 12 then
+                            -- พักสั้นๆ ทุก 10 ครั้งเพื่อจำลองพฤติกรรมมนุษย์ ป้องกัน Remote Burst
+                            if consecutiveRolls >= 10 then
                                 consecutiveRolls = 0
-                                task.wait(math.random(60, 100) / 100)
+                                task.wait(math.random(120, 180) / 100)
                             end
-                            data = State.Data
                         end
                     end
                 end
                 
                 if not anyRolled then
                     consecutiveRolls = 0
-                    task.wait(2.5) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือไม่มีตัวให้สุ่ม พัก 2.5 วินาที ไม่ยิงซ้ำ
+                    task.wait(3.0) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือเพชรหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
+                else
+                    task.wait(math.max(0.4, rollDelay)) -- เว้นระยะระหว่างรอบสุ่ม
                 end
             end)
         else
             consecutiveRolls = 0
-            task.wait(1.5)
+            task.wait(2.0)
         end
     end
 end)
@@ -5202,7 +5317,7 @@ end)
 task.spawn(function()
     local consecutiveRolls = 0
     while true do
-        task.wait(0.20)
+        task.wait(0.35)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
@@ -5210,21 +5325,30 @@ task.spawn(function()
             CircuitBreaker.Execute("AutoRollTrait", function()
                 local data = State.Data
                 if not data or not data.Pets or not data.Shards or data.Shards < 1 then
-                    task.wait(2.0)
+                    task.wait(3.0)
                     return
                 end
+                
+                -- ตรวจสอบว่าปลดล็อคระบบ Trait (บัฟ) ในต้นไม้ทักษะแล้วหรือไม่ ("traits")
+                if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "traits") then
+                    task.wait(5.0) -- ยังไม่ปลดล็อค พักยาว 5 วินาที ไม่ส่งคำสั่ง
+                    return
+                end
+                
                 local targetRank = CFG.TargetTraitRank or 6
                 local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
                 local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.2)
+                local virtualShards = data.Shards
                 local anyRolled = false
                 
                 for _, uid in ipairs(targetUids) do
                     if IsInTrade() or getgenv().TradeActiveSession then break end
-                    if not data or not data.Shards or data.Shards < 1 then break end
+                    if virtualShards < 1 then break end
                     
                     local pet = data.Pets[uid]
                     if pet and IsPetEligibleForEnhance(pet) then
                         if not IsPetTraitLocked(pet, targetRank) then
+                            virtualShards = virtualShards - 1
                             Fire("RollTrait", uid)
                             anyRolled = true
                             consecutiveRolls = consecutiveRolls + 1
@@ -5232,24 +5356,25 @@ task.spawn(function()
                             -- Humanizer หน่วงเวลาแบบเป็นธรรมชาติ ปลอดภัยจากการตรวจจับของ Roblox
                             Humanizer.Wait(math.max(0.25, rollDelay - 0.05), rollDelay + 0.08)
                             
-                            -- พักสั้นๆ ทุก 12 ครั้งเพื่อจำลองพฤติกรรมมนุษย์ ป้องกัน Remote Burst
-                            if consecutiveRolls >= 12 then
+                            -- พักสั้นๆ ทุก 10 ครั้งเพื่อจำลองพฤติกรรมมนุษย์ ป้องกัน Remote Burst
+                            if consecutiveRolls >= 10 then
                                 consecutiveRolls = 0
-                                task.wait(math.random(60, 100) / 100)
+                                task.wait(math.random(120, 180) / 100)
                             end
-                            data = State.Data
                         end
                     end
                 end
                 
                 if not anyRolled then
                     consecutiveRolls = 0
-                    task.wait(2.5) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือไม่มีตัวให้สุ่ม พัก 2.5 วินาที ไม่ยิงซ้ำ
+                    task.wait(3.0) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือชาร์ดหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
+                else
+                    task.wait(math.max(0.4, rollDelay)) -- เว้นระยะระหว่างรอบสุ่ม
                 end
             end)
         else
             consecutiveRolls = 0
-            task.wait(1.5)
+            task.wait(2.0)
         end
     end
 end)
