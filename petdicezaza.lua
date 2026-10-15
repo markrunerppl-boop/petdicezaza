@@ -4443,8 +4443,9 @@ task.spawn(function()
         
         -- 1. เตรียมพร้อมล่วงหน้า: เมื่อพายุกำลังจะเริ่มในอีก 8 วินาที หรือพายุกำลังตกอยู่
         if isStormActive or (secToNext <= 8) or (#targets > 0) then
-            local distFromCenter = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude
-            if distFromCenter > 65 then
+            local hubSpawn = Vector3.new(0, 3.1, 24)
+            local distFromHub = (hrp.Position - hubSpawn).Magnitude
+            if distFromHub > 35 then
                 Notify("🌪️ พายุลูกกวาด", "กำลังเดินทางไปพลาซ่าล่วงหน้า เพื่อเตรียมเก็บแคนดี้...", 3)
                 Fire("Teleport", "Hub")
                 Humanizer.Wait(1.2, 1.8)
