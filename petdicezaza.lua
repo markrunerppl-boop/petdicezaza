@@ -3369,6 +3369,95 @@ Tabs.Halloween:AddButton({
     end
 })
 
+Tabs.Halloween:AddButton({
+    Title = "🌪️ เดินไปเก็บแคนดี้พายุลูกกวาดทันที (Collect Plaza Candy Now)",
+    Description = "เดินทางไปลานพลาซ่าเพื่อกวาดเก็บแคนดี้ทันที (หากยังไม่ถึงเวลาพายุ จะตรวจสอบและแจ้งเวลานับถอยหลังรอบถัดไปให้ทราบทันที)",
+    Callback = function()
+        task.spawn(function()
+            if IsInTrade() or getgenv().TradeActiveSession then
+                Notify("⚠️ กำลังทำกิจกรรมอื่น", "กรุณาจบการเทรดก่อนเก็บแคนดี้", 3)
+                return
+            end
+            if IsTowerInArena() then
+                Notify("⚠️ กำลังสู้ในอารีน่า", "กำลังสู้อยู่ในอารีน่าหอคอย กรุณารอรอบสู้จบก่อน", 3)
+                return
+            end
+            
+            local isStormActive, stormSecLeft = IsCandyStormActive()
+            local secToNext = GetSecondsUntilNextStorm()
+            local targets = GetAvailableCandies()
+            
+            local char = LocalPlayer.Character or Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if not char or not hum or not hrp or hum.Health <= 0 then return end
+            
+            local hubSpawn = Vector3.new(0, 3.1, 24)
+            local distFromHub = (hrp.Position - hubSpawn).Magnitude
+            if distFromHub > 35 then
+                Notify("🌪️ พายุลูกกวาด", "กำลังเดินทางไปพลาซ่าเพื่อตรวจสอบแคนดี้...", 2)
+                Fire("Teleport", "Hub")
+                Humanizer.Wait(1.2, 1.8)
+                char = LocalPlayer.Character or Character
+                hum = char and char:FindFirstChildOfClass("Humanoid")
+                hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if not hum or not hrp then return end
+            end
+            
+            targets = GetAvailableCandies()
+            if #targets > 0 or isStormActive then
+                Notify("🍬 เริ่มเก็บแคนดี้", "พบแคนดี้ในพลาซ่า! กำลังกวาดเก็บด้วยความเร็วสูงสุด...", 3)
+                local collected = 0
+                local timeout = tick()
+                while (#targets > 0 or IsCandyStormActive()) and (tick() - timeout < 70) do
+                    targets = GetAvailableCandies()
+                    if #targets == 0 then
+                        if not IsCandyStormActive() then break end
+                        task.wait(0.2)
+                        continue
+                    end
+                    
+                    local curPos = hrp.Position
+                    local bestIdx = 1
+                    local bestDist = (targets[1].Position - curPos).Magnitude
+                    for i = 2, #targets do
+                        local d = (targets[i].Position - curPos).Magnitude
+                        if d < bestDist then
+                            bestDist = d
+                            bestIdx = i
+                        end
+                    end
+                    
+                    local targetCandy = targets[bestIdx]
+                    if targetCandy and targetCandy.Position then
+                        hum:MoveTo(targetCandy.Position)
+                        local moveStart = tick()
+                        while (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetCandy.Position.X, 0, targetCandy.Position.Z)).Magnitude > 7.5 and (tick() - moveStart < 2.0) do
+                            task.wait(0.04)
+                            char = LocalPlayer.Character or Character
+                            hum = char and char:FindFirstChildOfClass("Humanoid")
+                            hrp = char and char:FindFirstChild("HumanoidRootPart")
+                            if not hum or not hrp or hum.Health <= 0 then break end
+                        end
+                        collected = collected + 1
+                        if targetCandy.Id then ActiveCandies[targetCandy.Id] = nil end
+                    end
+                end
+                Fire("Teleport", "Home")
+                Notify("🍬 เก็บแคนดี้สำเร็จ", string.format("เก็บแคนดี้เรียบร้อย %d ชิ้น! เดินทางกลับบ้านเรียบร้อย", collected), 3)
+            else
+                local m = math.floor(secToNext / 60)
+                local s = math.floor(secToNext % 60)
+                Notify("⏳ ยังไม่มีพายุลูกกวาด", string.format("ขณะนี้ยังไม่มีแคนดี้ในพลาซ่า (พายุรอบถัดไปในอีก %d นาที %02d วิ)\nระบบจะพากลับบ้าน และจะวาร์ปมาเก็บให้อัตโนมัติเมื่อพายุเริ่ม", m, s), 4)
+                Humanizer.Wait(2.0, 3.0)
+                Fire("Teleport", "Home")
+                Notify("🏠 กลับบ้าน", "เดินทางกลับบ้านเรียบร้อย", 2)
+            end
+            UpdateHalloweenStatus()
+        end)
+    end
+})
+
 Tabs.Halloween:AddSection("🔄 ระบบฮาโลวีนอัตโนมัติ")
 
 Tabs.Halloween:AddToggle("TogHalClaim", {
