@@ -3119,7 +3119,7 @@ local function UpdateHalloweenStatus()
         
         local towerStatusStr = IsTowerInArena() and "⚠️ อยู่ในอารีน่าต่อสู้" or (IsTowerRunning() and "✅ โหมด Away (เดินทางอิสระ)" or "💤 ไม่ได้ลงหอคอย")
         
-        local title = string.format("🎃 อีเวนต์ฮาโลวีน | 🍬 ลูกอม: %s | 🎒 กระเป๋า: %d ใบ", Format.Number(candy), bags)
+        local title = string.format("🎃 อีเวนต์ฮาโลวีน | 🍬 ลูกอม: %s | 🎒 กระเป๋า: %d ใบ", Format.Commas(candy), bags)
         local desc = string.format(
             "🍬 ยอดลูกอมปัจจุบัน: %s ลูก (ซื้อกระเป๋าใช้ 270 | ซื้อตั๋วใช้ 800)\n" ..
             "🎒 กระเป๋าฮาโลวีนในตัว: %s\n" ..
@@ -3127,7 +3127,7 @@ local function UpdateHalloweenStatus()
             "🎟️ โควต้า Limited Pull: %d/5 ครั้ง\n" ..
             "🌪️ ลูกอมจากพายุ (Storm Candy): %d ลูก\n" ..
             "🏰 สถานะหอคอย: %s",
-            Format.Number(candy),
+            Format.Commas(candy),
             bagStr,
             treatStatusStr,
             boughtPulls,
