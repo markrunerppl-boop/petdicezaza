@@ -172,6 +172,76 @@ function CircuitBreaker.Execute(actionName, fn)
     end
 end
 
+local PathfindingService = game:GetService("PathfindingService")
+
+local function WalkAlongPath(destination, maxTime)
+    local char = LocalPlayer.Character or Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not hum or not hrp or hum.Health <= 0 then return false end
+    
+    local dist = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(destination.X, 0, destination.Z)).Magnitude
+    if dist <= 6 then return true end
+    
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2.0,
+        AgentHeight = 5.0,
+        AgentCanJump = true,
+        WaypointSpacing = 4.0
+    })
+    
+    local ok, _ = pcall(function()
+        path:ComputeAsync(hrp.Position, destination)
+    end)
+    
+    if not ok or path.Status ~= Enum.PathStatus.Success then
+        -- ระบบสำรอง: เดินตรงหากการคำนวณเส้นทางล้มเหลว
+        hum:MoveTo(Vector3.new(destination.X, hrp.Position.Y, destination.Z))
+        local t0 = tick()
+        while (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(destination.X, 0, destination.Z)).Magnitude > 6 and (tick() - t0 < (maxTime or 5.0)) do
+            task.wait(0.12)
+            char = LocalPlayer.Character or Character
+            hum = char and char:FindFirstChildOfClass("Humanoid")
+            hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if not hum or not hrp or hum.Health <= 0 then break end
+        end
+        char = LocalPlayer.Character or Character
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(destination.X, 0, destination.Z)).Magnitude <= 8
+    end
+    
+    local waypoints = path:GetWaypoints()
+    local t0 = tick()
+    local timeLimit = maxTime or 12.0
+    
+    for i, wp in ipairs(waypoints) do
+        if tick() - t0 > timeLimit then return false end
+        char = LocalPlayer.Character or Character
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp or hum.Health <= 0 then return false end
+        
+        if wp.Action == Enum.PathWaypointAction.Jump then
+            hum.Jump = true
+        end
+        
+        hum:MoveTo(wp.Position)
+        
+        local wpWait0 = tick()
+        while (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(wp.Position.X, 0, wp.Position.Z)).Magnitude > 4.5 and (tick() - wpWait0 < 2.0) do
+            task.wait(0.06)
+            char = LocalPlayer.Character or Character
+            hum = char and char:FindFirstChildOfClass("Humanoid")
+            hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if not hum or not hrp or hum.Health <= 0 then return false end
+        end
+    end
+    
+    char = LocalPlayer.Character or Character
+    hrp = char and char:FindFirstChild("HumanoidRootPart")
+    return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(destination.X, 0, destination.Z)).Magnitude <= 10
+end
+
 local function WalkToPawcula()
     local char = LocalPlayer.Character or Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -191,24 +261,17 @@ local function WalkToPawcula()
         if not hum or not hrp then return false end
     end
     
-    -- เดินด้วย Humanoid:MoveTo ตามระบบฟิสิกส์ปกติของตัวเกม ไม่ใช้ Tween หรือ CFrame
-    hum:MoveTo(targetStand)
-    local t0 = tick()
-    while (hrp.Position - targetStand).Magnitude > 4 and tick() - t0 < 8.0 do
-        task.wait(0.15)
-        char = LocalPlayer.Character or Character
-        hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp then break end
-    end
+    -- เดินด้วย PathfindingService ตามเส้นทางที่ปลอดภัย กระโดดข้ามสิ่งกีดขวางอัตโนมัติ ไร้การติดขัดกลางแมพ
+    local reached = WalkAlongPath(targetStand, 10.0)
     
-    Humanizer.Wait(0.5, 1.0)
+    Humanizer.Wait(0.3, 0.6)
     char = LocalPlayer.Character or Character
     hrp = char and char:FindFirstChild("HumanoidRootPart")
     -- ตรวจสอบระยะห่างจากเคานต์พาวคูลาจริง ต้องไม่เกิน 12 studs (ตามระยะ ProximityPrompt สูงสุดของเกม)
     if hrp and (hrp.Position - pawculaPos).Magnitude <= 12 then
         return true
     end
-    return false
+    return reached or false
 end
 
 local function SafeWalkTo(targetPos, maxWait)
@@ -220,14 +283,18 @@ local function SafeWalkTo(targetPos, maxWait)
     local dist = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
     if dist < 6 then return true end
     
-    -- เดินด้วย Humanoid:MoveTo ตามระบบฟิสิกส์ปกติของตัวเกมบนระนาบพื้นปกติ ป้องกันการติดในวัตถุ/ใต้แมพ 100%
+    if dist > 18 then
+        return WalkAlongPath(targetPos, maxWait or 6.0)
+    end
+    
+    -- เดินระยะใกล้ด้วย Humanoid:MoveTo ตามระบบฟิสิกส์ปกติของตัวเกมบนระนาบพื้นปกติ ป้องกันการติดในวัตถุ/ใต้แมพ 100%
     local walkTarget = Vector3.new(targetPos.X, hrp.Position.Y, targetPos.Z)
     hum:MoveTo(walkTarget)
     
     local t0 = tick()
     local waitLimit = maxWait or 3.5
     while (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude > 6 and (tick() - t0 < waitLimit) do
-        task.wait(0.12)
+        task.wait(0.10)
         char = LocalPlayer.Character or Character
         hum = char and char:FindFirstChildOfClass("Humanoid")
         hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -3007,13 +3074,13 @@ Tabs.Expedition:AddToggle("TogCutscene", {
 Tabs.Halloween:AddSection("🎃 กิจกรรมฮาโลวีน (Halloween Event)")
 
 local function GetHalloweenEntry()
-    local seasonInfo = Season.Halloween()
+    local seasonInfo = Season and Season.Halloween and Season.Halloween()
     if not seasonInfo or not State.Data then return nil end
-    return Season.Entry(State.Data, seasonInfo.Id), seasonInfo
+    return Season.Entry and Season.Entry(State.Data, seasonInfo.Id), seasonInfo
 end
 
 local function CanTrickOrTreat()
-    local s = Season.Halloween and Season.Halloween()
+    local s = Season and Season.Halloween and Season.Halloween()
     if not s or not State.Data then return false end
     local entry = Season.Entry and Season.Entry(State.Data, s.Id)
     if not entry then return false end
@@ -3024,6 +3091,58 @@ local function CanTrickOrTreat()
     end
     return true
 end
+
+local HalloweenStatusPara = Tabs.Halloween:AddParagraph({
+    Title = "🎃 สถานะอีเวนต์ฮาโลวีน (Live Status)",
+    Content = "กำลังเชื่อมต่อข้อมูลฮาโลวีน..."
+})
+
+local function UpdateHalloweenStatus()
+    pcall(function()
+        local entry, sInfo = GetHalloweenEntry()
+        if not entry then
+            HalloweenStatusPara:SetTitle("🎃 สถานะอีเวนต์ฮาโลวีน (รอข้อมูล)")
+            HalloweenStatusPara:SetDesc("กำลังโหลดข้อมูลกิจกรรมฮาโลวีนจากเซิร์ฟเวอร์...")
+            return
+        end
+        
+        local candy = entry.Candy or 0
+        local stormCandy = entry.StormCandy or 0
+        local bags = (State.Data and State.Data.SeasonBags and State.Data.SeasonBags.Halloween) or 0
+        local boughtPulls = (entry.Bought and entry.Bought.LimitedPull) or 0
+        local canTreat = CanTrickOrTreat()
+        local resetTime = Season and Season.TreatReset and Season.TreatReset(State.Now and State.Now() or os.time()) or 0
+        local countdown = Season and Season.Countdown and Season.Countdown(resetTime) or "ไม่ทราบเวลา"
+        
+        local treatStatusStr = canTreat and "✅ พร้อมขอขนมฟรี! (เดินไปหาเคานต์พาวคูลาได้เลย)" or ("⏳ ขอของวันนี้แล้ว (รีเซ็ตในอีก " .. countdown .. ")")
+        local bagStr = bags > 0 and (tostring(bags) .. " ใบ (พร้อมกดเปิดทันที!)") or "0 ใบ"
+        
+        local towerStatusStr = IsTowerInArena() and "⚠️ อยู่ในอารีน่าต่อสู้" or (IsTowerRunning() and "✅ โหมด Away (เดินทางอิสระ)" or "💤 ไม่ได้ลงหอคอย")
+        
+        local title = string.format("🎃 อีเวนต์ฮาโลวีน | 🍬 ลูกอม: %s | 🎒 กระเป๋า: %d ใบ", Format.Number(candy), bags)
+        local desc = string.format(
+            "🍬 ยอดลูกอมปัจจุบัน: %s ลูก (ซื้อกระเป๋าใช้ 270 | ซื้อตั๋วใช้ 800)\n" ..
+            "🎒 กระเป๋าฮาโลวีนในตัว: %s\n" ..
+            "🧛 สิทธิ์ขอขนมฟรี: %s\n" ..
+            "🎟️ โควต้า Limited Pull: %d/5 ครั้ง\n" ..
+            "🌪️ ลูกอมจากพายุ (Storm Candy): %d ลูก\n" ..
+            "🏰 สถานะหอคอย: %s",
+            Format.Number(candy),
+            bagStr,
+            treatStatusStr,
+            boughtPulls,
+            stormCandy,
+            towerStatusStr
+        )
+        HalloweenStatusPara:SetTitle(title)
+        HalloweenStatusPara:SetDesc(desc)
+    end)
+end
+
+task.spawn(function()
+    task.wait(1.0)
+    UpdateHalloweenStatus()
+end)
 
 Tabs.Halloween:AddButton({
     Title = "🎁 กดรับรางวัลเป้าหมายฮาโลวีนทั้งหมด (1 คลิก)",
@@ -3052,6 +3171,7 @@ Tabs.Halloween:AddButton({
             Humanizer.Wait(1.2, 2.0)
         end
         Notify("🎃 ฮาโลวีน", "รับรางวัลเป้าหมาย " .. #readyGoals .. " รายการเรียบร้อย!", 3)
+        task.delay(0.5, UpdateHalloweenStatus)
     end
 })
 
@@ -3070,6 +3190,7 @@ Tabs.Halloween:AddButton({
         else
             Notify("⚠️ ลูกอมไม่พอ", "ต้องใช้ 270 ลูกอม (คุณมี: " .. candy .. ")", 2)
         end
+        task.delay(0.5, UpdateHalloweenStatus)
     end
 })
 
@@ -3093,6 +3214,7 @@ Tabs.Halloween:AddButton({
         else
             Notify("⚠️ ลูกอมไม่พอ", "ต้องใช้ 800 ลูกอม (คุณมี: " .. candy .. ")", 2)
         end
+        task.delay(0.5, UpdateHalloweenStatus)
     end
 })
 
@@ -3136,6 +3258,7 @@ Tabs.Halloween:AddButton({
                 Fire("ClaimLootPets", "Season")
                 Notify("🐾 รับสัตว์เลี้ยง", "รับสัตว์เลี้ยงฮาโลวีน " .. waitingPets .. " ตัวเรียบร้อย!", 3)
             end
+            task.delay(0.5, UpdateHalloweenStatus)
         end)
     end
 })
@@ -3155,38 +3278,62 @@ Tabs.Halloween:AddButton({
         else
             Notify("🐾 สัตว์เลี้ยงฮาโลวีน", "ไม่มีสัตว์เลี้ยงที่ค้างรอรับในระบบ", 2)
         end
+        task.delay(0.5, UpdateHalloweenStatus)
     end
 })
 
 Tabs.Halloween:AddButton({
     Title = "🍬 เดินไปขอขนมฮาโลวีน (Safe Legitimate Walking)",
+    Description = "เดินไปหาเคานต์พาวคูลาด้วยระบบ Pathfinding ปลอดภัย 100% ไร้การแบน (หากขอแล้วจะพาไปเพื่อชมร้านค้าและกลับบ้านอัตโนมัติ)",
     Callback = function()
         task.spawn(function()
-            if not CanTrickOrTreat() then
-                Notify("⚠️ ขอขนมแล้ว", "คุณขอขนมประจำวันนี้ไปแล้ว กรุณารอรอบวันถัดไป", 3)
-                return
-            end
             if IsInTrade() or getgenv().TradeActiveSession then
-                Notify("⚠️ กำลังทำกิจกรรมอื่น", "กรุณาจบการเทรดก่อนเดินไปขอขนม", 3)
+                Notify("⚠️ กำลังทำกิจกรรมอื่น", "กรุณาจบการเทรดก่อนเดินไปหาเคานต์พาวคูลา", 3)
                 return
             end
-            if IsTowerRunning() or IsTowerInArena() then
-                Notify("⚠️ กำลังลงหอคอย", "กรุณาจบหรือหยุดหอคอยก่อนเดินไปขอขนม", 3)
+            if IsTowerInArena() then
+                Notify("⚠️ กำลังสู้ในอารีน่า", "กำลังสู้อยู่ในอารีน่าหอคอย กรุณารอรอบสู้จบหรือกดออกจากอารีน่าก่อน", 3)
                 return
             end
-            Notify("🚶 กำลังเดิน", "กำลังเดินไปยังเคานต์พาวคูลาอย่างปลอดภัย...", 2)
+            
+            local canTreat = CanTrickOrTreat()
+            local resetTime = Season and Season.TreatReset and Season.TreatReset(State.Now and State.Now() or os.time()) or 0
+            local countdown = Season and Season.Countdown and Season.Countdown(resetTime) or "เร็วๆ นี้"
+            
+            if canTreat then
+                Notify("🍬 กำลังไปขอขนม", "กำลังเดินไปยังเคานต์พาวคูลาเพื่อขอขนมประจำวันอย่างปลอดภัย...", 3)
+            else
+                Notify("🍬 ขอขนมวันนี้ไปแล้ว", "คุณขอขนมประจำวันนี้ไปแล้ว (รีเซ็ตในอีก " .. countdown .. ")\nระบบจะพาเดินไปหาเคานต์พาวคูลาเพื่อเยี่ยมชมร้านค้าอย่างปลอดภัย...", 4)
+            end
+            
             local arrived = WalkToPawcula()
             if arrived then
                 Humanizer.Wait(0.8, 1.4)
                 if CanTrickOrTreat() then
                     Fire("TrickOrTreat")
-                    Notify("🍬 Trick or Treat", "ส่งคำขอขนมเรียบร้อย!", 3)
+                    Notify("🍬 Trick or Treat", "ส่งคำขอขนมฮาโลวีนเรียบร้อย!", 3)
                     Humanizer.Wait(2.5, 4.0)
                     Fire("Teleport", "Home")
+                    Notify("🏠 กลับบ้าน", "เดินทางกลับบ้านเรียบร้อย พร้อมฟาร์มต่ออัตโนมัติ", 2)
+                else
+                    Notify("🧛 ถึงเคานต์พาวคูลาแล้ว", "คุณขอขนมวันนี้ไปแล้ว (รีเซ็ตในอีก " .. countdown .. ")\nเปิดบทสนทนาและร้านค้า Spooky Shop ให้แล้ว", 3)
+                    pcall(function()
+                        local p = workspace:FindFirstChild("PetDiceHalloween")
+                            and workspace.PetDiceHalloween:FindFirstChild("HauntedCorner")
+                            and workspace.PetDiceHalloween.HauntedCorner:FindFirstChild("CountPawcula")
+                        local prompt = p and p:FindFirstChildWhichIsA("ProximityPrompt", true)
+                        if prompt and typeof(fireproximityprompt) == "function" then
+                            fireproximityprompt(prompt)
+                        end
+                    end)
+                    Humanizer.Wait(3.5, 5.0)
+                    Fire("Teleport", "Home")
+                    Notify("🏠 กลับบ้าน", "เดินทางกลับบ้านเรียบร้อย", 2)
                 end
             else
-                Notify("⚠️ เดินไม่ถึงจุด", "ไม่สามารถเดินถึงเคานต์พาวคูลาได้", 2)
+                Notify("⚠️ เดินไม่ถึงจุด", "มีสิ่งกีดขวางหรือไม่สามารถเดินถึงเคานต์พาวคูลาได้", 3)
             end
+            UpdateHalloweenStatus()
         end)
     end
 })
@@ -4219,7 +4366,7 @@ task.spawn(function()
             
             -- 5. Auto Trick or Treat: ตรวจสอบสิทธิ์ประจำวัน และเดินด้วยระบบฟิสิกส์ปกติ ปลอดภัย 100%
             if CFG.HalloweenAutoTrickOrTreat and CanTrickOrTreat() then
-                if not IsTowerInArena() and not IsTowerRunning() and not IsInTrade() and not (LocalPlayer:GetAttribute("WorldBossJoined") == true) then
+                if not IsTowerInArena() and not IsInTrade() and not (LocalPlayer:GetAttribute("WorldBossJoined") == true) then
                     Notify("🍬 ขอขนมฮาโลวีน", "กำลังเดินไปหาเคานต์พาวคูลาเพื่อขอขนมประจำวัน...", 2)
                     local arrived = WalkToPawcula()
                     if arrived and CanTrickOrTreat() then
@@ -4232,6 +4379,7 @@ task.spawn(function()
                     end
                 end
             end
+            pcall(UpdateHalloweenStatus)
         end)
     end
 end)
@@ -4247,11 +4395,11 @@ task.spawn(function()
             continue 
         end
         
-        -- ป้องกันการทำงานแทรกแซงระหว่างเทรด หรือระหว่างสู้อยู่ในอารีน่า/หอคอย
+        -- ป้องกันการทำงานแทรกแซงระหว่างเทรด หรือระหว่างสู้อยู่ในอารีน่าต่อสู้
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isJoined or IsEnteringBossPortal == true then task.wait(2.0) continue end
-        if IsTowerInArena() or IsTowerRunning() then task.wait(2.0) continue end
+        if IsTowerInArena() then task.wait(2.0) continue end
         
         local char = LocalPlayer.Character or Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -4275,7 +4423,7 @@ task.spawn(function()
             while #targets > 0 and CFG.HalloweenAutoCollectCandy do
                 if getgenv().PetDiceScriptToken ~= scriptToken then break end
                 if IsInTrade() or getgenv().TradeActiveSession then break end
-                if IsTowerInArena() or IsTowerRunning() then break end
+                if IsTowerInArena() then break end
                 local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
                 if isBoss or IsEnteringBossPortal == true then break end
                 
