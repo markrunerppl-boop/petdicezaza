@@ -1290,6 +1290,24 @@ Tabs.Enhance:AddToggle("TogAutoPetTrait", {
 -- ------------------------------------------------------------------------------
 Tabs.Tower:AddSection("📊 สถานะหอคอยแบบเรียลไทม์ (Live Tower Status)")
 
+local function GetTradeWindow()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
+    local panels = root and root:FindFirstChild("Panels")
+    local tp = panels and panels:FindFirstChild("TradingPanel")
+    if tp and tp.Visible then
+        local win = tp:FindFirstChild("Window", true)
+        if win and win.Visible then
+            return tp
+        end
+    end
+    return nil
+end
+
+local function IsInTrade()
+    return getgenv().TradeActiveSession == true or getgenv().CurrentTradeSession ~= nil or GetTradeWindow() ~= nil
+end
+
 -- ==============================================================================
 -- [REAL-TIME LIVE TOWER TRACKER & DEEP GAME SYNC]
 -- ==============================================================================
@@ -3266,20 +3284,6 @@ local function RespondAcceptTrade(senderId, senderName)
     end)
 end
 
-local function GetTradeWindow()
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
-    local panels = root and root:FindFirstChild("Panels")
-    local tp = panels and panels:FindFirstChild("TradingPanel")
-    if tp and tp.Visible then
-        local win = tp:FindFirstChild("Window", true)
-        if win and win.Visible then
-            return tp
-        end
-    end
-    return nil
-end
-
 local function GetTradeReadyButton()
     local tp = GetTradeWindow()
     if not tp then return nil, "" end
@@ -3288,10 +3292,6 @@ local function GetTradeReadyButton()
     local face = readyFrame:FindFirstChild("Face") or readyFrame:FindFirstChildWhichIsA("TextButton", true)
     local lbl = readyFrame:FindFirstChildWhichIsA("TextLabel", true)
     return face, (lbl and lbl.Text or "")
-end
-
-local function IsInTrade()
-    return getgenv().TradeActiveSession == true or getgenv().CurrentTradeSession ~= nil or GetTradeWindow() ~= nil
 end
 
 -- ------------------------------------------------------------------------------
