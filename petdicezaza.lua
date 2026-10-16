@@ -611,7 +611,7 @@ local RemoteRateLimits = {
     TradeCancel = 1.50,      -- เว้นระยะ 1.50s ต่อการกดยกเลิกการเทรด
     BuyDice = 1.50,
     EquipDice = 0.50,
-    EquipBest = 1.00,
+    EquipBest = 2.00,
     SellKeys = 0.50,
     ClaimLootPets = 0.80,
 }
@@ -1319,9 +1319,17 @@ task.spawn(function()
                         task.delay(3.6, function() isZoneTransitionLocked = false end)
                     end
                     
-                    pcall(function()
-                        Action:FireServer(unpack(args))
-                    end)
+                    if action == "EquipBest" then
+                        pcall(function() Action:FireServer("Menu", "Pets", true) end)
+                        task.wait(0.2)
+                        pcall(function() Action:FireServer("EquipBest") end)
+                        task.wait(0.3)
+                        pcall(function() Action:FireServer("Menu", "Pets", false) end)
+                    else
+                        pcall(function()
+                            Action:FireServer(unpack(args))
+                        end)
+                    end
                 end
             end
         end
@@ -6090,18 +6098,19 @@ local function SendDiscordInventoryReport(isManual)
     
     -- 1. ผู้เล่น & บัญชี
     table.insert(fields, {
-        name = "👤 ข้อมูลผู้เล่น & บัญชี (Account Info)",
-        value = string.format("• **ชื่อ:** `%s` (`%s`)\n• **เกิดใหม่ (Rebirth):** `%s`\n• **สุ่มไปแล้ว:** `%s ครั้ง`\n• **เวลาเล่นทั้งหมด:** `%d ชม. %d นาที`",
-            lp.DisplayName, lp.Name, tostring(data.Rebirth or data.Rebirths or 0), fmtComma(data.Rolls or 0), playHours, playMins),
+        name = "👤 ข้อมูลผู้เล่น & บัญชี (Player Profile)",
+        value = string.format("• **ชื่อในเกม:** `%s` (`@%s`)\n• **เกิดใหม่ (Rebirth):** `%s`\n• **ทอยเต๋าไปแล้ว:** `%s ครั้ง`\n• **สุ่มแจ็คพอตสะสม:** `%s ครั้ง`\n• **ตั๋ว/บัตรผ่าน:** `%s ใบ`\n• **เวลาเล่นทั้งหมด:** `%d ชม. %d นาที`",
+            lp.DisplayName, lp.Name, tostring(data.Rebirth or data.Rebirths or 0), fmtComma(data.Rolls or 0), fmtComma(data.JackpotRolls or 0), fmtComma(data.Tickets or 0), playHours, playMins),
         inline = false
     })
     
     -- 2. สถานะการเงิน & ความคืบหน้า
     local towerFloor = (data.TowerResume and data.TowerResume.Floor) or (data.TowerBest and data.TowerBest.Infinity) or 0
+    local towerBest = (data.TowerBest and data.TowerBest.Infinity) or towerFloor
     table.insert(fields, {
         name = "💰 สถานะการเงิน & ความคืบหน้า (Currencies)",
-        value = string.format("• **เงิน (Money):** `$%s`\n• **เพชร (Gems):** `%s`\n• **ชาร์ด (Shards):** `%s`\n• **หอคอยสูงสุด:** `ชั้น %d (Infinity)`",
-            fmtNum(data.Money), fmtComma(data.Gems), fmtComma(data.Shards or data.ShardsU), towerFloor),
+        value = string.format("• **เงินสด (Cash):** `$%s` (`$%s`)\n• **เพชร (Gems):** `💎 %s`\n• **ชาร์ด (Shards):** `🔮 %s`\n• **หอคอยอินฟินิตี้:** `🗼 ชั้น %d (สูงสุด: %d)`",
+            fmtNum(data.Money), fmtComma(data.Money), fmtComma(data.Gems), fmtComma(data.Shards or data.ShardsU or 0), towerFloor, towerBest),
         inline = true
     })
     
@@ -6110,60 +6119,156 @@ local function SendDiscordInventoryReport(isManual)
     local candyCount = halEntry and (halEntry.Candy or 0) or 0
     local stormCandyCount = halEntry and (halEntry.StormCandy or (halEntry.Stats and halEntry.Stats.StormCandy) or 0) or 0
     local halBags = (data.SeasonBags and data.SeasonBags.Halloween) or 0
+    local halPity = (data.SeasonBagPity and data.SeasonBagPity.Halloween) or 0
+    local boughtBags = (halEntry and halEntry.Bought and halEntry.Bought.HalloweenBag10 or 0)
     table.insert(fields, {
-        name = "🎃 อีเวนต์ฮาโลวีน (Halloween Event)",
-        value = string.format("• **ลูกอม (Candy):** `%s ลูก`\n• **ลูกอมพายุสะสม:** `%s ลูก`\n• **ถุงสุ่มฮาโลวีน:** `%s ถุง`\n• **ซื้อถุงสุ่มไปแล้ว:** `%d ครั้ง`",
-            fmtComma(candyCount), fmtComma(stormCandyCount), fmtComma(halBags), (halEntry and halEntry.Bought and halEntry.Bought.HalloweenBag10 or 0)),
+        name = "🎃 อีเวนต์ฮาโลวีน (Halloween 2026)",
+        value = string.format("• **ลูกอม (Candy):** `🍬 %s ลูก`\n• **ลูกอมพายุสะสม:** `⚡ %s ลูก`\n• **ถุงสุ่มฮาโลวีน:** `🎒 %s ถุง` (การันตี: `%d/100`)\n• **ซื้อถุงสุ่มไปแล้ว:** `🛒 %d ครั้ง`",
+            fmtComma(candyCount), fmtComma(stormCandyCount), fmtComma(halBags), halPity, boughtBags),
         inline = true
     })
     
-    -- 4. ขวดยาบัฟ & ถุงสุ่ม
+    -- 4. ยาบัฟทั้งหมด & บัฟที่เปิดอยู่
     local pots = data.Potions or {}
-    local geods = data.Geodes or {}
-    local totalGeodes = 0
-    for _, c in pairs(geods) do totalGeodes = totalGeodes + (tonumber(c) or 0) end
+    local potEnds = data.PotionEnds or {}
+    local nowSec = os.time()
+    local activeBuffs = {}
+    for potName, endSec in pairs(potEnds) do
+        local left = (tonumber(endSec) or 0) - nowSec
+        if left > 0 then
+            local m = math.floor(left / 60)
+            local s = math.floor(left % 60)
+            table.insert(activeBuffs, string.format("`%s` (เหลือ %d:%02d)", potName, m, s))
+        end
+    end
+    local buffStr = #activeBuffs > 0 and table.concat(activeBuffs, ", ") or "ไม่มีบัฟที่เปิดใช้งาน"
+    local totalPotions = (pots.Luck or 0) + (pots.Speed or 0) + (pots.Cash or 0)
     table.insert(fields, {
-        name = "🧪 ขวดยาบัฟ & ถุงสุ่ม (Items & Potions)",
-        value = string.format("• **Luck Potion:** `%s ขวด`\n• **Speed Potion:** `%s ขวด`\n• **Cash Potion:** `%s ขวด`\n• **Geodes ทั้งหมด:** `%s ก้อน`",
-            fmtComma(pots.Luck or 0), fmtComma(pots.Speed or 0), fmtComma(pots.Cash or 0), fmtComma(totalGeodes)),
-        inline = true
+        name = "🧪 ขวดยาบัฟ & บัฟที่ใช้งาน (Potions & Active Buffs)",
+        value = string.format("• **Luck Potion:** `🍀 %s ขวด`\n• **Speed Potion:** `⚡ %s ขวด`\n• **Cash Potion:** `💵 %s ขวด`\n• **รวมยาในคลัง:** `%s ขวด`\n• **บัฟที่กำลังทำงาน:** %s",
+            fmtComma(pots.Luck or 0), fmtComma(pots.Speed or 0), fmtComma(pots.Cash or 0), fmtComma(totalPotions), buffStr),
+        inline = false
     })
     
-    -- 5. ลูกเต๋าที่ครอบครอง
+    -- 5. จีโอด, ถุงสุ่ม & วัตถุดิบ
+    local geods = data.Geodes or {}
+    local geodeTiers = {"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic"}
+    local geodeParts = {}
+    local totalGeodes = 0
+    for _, tier in ipairs(geodeTiers) do
+        local cnt = tonumber(geods[tier]) or 0
+        totalGeodes = totalGeodes + cnt
+        if cnt > 0 then
+            table.insert(geodeParts, string.format("**%s:** `%s`", tier, fmtComma(cnt)))
+        end
+    end
+    local geodeStr = #geodeParts > 0 and table.concat(geodeParts, " | ") or "ไม่มีจีโอดในคลัง"
+    
+    local elemBags = data.ElementBags or {}
+    local elemBagParts = {}
+    for k, v in pairs(elemBags) do
+        local cnt = tonumber(v) or 0
+        if cnt > 0 then table.insert(elemBagParts, string.format("%s: `%s`", tostring(k), fmtComma(cnt))) end
+    end
+    local elemBagStr = #elemBagParts > 0 and table.concat(elemBagParts, ", ") or "ไม่มี"
+    
+    local mats = data.Materials or {}
+    local matParts = {}
+    for k, v in pairs(mats) do
+        local cnt = tonumber(v) or 0
+        if cnt > 0 then table.insert(matParts, string.format("%s: `%s`", tostring(k), fmtComma(cnt))) end
+    end
+    local matStr = #matParts > 0 and table.concat(matParts, ", ") or "ไม่มี"
+    
+    table.insert(fields, {
+        name = "💎 จีโอด, ถุงสุ่ม & วัตถุดิบ (Geodes, Bags & Materials)",
+        value = string.format("• **จีโอด (Geodes รวม %s ก้อน):**\n  └ %s\n• **ถุงสุ่ม (Bags):** ถุงดรอป: `%s ถุง` (การันตี: `%d/100`) | ถุงธาตุ: %s\n• **วัตถุดิบ (Materials):** %s",
+            fmtComma(totalGeodes), geodeStr, fmtComma(data.LootBags or 0), data.LootBagPity or 0, elemBagStr, matStr),
+        inline = false
+    })
+    
+    -- 6. ลูกเต๋า & แฟชั่น
     local diceList = {}
     if data.OwnedDice then
         for diceName, owned in pairs(data.OwnedDice) do
             if owned then table.insert(diceList, "`" .. tostring(diceName) .. "`") end
         end
     end
+    local cosm = data.Cosmetics or {}
+    local ownedCosmCount = 0
+    if cosm.Owned then for _ in pairs(cosm.Owned) do ownedCosmCount = ownedCosmCount + 1 end end
+    local hatStr = (cosm.Hat and cosm.Hat ~= "") and ("`" .. cosm.Hat .. "`") or "ไม่ได้สวมใส่"
+    local trailStr = (cosm.Trail and cosm.Trail ~= "") and ("`" .. cosm.Trail .. "`") or "ไม่ได้สวมใส่"
+    
     table.insert(fields, {
-        name = string.format("🎲 ลูกเต๋าที่ครอบครอง (%d แบบ)", #diceList),
-        value = string.format("• **กำลังใช้งาน:** `%s`\n• **คอลเลกชัน:** %s",
-            tostring(data.Dice or "Basic"), table.concat(diceList, ", ")),
+        name = string.format("🎲 ลูกเต๋า & แฟชั่น (Dice & Cosmetics - มี %d แบบ)", #diceList),
+        value = string.format("• **ลูกเต๋าที่ใช้งาน:** `🎲 %s`\n• **ลูกเต๋าที่ครอบครอง:** %s\n• **หมวก:** %s | **รอยเท้า:** %s | **ไอเทมแฟชั่น:** `%d ชิ้น`",
+            tostring(data.Dice or "Basic"), table.concat(diceList, ", "), hatStr, trailStr, ownedCosmCount),
         inline = false
     })
     
-    -- 6. สัตว์เลี้ยงที่สวมใส่
-    local totalPets = 0
-    if data.Pets then for _ in pairs(data.Pets) do totalPets = totalPets + 1 end end
-    
-    local eqList = {}
-    if data.EquippedPets and data.Pets then
-        for idx, uid in ipairs(data.EquippedPets) do
+    -- 7 & 8. สัตว์เลี้ยงที่สวมใส่ (แบ่ง 2 คอลัมน์ ช่อง 1-6 และ ช่อง 7-12 ป้องกัน Discord 1024 char limit)
+    local eq1, eq2 = {}, {}
+    local totalEquipped = 0
+    if (data.EquippedPets or data.Equipped) and data.Pets then
+        local eqSource = data.EquippedPets or data.Equipped
+        for idx, uid in ipairs(eqSource) do
             local p = data.Pets[tostring(uid)] or data.Pets[uid]
             if p then
-                local info = string.format("**#%d %s**", idx, tostring(p.Id or "Pet"))
-                if p.G then info = info .. string.format(" | เกรด: `%s`", tostring(p.G)) end
-                if p.T then info = info .. string.format(" | ทักษะ: `%s`", tostring(p.T)) end
-                if p.M then info = info .. string.format(" | มิวเทชั่น: `%s`", tostring(p.M)) end
-                table.insert(eqList, info)
+                totalEquipped = totalEquipped + 1
+                local def = PetData and PetData.ById and PetData.ById[p.Id]
+                local petName = def and def.Name or p.Id
+                local inc = def and def.Income and fmtComma(def.Income) or "0"
+                local info = string.format("`#%02d` **%s** `($%s/s)` [G: `%s` | T: `%s` | M: `%s`]",
+                    idx, petName, inc, tostring(p.G or "-"), tostring(p.T or "-"), tostring(p.M or "-"))
+                if idx <= 6 then
+                    table.insert(eq1, info)
+                else
+                    table.insert(eq2, info)
+                end
             end
         end
     end
     
     table.insert(fields, {
-        name = string.format("🐾 สัตว์เลี้ยงที่สวมใส่ (Equipped - ในคลังทั้งหมด %s ตัว)", fmtComma(totalPets)),
-        value = #eqList > 0 and table.concat(eqList, "\n") or "ไม่มีสัตว์เลี้ยงที่สวมใส่",
+        name = string.format("🐾 สัตว์เลี้ยงที่สวมใส่ (ช่อง 1 - 6) [ทีม %d ตัว]", totalEquipped),
+        value = #eq1 > 0 and table.concat(eq1, "\n") or "ไม่มีสัตว์เลี้ยง",
+        inline = true
+    })
+    table.insert(fields, {
+        name = "🐾 สัตว์เลี้ยงที่สวมใส่ (ช่อง 7 - 12)",
+        value = #eq2 > 0 and table.concat(eq2, "\n") or "ไม่มีสัตว์เลี้ยง",
+        inline = true
+    })
+    
+    -- 9. สัตว์เลี้ยงที่ดีที่สุดในกระเป๋า (Top 5 Best Pets in Backpack)
+    local allPetsList = {}
+    local totalPets = 0
+    for uid, p in pairs(data.Pets or {}) do
+        totalPets = totalPets + 1
+        local def = PetData and PetData.ById and PetData.ById[p.Id]
+        table.insert(allPetsList, {
+            Uid = uid,
+            Name = def and def.Name or p.Id,
+            Income = def and def.Income or 0,
+            Grade = p.G or "-",
+            Trait = p.T or "-",
+            Mutation = p.M or "-"
+        })
+    end
+    table.sort(allPetsList, function(a, b) return a.Income > b.Income end)
+    
+    local top5List = {}
+    local medals = {"🥇", "🥈", "🥉", "4️⃣", "5️⃣"}
+    for i = 1, math.min(5, #allPetsList) do
+        local p = allPetsList[i]
+        table.insert(top5List, string.format("%s **%s** `($%s/s)` [เกรด: `%s` | ทักษะ: `%s` | มิวเทชั่น: `%s`]",
+            medals[i], p.Name, fmtComma(p.Income), p.Grade, p.Trait, p.Mutation))
+    end
+    
+    table.insert(fields, {
+        name = string.format("⭐ สัตว์เลี้ยงที่ดีที่สุดในกระเป๋า (Top 5 Pets - คลังทั้งหมด %s ตัว)", fmtComma(totalPets)),
+        value = #top5List > 0 and table.concat(top5List, "\n") or "ไม่มีสัตว์เลี้ยงในกระเป๋า",
         inline = false
     })
     
@@ -6291,7 +6396,7 @@ Tabs.Discord:AddSection("📋 รายละเอียดหัวข้อ�
 
 Tabs.Discord:AddParagraph({
     Title = "🖼️ ข้อมูลใน Embed ที่จัดหมวดหมู่อย่างเป็นระเบียบ",
-    Content = "• 👤 ข้อมูลผู้เล่น & บัญชี (ชื่อ, Rebirth, ยอดสุ่ม, เวลาเล่น)\n• 💰 สถานะการเงิน & ค่าเงิน (เงิน, เพชร, ชาร์ด, หอคอยสูงสุด)\n• 🎃 อีเวนต์ฮาโลวีน (ลูกอม, ลูกอมพายุสะสม, ถุงสุ่มในตัว, ประวัติซื้อ)\n• 🧪 ขวดยาบัฟ & ถุงสุ่ม (Luck, Speed, Cash Potions, Geodes)\n• 🎲 ลูกเต๋าที่ครอบครอง (กำลังใช้งาน & คอลเลกชันทั้งหมด)\n• 🐾 สัตว์เลี้ยงที่สวมใส่ (Equipped Pets พร้อมเกรด, ทักษะ, มิวเทชั่น)\n• 🖼️ รูปภาพประกอบ: Headshot Avatar ของผู้เล่น และ 3D Full-Body Render"
+    Content = "• 👤 ข้อมูลผู้เล่น & บัญชี (ชื่อ, Rebirth, ยอดสุ่ม, สุ่มแจ็คพอต, ตั๋ว/บัตรผ่าน, เวลาเล่น)\n• 💰 สถานะการเงิน & ความคืบหน้า (เงินสด, เพชร, ชาร์ด, หอคอยอินฟินิตี้)\n• 🎃 อีเวนต์ฮาโลวีน 2026 (ลูกอม, ลูกอมพายุสะสม, ถุงสุ่มในตัว, แต้มการันตี, สถิติซื้อ)\n• 🧪 ขวดยาบัฟ & บัฟที่ใช้งาน (Luck, Speed, Cash พร้อมเวลานับถอยหลังของบัฟที่เปิดอยู่)\n• 💎 จีโอด, ถุงสุ่ม & วัตถุดิบ (แยกเกรด Common-Mythic, ถุงดรอป, ถุงธาตุ, Essence)\n• 🎲 ลูกเต๋า & แฟชั่น (ลูกเต๋าที่ใช้และที่สะสมครบทุกแบบ, หมวก, รอยเท้า, ของแต่งตัว)\n• 🐾 สัตว์เลี้ยงที่สวมใส่ (แยก 2 คอลัมน์ 12 ตัว พร้อม $/s, เกรด, ทักษะ, มิวเทชั่น)\n• ⭐ สัตว์เลี้ยงที่ดีที่สุดในกระเป๋า (Top 5 Pets พร้อมเหรียญรางวัลและยอดรวมในคลัง)\n• 🖼️ รูปภาพประกอบ: Avatar Headshot Thumbnail และ 3D Full-Body Render"
 })
 
 Window:SelectTab(1)
