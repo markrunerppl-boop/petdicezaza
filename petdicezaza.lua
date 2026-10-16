@@ -106,6 +106,9 @@ getgenv().TradeActiveSession = false
 getgenv().IsCandyStormActiveRunning = false
 getgenv().CandyStormMutex = false
 getgenv().LastCandyStormStartTime = 0
+getgenv().IsTrickOrTreatActiveRunning = false
+getgenv().TrickOrTreatMutex = false
+getgenv().LastTrickOrTreatStartTime = 0
 
 -- Anti-AFK (VirtualUser) ป้องกันเซิร์ฟเวอร์เตะเมื่อฟาร์ม 24/7
 pcall(function()
@@ -124,7 +127,7 @@ end)
 -- ==============================================================================
 -- [0] AIRTIGHT ANTI-BAN & PATCH SENTINEL SYSTEM (100% FAIL-SAFE PROTECTION)
 -- ==============================================================================
-local VERIFIED_GAME_PLACE_VERSION = 154
+local VERIFIED_GAME_PLACE_VERSION = 158
 local SECURITY_CONFIG_URL = "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/security.json"
 
 getgenv().EmergencyPatchHalt = false
@@ -372,6 +375,7 @@ local ZoneTransitionActions = {
 local GetHalloweenEntry
 local CanTrickOrTreat
 local isPetEnhanceRolling = false
+local isTrickOrTreatMutex = false
 getgenv().LastPetUpgradedTime = 0
 
 -- Global Token Bucket Rate Limiter (ป้องกันการยิงพร้อมกันจากทุกฟังก์ชันเกินขีดจำกัดเซิร์ฟเวอร์)
@@ -460,8 +464,8 @@ local function Fire(...)
         if not IsFeatureUnlocked("Towers", "towers") then
             return
         end
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex then
-            return -- ป้องกันการเริ่มหอคอยขณะกำลังเก็บแคนดี้
+        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
+            return -- ป้องกันการเริ่มหอคอยขณะกำลังเก็บแคนดี้หรือขอขนมฮาโลวีน
         end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then
@@ -551,6 +555,13 @@ local function Fire(...)
     if action == "TrickOrTreat" then
         if not CanTrickOrTreat or not CanTrickOrTreat() then
             return -- ยังติดคูลดาวน์ Trick or Treat ไม่ส่ง
+        end
+        -- ตรวจสอบระยะห่างจากเคานต์พาวคูลา ต้องอยู่ใกล้ไม่เกิน 20 studs ป้องกันเซิร์ฟเวอร์เตะ Error 267
+        local char = LocalPlayer.Character or Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
+        if not hrp or (hrp.Position - pawculaPos).Magnitude > 20 then
+            return -- อยู่ไกลเกินไป ไม่ส่งคำสั่งเด็ดขาด ป้องกันเซิร์ฟเวอร์เตะ Error 267
         end
     end
     if action == "SpookyBuy" then
@@ -806,25 +817,34 @@ local function WalkToPawcula()
     local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
     local targetStand = Vector3.new(36.5, 2.25, -36.0)
     
+    -- หากตัวละครอยู่ใกล้เคานต์พาวคูลาอยู่แล้ว (ไม่เกิน 15 studs) ให้ถือว่าถึงแล้วทันที
+    if (hrp.Position - pawculaPos).Magnitude <= 15 then
+        return true
+    end
+    
     -- หากตัวละครไม่ได้อยู่ในพลาซ่า ให้ใช้วาร์ปทางการของเกมไปที่ Hub (พลาซ่า) ก่อน ปลอดภัย 100%
     local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150
     if not isAlreadyInHub then
         Fire("Teleport", "Hub")
-        Humanizer.Wait(2.0, 2.8)
+        Humanizer.Wait(2.5, 3.5)
         char = LocalPlayer.Character or Character
         hum = char and char:FindFirstChildOfClass("Humanoid")
         hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hum or not hrp then return false end
+        if not hum or not hrp or hum.Health <= 0 then return false end
     end
     
-    -- เดินด้วย PathfindingService ตามเส้นทางที่ปลอดภัย กระโดดข้ามสิ่งกีดขวางอัตโนมัติ ไร้การติดขัดกลางแมพ
-    local reached = WalkAlongPath(targetStand, 10.0)
+    -- คำนวณระยะทางและตั้งเวลาเดินแบบไดนามิก ป้องกันการหมดเวลากลางคัน
+    local curDist = (hrp.Position - targetStand).Magnitude
+    local timeLimit = math.max(16.0, math.ceil(curDist / 10.0) + 8.0)
     
-    Humanizer.Wait(0.3, 0.6)
+    -- เดินด้วย PathfindingService ตามเส้นทางที่ปลอดภัย กระโดดข้ามสิ่งกีดขวางอัตโนมัติ ไร้การติดขัดกลางแมพ
+    local reached = WalkAlongPath(targetStand, timeLimit)
+    
+    Humanizer.Wait(0.4, 0.8)
     char = LocalPlayer.Character or Character
     hrp = char and char:FindFirstChild("HumanoidRootPart")
-    -- ตรวจสอบระยะห่างจากเคานต์พาวคูลาจริง ต้องไม่เกิน 12 studs (ตามระยะ ProximityPrompt สูงสุดของเกม)
-    if hrp and (hrp.Position - pawculaPos).Magnitude <= 12 then
+    -- ตรวจสอบระยะห่างจากเคานต์พาวคูลาจริง ต้องไม่เกิน 15 studs (ตามระยะ ProximityPrompt สูงสุดของเกม)
+    if hrp and (hrp.Position - pawculaPos).Magnitude <= 15 then
         return true
     end
     return reached or false
@@ -5256,8 +5276,8 @@ task.spawn(function()
                             SwitchOrStartTower(targetId, true)
                         end
                     else
-                        -- หอคอยไม่ได้ทำงานอยู่: ตรวจสอบหากพายุลูกกวาดกำลังตกอยู่ หรืออยู่ในพลาซ่า ให้รอจนกว่าจะกลับบ้าน
-                        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex then
+                        -- หอคอยไม่ได้ทำงานอยู่: ตรวจสอบหากพายุลูกกวาดกำลังตกอยู่ กำลังขอขนม หรืออยู่ในพลาซ่า ให้รอจนกว่าจะกลับบ้าน
+                        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
                             task.wait(2.0)
                             continue
                         end
@@ -5265,6 +5285,11 @@ task.spawn(function()
                         local char = LocalPlayer.Character or Character
                         local hrp = char and char:FindFirstChild("HumanoidRootPart")
                         if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150 then
+                            -- หากกำลังขอขนมฮาโลวีน หรือเก็บแคนดี้ ห้ามวาร์ปกลับบ้านเด็ดขาด
+                            if getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex or getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then
+                                task.wait(2.0)
+                                continue
+                            end
                             -- หากตัวละครอยู่ในลานพลาซ่า และไม่มีพายุลูกกวาดหรือศึกบอส ให้พากลับบ้านอย่างปลอดภัยเพื่อเริ่มหอคอย
                             if (now - LastZoneTransitionTime >= 4.0) then
                                 Fire("Teleport", "Home")
@@ -5279,6 +5304,11 @@ task.spawn(function()
                         -- รอให้การเปลี่ยนโซนก่อนหน้า (เช่น วาร์ปกลับบ้าน) โหลดเสร็จอย่างสมบูรณ์ ป้องกัน Error 267
                         if (now - LastZoneTransitionTime < 4.0) then
                             task.wait(1.5)
+                            continue
+                        end
+                        
+                        if getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
+                            task.wait(2.0)
                             continue
                         end
                         
@@ -5661,35 +5691,63 @@ task.spawn(function()
                 end
             end
             
-            -- 5. Auto Trick or Treat: ตรวจสอบสิทธิ์ประจำวัน และเดินด้วยระบบฟิสิกส์ปกติ ปลอดภัย 100%
+            -- 5. Auto Trick or Treat: ตรวจสอบสิทธิ์ประจำวัน และล็อค Mutex ป้องกันคำสั่งซ้อนกัน 100%
             if CFG.HalloweenAutoTrickOrTreat and CanTrickOrTreat() then
                 local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-                if not IsInTrade() and not getgenv().TradeActiveSession and not isBoss and not IsEnteringBossPortal and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex then
-                    if CFG.Tower and IsTowerRunning() then
-                        Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อไปขอขนมฮาโลวีน...", 2)
-                        Fire("TowerLeave")
-                        LiveTower.Active = false
-                        LiveTower.Starting = false
-                        LiveTower.LastEventTime = 0
-                        LiveTower.TowerId = nil
-                        local leaveWait = tick()
-                        while IsTowerRunning() and (tick() - leaveWait < 4.0) do
-                            task.wait(0.2)
+                if not IsInTrade() and not getgenv().TradeActiveSession and not isBoss and not IsEnteringBossPortal and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and not isTrickOrTreatMutex then
+                    -- ล็อค Mutex ข้ามระบบทันที ป้องกัน Loop 3 (Auto Tower) และคำสั่งอื่นแทรกแซง
+                    isTrickOrTreatMutex = true
+                    getgenv().IsTrickOrTreatActiveRunning = true
+                    getgenv().TrickOrTreatMutex = true
+                    getgenv().LastTrickOrTreatStartTime = tick()
+                    
+                    pcall(function()
+                        if CFG.Tower and IsTowerRunning() then
+                            Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อไปขอขนมฮาโลวีน...", 2)
+                            Fire("TowerLeave")
+                            LiveTower.Active = false
+                            LiveTower.Starting = false
+                            LiveTower.LastEventTime = 0
+                            LiveTower.TowerId = nil
+                            local leaveWait = tick()
+                            while IsTowerRunning() and (tick() - leaveWait < 4.0) do
+                                task.wait(0.2)
+                            end
+                            Humanizer.Wait(2.5, 3.5)
+                            LastZoneTransitionTime = tick()
                         end
-                        Humanizer.Wait(2.0, 3.0)
-                        LastZoneTransitionTime = tick()
-                    end
-                    Notify("🍬 ขอขนมฮาโลวีน", "กำลังเดินไปหาเคานต์พาวคูลาเพื่อขอขนมประจำวัน...", 2)
-                    local arrived = WalkToPawcula()
-                    if arrived and CanTrickOrTreat() then
-                        Humanizer.Wait(0.8, 1.5)
-                        Fire("TrickOrTreat")
-                        Notify("🍬 Trick or Treat", "ขอขนมฮาโลวีนสำเร็จ!", 3)
-                        Humanizer.Wait(2.5, 4.0)
-                        Fire("Teleport", "Home")
-                        Humanizer.Wait(3.5, 4.5)
-                        LastZoneTransitionTime = tick()
-                    end
+                        
+                        Notify("🍬 ขอขนมฮาโลวีน", "กำลังเดินไปหาเคานต์พาวคูลาเพื่อขอขนมประจำวัน...", 3)
+                        local arrived = WalkToPawcula()
+                        if arrived and CanTrickOrTreat() then
+                            Humanizer.Wait(0.8, 1.4)
+                            
+                            -- กระตุ้น ProximityPrompt บทสนทนาตามกลไกปกติของเกม
+                            pcall(function()
+                                local p = workspace:FindFirstChild("PetDiceHalloween")
+                                    and workspace.PetDiceHalloween:FindFirstChild("HauntedCorner")
+                                    and workspace.PetDiceHalloween.HauntedCorner:FindFirstChild("CountPawcula")
+                                local prompt = p and p:FindFirstChildWhichIsA("ProximityPrompt", true)
+                                if prompt and typeof(fireproximityprompt) == "function" then
+                                    fireproximityprompt(prompt)
+                                end
+                            end)
+                            
+                            Humanizer.Wait(0.4, 0.8)
+                            Fire("TrickOrTreat")
+                            Notify("🍬 Trick or Treat", "ขอขนมฮาโลวีนสำเร็จเรียบร้อย!", 4)
+                            Humanizer.Wait(2.5, 4.0)
+                            Fire("Teleport", "Home")
+                            Humanizer.Wait(3.5, 4.5)
+                            LastZoneTransitionTime = tick()
+                        end
+                    end)
+                    
+                    -- ปลดล็อค Mutex ให้ระบบอื่นกลับมาทำงานต่อได้ตามปกติ
+                    isTrickOrTreatMutex = false
+                    getgenv().IsTrickOrTreatActiveRunning = false
+                    getgenv().TrickOrTreatMutex = false
+                    getgenv().LastTrickOrTreatStartTime = 0
                 end
             end
             pcall(UpdateHalloweenStatus)
@@ -5711,6 +5769,18 @@ task.spawn(function()
                 getgenv().IsCandyStormActiveRunning = false
                 isCollectingCandyMutex = false
                 getgenv().LastCandyStormStartTime = 0
+            end
+        end
+        
+        -- Watchdog ปลดล็อค TrickOrTreat Mutex อัตโนมัติหากติดค้างเกิน 60 วินาที
+        if getgenv().TrickOrTreatMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex then
+            local startT = getgenv().LastTrickOrTreatStartTime or 0
+            if startT > 0 and (tick() - startT > 60.0) then
+                getgenv().TrickOrTreatMutex = false
+                getgenv().IsTrickOrTreatActiveRunning = false
+                isTrickOrTreatMutex = false
+                getgenv().LastTrickOrTreatStartTime = 0
+                pcall(function() Fire("Teleport", "Home") end)
             end
         end
         
