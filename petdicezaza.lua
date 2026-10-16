@@ -860,7 +860,7 @@ task.spawn(function()
                     LastGlobalRemoteFireTime = tick()
                     if ZoneTransitionActions[action] then
                         LastZoneTransitionTime = tick()
-                        task.delay(4.5, function() isZoneTransitionLocked = false end)
+                        task.delay(3.6, function() isZoneTransitionLocked = false end)
                     end
                     
                     pcall(function()
@@ -2934,10 +2934,10 @@ local function StartTowerDirect(targetTowerId)
         return false, "No pets"
     end
     
-    -- ยกเลิกการเปิด TowerAutoplay (ช่องขวาสุด) ป้องกันไม่ให้ระบบเซิร์ฟเวอร์เปิดโหมดออโต้ค้าง
+    -- เปิดระบบ TowerAutoplay ของตัวเกม เพื่อให้หอคอยไต่ชั้นอัตโนมัติอย่างต่อเนื่องไร้รอยต่อ (AUTO: ON)
     pcall(function()
-        if data.Settings and data.Settings.TowerAutoplay == true then
-            Fire("SetSetting", "TowerAutoplay", false)
+        if data.Settings and data.Settings.TowerAutoplay ~= true then
+            Fire("SetSetting", "TowerAutoplay", true)
         end
     end)
     
@@ -3055,7 +3055,7 @@ SwitchOrStartTower = function(targetTowerId, force)
         if success then
             Notify("🏰 หอคอย", "เริ่มลง " .. tostring(towerDef.Name or resolvedId) .. " เรียบร้อย!", 3)
             if CFG.AutoExitArena then
-                task.delay(3.5, function() 
+                task.delay(4.0, function() 
                     if getgenv().PetDiceScriptToken == scriptToken and IsTowerInArena() then
                         Fire("TowerExit") 
                     end
@@ -3250,9 +3250,15 @@ Tabs.Tower:AddToggle("TogTower", {
                 
                 local targetId = ResolveTowerId(CFG.SelectedTower)
                 
-                -- หากตัวละครกำลังอยู่ในหอคอยเป้าหมายอยู่แล้ว ไม่ต้องออกจากหอ แค่เปิด Away mode
+                -- หากตัวละครกำลังอยู่ในหอคอยเป้าหมายอยู่แล้ว ไม่ต้องออกจากหอ แค่เปิด Away mode และเปิด Autoplay
                 if IsTowerRunning() and GetActiveTowerId() == targetId then
                     Notify("🏰 หอคอย", "เปิดระบบฟาร์มหอคอยต่อเนื่อง!", 2)
+                    pcall(function()
+                        local d = State.Data
+                        if d and d.Settings and d.Settings.TowerAutoplay ~= true then
+                            Fire("SetSetting", "TowerAutoplay", true)
+                        end
+                    end)
                     if CFG.AutoExitArena and IsTowerInArena() then
                         Fire("TowerExit")
                     end
@@ -5492,6 +5498,13 @@ task.spawn(function()
                         if activeId and activeId ~= targetId and not isSwitchingTower and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and not getgenv().CandyStormMutex and not getgenv().IsTrickOrTreatActiveRunning and not isTrickOrTreatMutex and not getgenv().TrickOrTreatMutex then
                             SwitchOrStartTower(targetId, true)
                         end
+                        
+                        -- ตรวจสอบและเปิด TowerAutoplay ของตัวเกมให้เป็นจริงเสมอ เพื่อการไต่ชั้นอย่างต่อเนื่อง
+                        pcall(function()
+                            if data.Settings and data.Settings.TowerAutoplay ~= true then
+                                Fire("SetSetting", "TowerAutoplay", true)
+                            end
+                        end)
                         
                         -- หากอยู่ในอารีน่า และเปิดออโต้ออกจากอารีน่า ให้ส่งคำสั่งออกสู่ Away Mode
                         if IsTowerInArena() and CFG.AutoExitArena then
