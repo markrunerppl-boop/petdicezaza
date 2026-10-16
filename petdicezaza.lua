@@ -5359,14 +5359,14 @@ SafeCollectPlazaCandies = function(isManual)
             end
         end
         
-        -- เมื่อเสร็จสิ้นรอบการเก็บ ให้ตรวจสอบตำแหน่ง หากยังอยู่ในพลาซ่า ให้วาร์ปกลับบ้าน (Home) อย่างปลอดภัย
+        -- เมื่อเสร็จสิ้นรอบการเก็บ ให้วาร์ปกลับบ้าน (Home) อย่างปลอดภัยเสมอ (หากไม่ได้ติดเทรดหรือบอสโลก)
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local isStillInHub = hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150)
-        if isStillInHub then
+        local inHigherPriority = IsInTrade() or (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if hrp and not inHigherPriority then
             Fire("Teleport", "Home")
             Notify("🌪️ พายุลูกกวาด", string.format("เสร็จสิ้นรอบการเก็บแคนดี้ (%d ชิ้น)! เดินทางกลับบ้านเรียบร้อย", collectedThisRound), 3)
-            Humanizer.Wait(3.5, 4.5)
+            Humanizer.Wait(3.0, 4.0)
             LastZoneTransitionTime = tick()
         end
     end)
