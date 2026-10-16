@@ -126,18 +126,43 @@ local RemoteRateLimits = {
     BuyAllUpgrades = 1.50    -- ป้องกันการยิงรัวซื้ออัปเกรดต้นไม้
 }
 
+local function IsFeatureUnlocked(featureName, idName)
+    local data = State.Data
+    local u = data and data.Upgrades
+    if not u or not Upgrades then return false end
+    local openByFunc = Upgrades.IsOpen and Upgrades.IsOpen(u, featureName)
+    local openById = (u[idName] or 0) > 0
+    return openByFunc == true and openById == true
+end
+
 local function Fire(...) 
     local args = {...}
     local action = args[1]
-    if typeof(action) == "string" and RemoteRateLimits[action] then
-        local now = tick()
-        local minInterval = RemoteRateLimits[action]
-        local lastTime = LastRemoteFire[action] or 0
-        local diff = now - lastTime
-        if diff < minInterval then
-            task.wait(minInterval - diff)
+    if typeof(action) == "string" then
+        -- ป้องกัน 100%: ไม่ส่ง Remote ใดๆ ไปยังเซิร์ฟเวอร์เด็ดขาดหากฟีเจอร์ยังไม่ปลดล็อคใน Upgrade Tree
+        if action == "RollGrade" and not IsFeatureUnlocked("Grades", "grades") then
+            return
         end
-        LastRemoteFire[action] = tick()
+        if action == "RollTrait" and not IsFeatureUnlocked("Traits", "traits") then
+            return
+        end
+        if (action == "UpgradePet" or action == "UpgradePetLevels") and not IsFeatureUnlocked("PetUpgrades", "petup") then
+            return
+        end
+        if action == "SendExpedition" and not IsFeatureUnlocked("Expeditions", "expeditions") then
+            return
+        end
+        
+        if RemoteRateLimits[action] then
+            local now = tick()
+            local minInterval = RemoteRateLimits[action]
+            local lastTime = LastRemoteFire[action] or 0
+            local diff = now - lastTime
+            if diff < minInterval then
+                task.wait(minInterval - diff)
+            end
+            LastRemoteFire[action] = tick()
+        end
     end
     Action:FireServer(unpack(args)) 
 end
@@ -1283,7 +1308,7 @@ Tabs.Enhance:AddButton({
                 isManualUpgrading = false
                 return 
             end
-            if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "petup") then
+            if not IsFeatureUnlocked("PetUpgrades", "petup") then
                 Notify("⚠️ ยังไม่ปลดล็อค", "กรุณาปลดล็อค Pet Upgrades ในต้นไม้ทักษะก่อนใช้งาน", 3)
                 isManualUpgrading = false
                 return
@@ -1346,7 +1371,7 @@ Tabs.Enhance:AddButton({
                 isManualRollingGrade = false
                 return
             end
-            if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "grades") then
+            if not IsFeatureUnlocked("Grades", "grades") then
                 Notify("⚠️ ยังไม่ปลดล็อค", "กรุณาปลดล็อค Grades ในต้นไม้ทักษะก่อนใช้งาน", 3)
                 isManualRollingGrade = false
                 return
@@ -1394,7 +1419,7 @@ Tabs.Enhance:AddButton({
                 isManualRollingTrait = false
                 return
             end
-            if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "traits") then
+            if not IsFeatureUnlocked("Traits", "traits") then
                 Notify("⚠️ ยังไม่ปลดล็อค", "กรุณาปลดล็อค Traits ในต้นไม้ทักษะก่อนใช้งาน", 3)
                 isManualRollingTrait = false
                 return
@@ -1434,19 +1459,34 @@ Tabs.Enhance:AddSection("🔄 ระบบอัปเกรดอัตโน�
 Tabs.Enhance:AddToggle("TogAutoPetLvl", {
     Title = "1. อัปเลเวลสัตว์เลี้ยงที่ดีที่สุดอัตโนมัติ (Auto Upgrade Level)",
     Default = CFG.AutoUpgradePetLevel,
-    Callback = function(V) UpdateCFG("AutoUpgradePetLevel", V) end
+    Callback = function(V) 
+        UpdateCFG("AutoUpgradePetLevel", V)
+        if V and not IsFeatureUnlocked("PetUpgrades", "petup") then
+            Notify("⚠️ ยังไม่ปลดล็อค Pet Upgrades", "คุณยังไม่ได้ปลดล็อคฟีเจอร์นี้ในผังต้นไม้ ระบบจะหยุดรออัตโนมัติ (ไม่ส่งคำสั่งรัว ปลอดภัย 100%)", 3)
+        end
+    end
 })
 
 Tabs.Enhance:AddToggle("TogAutoPetGrade", {
     Title = "2. สุ่มเกรดสัตว์เลี้ยงที่ดีที่สุดอัตโนมัติ (หยุดเมื่อถึงเป้าหมาย)",
     Default = CFG.AutoRollGrade,
-    Callback = function(V) UpdateCFG("AutoRollGrade", V) end
+    Callback = function(V) 
+        UpdateCFG("AutoRollGrade", V)
+        if V and not IsFeatureUnlocked("Grades", "grades") then
+            Notify("⚠️ ยังไม่ปลดล็อค Grades", "คุณยังไม่ได้ปลดล็อคฟีเจอร์นี้ในผังต้นไม้ ระบบจะหยุดรออัตโนมัติ (ไม่ส่งคำสั่งรัว ปลอดภัย 100%)", 3)
+        end
+    end
 })
 
 Tabs.Enhance:AddToggle("TogAutoPetTrait", {
     Title = "3. สุ่มคุณสมบัติสัตว์เลี้ยงที่ดีที่สุดอัตโนมัติ (หยุดเมื่อถึงเป้าหมาย)",
     Default = CFG.AutoRollTrait,
-    Callback = function(V) UpdateCFG("AutoRollTrait", V) end
+    Callback = function(V) 
+        UpdateCFG("AutoRollTrait", V)
+        if V and not IsFeatureUnlocked("Traits", "traits") then
+            Notify("⚠️ ยังไม่ปลดล็อค Traits", "คุณยังไม่ได้ปลดล็อคฟีเจอร์นี้ในผังต้นไม้ ระบบจะหยุดรออัตโนมัติ (ไม่ส่งคำสั่งรัว ปลอดภัย 100%)", 3)
+        end
+    end
 })
 
 -- ------------------------------------------------------------------------------
@@ -5191,9 +5231,9 @@ task.spawn(function()
                     return 
                 end
                 
-                -- ตรวจสอบว่าปลดล็อคระบบอัปเลเวลในต้นไม้ทักษะแล้วหรือไม่ ("petup")
-                if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "petup") then
-                    task.wait(5.0) -- ยังไม่ปลดล็อค พักยาว 5 วินาที ไม่ส่งคำสั่ง
+                -- ตรวจสอบว่าปลดล็อคระบบอัปเลเวลในต้นไม้ทักษะแล้วหรือไม่ ("PetUpgrades" / "petup")
+                if not IsFeatureUnlocked("PetUpgrades", "petup") then
+                    task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
                     return
                 end
                 
@@ -5263,9 +5303,9 @@ task.spawn(function()
                     return
                 end
                 
-                -- ตรวจสอบว่าปลดล็อคระบบเกรดในต้นไม้ทักษะแล้วหรือไม่ ("grades")
-                if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "grades") then
-                    task.wait(5.0) -- ยังไม่ปลดล็อค พักยาว 5 วินาที ไม่ส่งคำสั่ง
+                -- ตรวจสอบว่าปลดล็อคระบบเกรดในต้นไม้ทักษะแล้วหรือไม่ ("Grades" / "grades")
+                if not IsFeatureUnlocked("Grades", "grades") then
+                    task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
                     return
                 end
                 
@@ -5329,9 +5369,9 @@ task.spawn(function()
                     return
                 end
                 
-                -- ตรวจสอบว่าปลดล็อคระบบ Trait (บัฟ) ในต้นไม้ทักษะแล้วหรือไม่ ("traits")
-                if not Upgrades or not Upgrades.IsOpen(data.Upgrades, "traits") then
-                    task.wait(5.0) -- ยังไม่ปลดล็อค พักยาว 5 วินาที ไม่ส่งคำสั่ง
+                -- ตรวจสอบว่าปลดล็อคระบบ Trait (บัฟ) ในต้นไม้ทักษะแล้วหรือไม่ ("Traits" / "traits")
+                if not IsFeatureUnlocked("Traits", "traits") then
+                    task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
                     return
                 end
                 
