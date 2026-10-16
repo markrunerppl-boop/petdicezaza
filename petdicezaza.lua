@@ -257,9 +257,9 @@ local function Fire(...)
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if hrp then
-            local inHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 130
+            local inHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 165
             if inHub then
-                return -- ห้ามเริ่มหอคอยเด็ดขาดขณะอยู่ในพลาซ่า ต้องวาร์ปกลับบ้านก่อน
+                return -- ห้ามเริ่มหอคอยเด็ดขาดขณะอยู่ในพลาซ่า (ระยะ Park < 165) ต้องวาร์ปกลับบ้านก่อน
             end
         end
         if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.5) then
@@ -353,6 +353,13 @@ local function Fire(...)
     end
     if action == "BuyDice" and not args[2] then
         return -- ป้องกันการยิง BuyDice แบบไม่มี ID
+    end
+    if action == "EquipBest" or action == "EquipDice" then
+        if IsTowerInArena and IsTowerInArena() then return end
+        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then return end
+        local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if isBoss or IsEnteringBossPortal == true then return end
+        if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
     end
     if action == "UsePotion" then
         local potKey = args[2]
@@ -2437,8 +2444,14 @@ SwitchOrStartTower = function(targetTowerId, force)
         return false, "In World Boss"
     end
     
-    if getgenv().IsCandyStormActiveRunning then
+    if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex then
         return false, "Candy Storm Active"
+    end
+    
+    local char = LocalPlayer.Character or Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 165 then
+        return false, "In Hub/Plaza"
     end
     
     local nowTick = tick()
@@ -4936,9 +4949,15 @@ task.spawn(function()
                             SwitchOrStartTower(targetId, true)
                         end
                     else
-                        -- หอคอยไม่ได้ทำงานอยู่: ตรวจสอบหากพายุลูกกวาดกำลังตกอยู่ ให้รอจนกว่าจะเก็บแคนดี้เสร็จก่อน
-                        -- เพื่อป้องกันไม่ให้คำสั่ง TowerStart วาร์ปตัวละครเข้าสู่อารีน่าตัดหน้าการเก็บแคนดี้
+                        -- หอคอยไม่ได้ทำงานอยู่: ตรวจสอบหากพายุลูกกวาดกำลังตกอยู่ หรืออยู่ในพลาซ่า ให้รอจนกว่าจะกลับบ้าน
                         if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex then
+                            task.wait(2.0)
+                            continue
+                        end
+                        
+                        local char = LocalPlayer.Character or Character
+                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                        if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 165 then
                             task.wait(2.0)
                             continue
                         end
@@ -5147,12 +5166,18 @@ task.spawn(function()
                         maxEquipped = Stats.MaxEquipped(data) or 1
                     end
                 end)
-                local now = tick()
+                if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then
+                    return
+                end
+                if IsTowerInArena and IsTowerInArena() then
+                    return
+                end
                 
                 -- สแกนเรียลไทม์:
                 -- 1. มีสัตว์เลี้ยงใหม่เข้ามา (currentTotal ~= lastTotalPets)
                 -- 2. สัตว์เลี้ยงที่ใส่อยู่ยังไม่เต็มช่อง (equippedCount < maxEquipped)
                 -- 3. ตรวจสอบเป็นระยะทุกๆ 8 วินาที เพื่ออัปเดตทีมที่ดีที่สุดเสมอเมื่อสัตว์เลี้ยงเลเวลอัป
+                local now = tick()
                 local shouldEquip = false
                 if currentTotal ~= lastTotalPets then
                     shouldEquip = true
