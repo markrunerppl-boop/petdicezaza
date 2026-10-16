@@ -858,8 +858,11 @@ local function Fire(...)
         if hrp and not IsPlayerAtHomePlot() then
             return -- ห้ามเริ่มหอคอยเด็ดขาดหากไม่ได้อยู่ที่ลานบ้าน (Home Plot) ของตัวเอง ป้องกันเซิร์ฟเวอร์เตะ (Error 267)
         end
-        if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.5) then
-            return -- หน่วง 3.5 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
+        if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 4.5) then
+            return -- หน่วง 4.5 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
+        end
+        if (tick() - LastZoneTransitionTime < 5.0) then
+            return -- หน่วง 5.0 วินาทีหลังวาร์ปกลับบ้าน เพื่อให้ตำแหน่งตัวละครและฟิสิกส์บนเซิร์ฟเวอร์ซิงก์ตรงกัน 100%
         end
     end
     if action == "TowerLeave" then
@@ -1855,7 +1858,7 @@ local defaultCFG = {
     HalloweenAutoCollectCandy = true,
     SelectedTower = "Infinity",
     SelectedTowerOption = "ด่าน 7: INFINITY TOWER (ไร้สิ้นสุด) [Infinity]",
-    TowerRestartDelay = 3,
+    TowerRestartDelay = 5,
     AutoWorldBoss = false,
     WorldBossElementFilter = "[ ตีทุกธาตุ (All Elements) ]",
     WorldBossDifficultyFilter = "[ ตีทุกระดับ (All Difficulties) ]",
@@ -3772,10 +3775,10 @@ Tabs.Tower:AddToggle("TogTower", {
 
 local SliderTowerDelay = Tabs.Tower:AddSlider("SlideTowerDelay", {
     Title = "ระยะเวลาหน่วงก่อนเริ่มรอบใหม่ (วินาที)",
-    Description = "ปรับเวลารอก่อนเริ่มหอคอยรอบใหม่เพื่อความปลอดภัยและสมจริง",
-    Default = CFG.TowerRestartDelay or 3,
-    Min = 1,
-    Max = 15,
+    Description = "ปรับเวลารอก่อนเริ่มหอคอยรอบใหม่เพื่อความปลอดภัยและสมจริง (แนะนำ 5-8 วินาที เพื่อป้องกันการตรวจจับ)",
+    Default = CFG.TowerRestartDelay or 5,
+    Min = 2,
+    Max = 20,
     Rounding = 0,
     Callback = function(val)
         UpdateCFG("TowerRestartDelay", val)
@@ -3784,7 +3787,7 @@ local SliderTowerDelay = Tabs.Tower:AddSlider("SlideTowerDelay", {
 
 Tabs.Tower:AddInput("InputTowerDelay", {
     Title = "⌨️ กำหนดระยะเวลาหน่วงเอง (พิมพ์วินาที)",
-    Default = tostring(CFG.TowerRestartDelay or 3),
+    Default = tostring(CFG.TowerRestartDelay or 5),
     Numeric = true,
     Finished = true,
     Callback = function(val)
@@ -5396,12 +5399,12 @@ SafeCollectPlazaCandies = function(isManual)
         if hrp and not inHigherPriority then
             Fire("Teleport", "Home")
             Notify("🌪️ พายุลูกกวาด", string.format("เสร็จสิ้นรอบการเก็บแคนดี้ (%d ชิ้น)! เดินทางกลับบ้านเรียบร้อย", collectedThisRound), 3)
-            Humanizer.Wait(3.0, 4.0)
+            Humanizer.Wait(4.5, 5.5)
             LastZoneTransitionTime = tick()
         end
     end)
     
-    Humanizer.Wait(1.0, 1.5)
+    Humanizer.Wait(1.5, 2.0)
     isCollectingCandyMutex = false
     getgenv().CandyStormMutex = false
     getgenv().IsCandyStormActiveRunning = false
@@ -6549,9 +6552,9 @@ task.spawn(function()
                         local hrp = char and char:FindFirstChild("HumanoidRootPart")
                         if hrp and not IsPlayerAtHomePlot() then
                             -- หากตัวละครไม่ได้อยู่ที่บ้านของตัวเอง ให้พากลับบ้านอย่างปลอดภัยก่อนเริ่มหอคอย
-                            if (now - LastZoneTransitionTime >= 4.0) then
+                            if (now - LastZoneTransitionTime >= 5.0) then
                                 Fire("Teleport", "Home")
-                                Humanizer.Wait(3.5, 4.5)
+                                Humanizer.Wait(4.5, 5.5)
                                 LastZoneTransitionTime = tick()
                             else
                                 task.wait(2.0)
@@ -6560,12 +6563,12 @@ task.spawn(function()
                         end
                         
                         -- รอให้การเปลี่ยนโซนก่อนหน้า (เช่น วาร์ปกลับบ้าน) โหลดเสร็จอย่างสมบูรณ์ ป้องกัน Error 267
-                        if (now - LastZoneTransitionTime < 4.0) then
+                        if (now - LastZoneTransitionTime < 5.0) then
                             task.wait(1.5)
                             continue
                         end
                         
-                        local delaySec = math.max(2.5, tonumber(CFG.TowerRestartDelay) or 3.0)
+                        local delaySec = math.max(4.0, tonumber(CFG.TowerRestartDelay) or 5.0)
                         if not isSwitchingTower and (now - lastLoopStartAttempt >= delaySec) then
                             lastLoopStartAttempt = now
                             SwitchOrStartTower(targetId, false)
