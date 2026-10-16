@@ -533,7 +533,12 @@ local function IsWorldBossActive()
 end
 
 local function IsHalloweenActive()
-    return (getgenv().IsCandyStormActiveRunning == true) or (getgenv().CandyStormMutex == true) or (getgenv().IsTrickOrTreatActiveRunning == true) or (getgenv().TrickOrTreatMutex == true) or (isCollectingCandyMutex == true) or (isTrickOrTreatMutex == true)
+    local stormActive = false
+    if IsCandyStormActive then
+        local ok, act = pcall(IsCandyStormActive)
+        if ok and act then stormActive = true end
+    end
+    return stormActive or (getgenv().IsCandyStormActiveRunning == true) or (getgenv().CandyStormMutex == true) or (getgenv().IsTrickOrTreatActiveRunning == true) or (getgenv().TrickOrTreatMutex == true) or (isCollectingCandyMutex == true) or (isTrickOrTreatMutex == true)
 end
 
 -- ลำดับ 2 (ตีบอส): ทำงานได้เมื่อ "ไม่มีการเทรด" (Priority 1)
@@ -845,6 +850,9 @@ local function Fire(...)
         if not IsFeatureUnlocked("Towers", "towers") then
             return
         end
+        if IsHalloweenActive() then
+            return -- ห้ามเริ่มหอคอยเด็ดขาดหากกิจกรรมฮาโลวีนหรือพายุลูกกวาดกำลังทำงาน (Priority 3 เหนือกว่า Priority 4)
+        end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then
             return -- ป้องกันการเริ่มหอคอยระหว่างศึกบอสโลก
@@ -1029,8 +1037,8 @@ local function Fire(...)
         return -- กำลังทอยเต๋าอยู่ ไม่ยิงซ้อน
     end
     if action == "Teleport" then
-        if IsTowerInArena and IsTowerInArena() then
-            return -- ห้ามส่งคำสั่ง Teleport เด็ดขาดขณะอยู่ในอารีน่าหอคอย ป้องกัน Error 267
+        if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then
+            return -- ห้ามส่งคำสั่ง Teleport เด็ดขาดขณะอยู่ในระบบหอคอยหรืออารีน่าหอคอย ป้องกัน Error 267
         end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then
@@ -1268,6 +1276,28 @@ local function Fire(...)
     table.insert(RemoteQueue, { action = action, args = args })
 end
 
+local ActionMenuMap = {
+    EquipBest = "Pets",
+    EquipDice = "Dice",
+    BuyDice = "Dice",
+    TowerStart = "Team",
+    Rebirth = "Rebirth",
+    BuyAllUpgrades = "Upgrades",
+    BuyUpgrade = "Upgrades",
+    MarketBuyAll = "Market",
+    MarketBuy = "Market",
+    HalloweenGoalClaim = "HalloweenGoals",
+    SpookyBuy = "SpookyShop",
+    ClaimDaily = "Daily",
+    SendExpedition = "Expeditions",
+    ClaimExpedition = "Expeditions",
+    OpenLootBag = "LootBags",
+    RollGrade = "Grades",
+    RollTrait = "Traits",
+    UpgradePet = "PetUpgrades",
+    UpgradePetLevels = "PetUpgrades",
+}
+
 -- Dedicated Single-Threaded Remote Dispatcher (รับประกันการส่งคำสั่งทีละ 1 คำสั่ง ปราศจากการยิงชนกัน 100%)
 task.spawn(function()
     while true do
@@ -1319,12 +1349,13 @@ task.spawn(function()
                         task.delay(3.6, function() isZoneTransitionLocked = false end)
                     end
                     
-                    if action == "EquipBest" then
-                        pcall(function() Action:FireServer("Menu", "Pets", true) end)
-                        task.wait(0.2)
-                        pcall(function() Action:FireServer("EquipBest") end)
-                        task.wait(0.3)
-                        pcall(function() Action:FireServer("Menu", "Pets", false) end)
+                    local targetMenu = ActionMenuMap[action]
+                    if targetMenu then
+                        pcall(function() Action:FireServer("Menu", targetMenu, true) end)
+                        task.wait(0.18)
+                        pcall(function() Action:FireServer(unpack(args)) end)
+                        task.wait(0.25)
+                        pcall(function() Action:FireServer("Menu", targetMenu, false) end)
                     else
                         pcall(function()
                             Action:FireServer(unpack(args))
@@ -6478,7 +6509,7 @@ pcall(function()
                         lastEquipBestTick = now
                         task.spawn(function()
                             Humanizer.Wait(0.2, 0.4)
-                            if getgenv().PetDiceScriptToken == scriptToken and not IsInTrade() and not getgenv().TradeActiveSession then
+                            if getgenv().PetDiceScriptToken == scriptToken and CanRunGeneralFarm() then
                                 Fire("EquipBest")
                             end
                         end)
@@ -6887,6 +6918,9 @@ task.spawn(function()
                     end
                 end)
                 if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then
+                    return
+                end
+                if not CanRunGeneralFarm() then
                     return
                 end
                 
