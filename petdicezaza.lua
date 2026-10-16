@@ -1421,6 +1421,206 @@ local function WalkAlongPath(destination, maxTime)
     return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(destination.X, 0, destination.Z)).Magnitude <= 10
 end
 
+-- ==============================================================================
+-- 🎃 HALLOWEEN HELPER FUNCTIONS (Pawcula & Candy Storm Engine)
+-- ==============================================================================
+local function GetCurrentTimestamp()
+    local ok, t = pcall(function() return workspace:GetServerTimeNow() end)
+    if ok and t then return t end
+    return os.time()
+end
+
+WalkToPawcula = function()
+    local canH, blockReason = CanRunHalloween()
+    if not canH then return false, blockReason end
+    
+    local char = LocalPlayer.Character or Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not hum or not hrp or hum.Health <= 0 then return false end
+    
+    local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
+    local targetStand = Vector3.new(36.5, 2.25, -36.0)
+    
+    -- หากตัวละครอยู่ใกล้เคานต์พาวคูลาอยู่แล้ว (ไม่เกิน 15 studs) ให้ถือว่าถึงแล้วทันที
+    if (hrp.Position - pawculaPos).Magnitude <= 15 then
+        return true
+    end
+    
+    -- หากกำลังอยู่ในอารีน่าหอคอย ให้ออกจากอารีน่าก่อน
+    if IsTowerInArena and IsTowerInArena() then
+        Fire("TowerLeave")
+        Humanizer.Wait(2.5, 3.5)
+        char = LocalPlayer.Character or Character
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp or hum.Health <= 0 then return false end
+    end
+    
+    -- หากตัวละครไม่ได้อยู่ในพลาซ่า ให้ใช้วาร์ปทางการของเกมไปที่ Hub (พลาซ่า) ก่อน ปลอดภัย 100%
+    local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150
+    if not isAlreadyInHub then
+        Fire("Teleport", "Hub")
+        Humanizer.Wait(2.5, 3.5)
+        char = LocalPlayer.Character or Character
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp or hum.Health <= 0 then return false end
+    end
+    
+    -- คำนวณระยะทางและตั้งเวลาเดินแบบไดนามิก ป้องกันการหมดเวลากลางคัน
+    local curDist = (hrp.Position - targetStand).Magnitude
+    local timeLimit = math.max(16.0, math.ceil(curDist / 10.0) + 8.0)
+    
+    -- เดินด้วย PathfindingService ตามเส้นทางที่ปลอดภัย กระโดดข้ามสิ่งกีดขวางอัตโนมัติ ไร้การติดขัดกลางแมพ
+    local reached = WalkAlongPath(targetStand, timeLimit)
+    
+    Humanizer.Wait(0.4, 0.8)
+    char = LocalPlayer.Character or Character
+    hrp = char and char:FindFirstChild("HumanoidRootPart")
+    -- ตรวจสอบระยะห่างจากเคานต์พาวคูลาจริง ต้องไม่เกิน 18 studs (ตามระยะ ProximityPrompt สูงสุดของเกม)
+    if hrp and (hrp.Position - pawculaPos).Magnitude <= 18 then
+        return true
+    end
+    return reached or false
+end
+
+IsCandyStormActive = function()
+    local now = GetCurrentTimestamp()
+    
+    -- 1. ตรวจสอบจาก Attributes บน ReplicatedStorage.PetDice (ระบบหลักของเกม 100%)
+    local okAttr, isHappeningAttr, secLeftAttr = pcall(function()
+        local PetDice = RS:FindFirstChild("PetDice")
+        local attrStart = PetDice and PetDice:GetAttribute("CandyStorm")
+        local attrEnd = PetDice and PetDice:GetAttribute("CandyStormEnds")
+        if type(attrStart) == "number" and type(attrEnd) == "number" then
+            if now >= attrStart and now < attrEnd then
+                return true, math.max(0, attrEnd - now)
+            end
+        end
+        return false, 0
+    end)
+    if okAttr and isHappeningAttr then
+        return true, secLeftAttr
+    end
+    
+    -- 2. ระบบสำรอง: คำนวณจาก ScheduleConfig และรอบเวลา 600 วินาที (Every = 600, Lasts = 75)
+    local lasts = 75
+    local okCs, isHappening, secLeft = pcall(function()
+        local cs = ScheduleConfig and ScheduleConfig.CandyStorm
+        if cs then
+            lasts = tonumber(cs.Lasts) or 75
+            local curIdx = ScheduleConfig.Index(cs, now)
+            local startOf = ScheduleConfig.StartOf(cs, curIdx)
+            if (now - startOf) < lasts then
+                return true, math.max(0, lasts - (now - startOf))
+            end
+        end
+        return false, 0
+    end)
+    if okCs and isHappening then
+        return true, secLeft
+    end
+    
+    local mod = now % 600
+    if mod < lasts then
+        return true, math.max(0, lasts - mod)
+    end
+    return false, 0
+end
+
+GetSecondsUntilNextStorm = function()
+    local now = GetCurrentTimestamp()
+    
+    local isRunning, _ = IsCandyStormActive()
+    if isRunning then return 0 end
+    
+    local okAttr, secAttr = pcall(function()
+        local PetDice = RS:FindFirstChild("PetDice")
+        local attrStart = PetDice and PetDice:GetAttribute("CandyStorm")
+        if type(attrStart) == "number" and attrStart > now then
+            return math.max(0, attrStart - now)
+        end
+    end)
+    if okAttr and type(secAttr) == "number" then
+        return secAttr
+    end
+    
+    local okCs, secCs = pcall(function()
+        local cs = ScheduleConfig and ScheduleConfig.CandyStorm
+        if cs then
+            local nextStorm = ScheduleConfig.Next(cs, now)
+            if type(nextStorm) == "number" and nextStorm > now then
+                return math.max(0, nextStorm - now)
+            end
+        end
+    end)
+    if okCs and type(secCs) == "number" then
+        return secCs
+    end
+    
+    local mod = now % 600
+    return math.max(0, 600 - mod)
+end
+
+GetAvailableCandies = function()
+    local list = {}
+    local seen = {}
+    local now = tick()
+    
+    for k, t in pairs(VisitedCandies) do
+        if now - t > 10.0 then VisitedCandies[k] = nil end
+    end
+    
+    -- 1. จากรายการ ActiveCandies ที่ดักจับจากแพ็กเก็ต Remote
+    for id, c in pairs(ActiveCandies) do
+        if c and c.Position and (now - (c.Born or 0) < 65) then
+            local posKey = string.format("%.1f_%.1f", c.Position.X, c.Position.Z)
+            if not VisitedCandies[id] and not VisitedCandies[posKey] then
+                table.insert(list, {
+                    Id = id,
+                    Kind = c.Kind,
+                    Position = c.Position,
+                    Born = c.Born,
+                    Key = id
+                })
+                seen[posKey] = true
+            end
+        else
+            ActiveCandies[id] = nil
+        end
+    end
+    
+    -- 2. สำรวจจาก workspace.PetDiceCandy.Pieces ในกรณีที่สคริปต์เพิ่งโหลดตอนพายุกำลังตกอยู่
+    pcall(function()
+        local folder = workspace:FindFirstChild("PetDiceCandy")
+        local pieces = folder and folder:FindFirstChild("Pieces")
+        if pieces then
+            for _, m in ipairs(pieces:GetChildren()) do
+                if m:IsA("Model") and not VisitedCandies[m] then
+                    local rootPart = m.PrimaryPart or m:FindFirstChild("Root") or m:FindFirstChildWhichIsA("BasePart")
+                    local pos = rootPart and rootPart.Position
+                    if pos and pos.Y > 1.0 and pos.Magnitude > 2.0 then
+                        local posKey = string.format("%.1f_%.1f", pos.X, pos.Z)
+                        if not VisitedCandies[posKey] and not seen[posKey] then
+                            table.insert(list, {
+                                Model = m,
+                                Kind = m.Name,
+                                Position = pos,
+                                Born = now,
+                                Key = m
+                            })
+                            seen[posKey] = true
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    
+    return list
+end
+
 local function SafeWalkTo(targetPos, maxWait)
     local char = LocalPlayer.Character or Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
