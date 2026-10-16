@@ -129,12 +129,12 @@ local RemoteRateLimits = {
     BuyAllUpgrades = 1.50,   -- ป้องกันการยิงรัวซื้ออัปเกรดต้นไม้
     MarketBuyAll = 2.00,     -- ป้องกันการยิงรัวกวาดซื้อของในตลาด
     MarketBuy = 0.50,        -- ซื้อของชิ้นเดี่ยวในตลาด
-    Teleport = 3.00,         -- ป้องกัน Error 600 / Teleport State Collision / Desync
-    TowerStart = 2.50,       -- ป้องกัน Tower Spurt
-    TowerExit = 2.00,
-    TowerLeave = 2.50,
-    WorldBossJoin = 2.50,
-    WorldBossLeave = 2.00,
+    Teleport = 3.50,         -- ป้องกัน Error 600 / Teleport State Collision / Desync
+    TowerStart = 3.50,       -- ป้องกัน Tower Spurt
+    TowerExit = 3.00,
+    TowerLeave = 3.50,
+    WorldBossJoin = 3.50,
+    WorldBossLeave = 3.00,
     Rebirth = 2.00,
     UsePotion = 0.40,
     OpenLootBag = 0.80,
@@ -213,6 +213,12 @@ local function Fire(...)
     -- 1.1 ควบคุมการสลับโซนข้ามแมพทั้งหมด (Zone Transition Cross-Action Serialization)
     -- ป้องกันการส่งคำสั่งเปลี่ยนโซน (Tower, Boss, Teleport) ซ้อนกันในเสี้ยววินาทีจนเซิร์ฟเวอร์เตะ Error 267
     if ZoneTransitionActions[action] then
+        local char = LocalPlayer.Character or Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not char or not hum or not hrp or hum.Health <= 0 then
+            return -- ตัวละครไม่อยู่ในสภาพพร้อมเปลี่ยนโซน ยกเลิกทันทีเพื่อป้องกัน Error 267 / 600
+        end
         local now = tick()
         local elapsedSinceZone = now - LastZoneTransitionTime
         if elapsedSinceZone < 3.5 then
@@ -247,6 +253,14 @@ local function Fire(...)
         local d = State.Data
         if (IsTowerRunning and IsTowerRunning()) or (d and d.TowerResume ~= nil and d.TowerResume.Floor and d.TowerResume.Floor > 0) then
             return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
+        end
+        local char = LocalPlayer.Character or Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local inHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 130
+            if inHub then
+                return -- ห้ามเริ่มหอคอยเด็ดขาดขณะอยู่ในพลาซ่า ต้องวาร์ปกลับบ้านก่อน
+            end
         end
         if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.5) then
             return -- หน่วง 3.5 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
@@ -2502,11 +2516,6 @@ SwitchOrStartTower = function(targetTowerId, force)
         if success then
             Notify("🏰 หอคอย", "เริ่มลง " .. tostring(towerDef.Name or resolvedId) .. " เรียบร้อย!", 3)
             if CFG.AutoExitArena then
-                task.delay(1.5, function() 
-                    if getgenv().PetDiceScriptToken == scriptToken and IsTowerInArena() then
-                        Fire("TowerExit") 
-                    end
-                end)
                 task.delay(3.5, function() 
                     if getgenv().PetDiceScriptToken == scriptToken and IsTowerInArena() then
                         Fire("TowerExit") 
