@@ -152,11 +152,11 @@ local RemoteRateLimits = {
 
 -- Global Token Bucket Rate Limiter (ป้องกันการยิงพร้อมกันจากทุกฟังก์ชันเกินขีดจำกัดเซิร์ฟเวอร์)
 -- ขีดจำกัดเซิร์ฟเวอร์ของตัวเกมแท้: PerSecond = 12, Burst = 24
--- ขีดจำกัดความปลอดภัยของสคริปต์: PerSecond = 5.0 (ปลอดภัย 58%), MaxBurst = 12 (ปลอดภัย 50%)
+-- ขีดจำกัดความปลอดภัยขั้นสูงสุดของสคริปต์: PerSecond = 4.0 (ปลอดภัยกว่าขีดจำกัดเซิร์ฟเวอร์ 67%), MaxBurst = 10 (ปลอดภัย 58%)
 local GlobalTokenBucket = {
-    Tokens = 12.0,
-    MaxTokens = 12.0,
-    RefillRate = 5.0,  -- เติม 5 token ต่อวินาที ปลอดภัยกว่าเซิร์ฟเวอร์เท่าตัว ป้องกันเซิร์ฟเวอร์เตะ Error 267
+    Tokens = 10.0,
+    MaxTokens = 10.0,
+    RefillRate = 4.0,  -- เติม 4 token ต่อวินาที ต่ำกว่าเซิร์ฟเวอร์ถึง 67% ป้องกันเซิร์ฟเวอร์เตะ Error 267 แน่นอน 100%
     LastRefill = tick(),
     Costs = {
         RollTrait = 0.5,
@@ -214,6 +214,21 @@ local function Fire(...)
         if (IsTowerRunning and IsTowerRunning()) or (d and d.TowerResume ~= nil and d.TowerResume.Floor and d.TowerResume.Floor > 0) then
             return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
         end
+        if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.0) then
+            return -- หน่วง 3 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
+        end
+    end
+    if action == "TowerLeave" then
+        local d = State.Data
+        local inTower = (IsTowerRunning and IsTowerRunning()) or (d and d.TowerResume ~= nil and d.TowerResume.Floor and d.TowerResume.Floor > 0)
+        if not inTower then
+            return -- ไม่ได้อยู่ในหอคอย ไม่ส่งคำสั่งออกจากหอ
+        end
+    end
+    if action == "TowerExit" then
+        if not IsTowerInArena or not IsTowerInArena() then
+            return -- ไม่ได้อยู่ในอารีน่าจริง ไม่ส่ง TowerExit
+        end
     end
     if (action == "WorldBossJoin" or action == "WorldBossLeave" or action == "PortalRepair") and not IsFeatureUnlocked("WorldBoss", "worldboss") then
         return
@@ -230,6 +245,51 @@ local function Fire(...)
 
     -- 3. ตรวจสอบความสมบูรณ์ของพารามิเตอร์และการมีอยู่จริงของไอเทม / ทรัพยากร (Sanity Drop ป้องกันเตะ)
     local data = State.Data
+    if action == "RollGrade" then
+        if not data or (data.Gems or 0) <= 0 then
+            return -- ไม่มีตั๋วหมุนเกรด (Gems) ไม่ส่ง
+        end
+    end
+    if action == "RollTrait" then
+        if not data or (data.Shards or 0) <= 0 then
+            return -- ไม่มีชาร์ดหมุน Trait (Shards) ไม่ส่ง
+        end
+    end
+    if action == "UpgradePet" or action == "UpgradePetLevels" then
+        local uid = args[2]
+        if not data or not data.Pets or not data.Pets[uid] then
+            return -- สัตว์เลี้ยงไม่มีอยู่จริง ไม่ส่ง
+        end
+    end
+    if action == "OpenLootBag" then
+        local bagKind = args[3]
+        if bagKind == "Halloween" then
+            if not data or not data.SeasonBags or (data.SeasonBags.Halloween or 0) <= 0 then return end
+        else
+            if not data or (data.LootBags or 0) <= 0 then return end
+        end
+    end
+    if action == "ClaimLootPets" then
+        local waiting = 0
+        pcall(function()
+            if PetData and PetData.WaitingCount and data then
+                waiting = PetData.WaitingCount(data, args[2] or "Infinity")
+            end
+        end)
+        if waiting <= 0 then return end
+    end
+    if action == "TrickOrTreat" then
+        if not data or not data.Season or (data.Season.TotCooldown and (workspace:GetServerTimeNow() < data.Season.TotCooldown)) then
+            return -- ยังติดคูลดาวน์ Trick or Treat ไม่ส่ง
+        end
+    end
+    if action == "SpookyBuy" then
+        local itemKey = args[2]
+        local itemDef = HalloweenShopConfig and HalloweenShopConfig.Items and HalloweenShopConfig.Items[itemKey]
+        local candyCost = itemDef and itemDef.Price or 0
+        local candyHave = (data and (data.Candy or data.Candies or (data.Halloween and data.Halloween.Candy))) or 0
+        if candyHave < candyCost or candyCost <= 0 then return end
+    end
     if action == "MarketBuyAll" then
         if not data or not Market then return end
         local now = State.Now and State.Now() or os.time()
