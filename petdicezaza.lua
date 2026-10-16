@@ -1000,16 +1000,17 @@ local function Fire(...)
         if not targetPlayer or targetPlayer.Parent ~= Players then return end
         
         if not data or not Config.TradeUnlocked or not Config.TradeUnlocked(data) then return end
-        if (IsInTrade and IsInTrade()) or getgenv().CurrentTradeSession ~= nil then return end
+        -- ต้องไม่เคยอยู่ในเซสชันเทรดที่เปิดอยู่แล้ว หรือหน้าต่างเทรดเปิดอยู่แล้ว
+        if getgenv().CurrentTradeSession ~= nil or (GetTradeWindow and GetTradeWindow() ~= nil) then return end
         if IsTowerInArena and IsTowerInArena() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return end
         if isZoneTransitionLocked then return end
         
-        local lastComplete = getgenv().LastTradeCompleteTime or 0
-        local elapsed = tick() - lastComplete
-        local cd = (getgenv().CFG and getgenv().CFG.TradeCooldown) or 90
-        if elapsed < math.min(10, cd) then return end
+        -- ป้องกันการยิง TradeRequest ซ้ำรัวๆ ภายใน 3 วินาที
+        local lastReq = getgenv().LastTradeRequestRemoteFire or 0
+        if (tick() - lastReq) < 3.0 then return end
+        getgenv().LastTradeRequestRemoteFire = tick()
     end
     if action == "TradeRespond" then
         local senderUserId = tonumber(args[2])
@@ -4592,9 +4593,9 @@ Tabs.Trade:AddButton({
             Fire("TowerExit")
             Humanizer.Wait(0.5, 0.8)
         end
-        getgenv().TradeActiveSession = true
         getgenv().LastTradeRequestTime = tick()
         Fire("TradeRequest", CFG.TradeTargetId)
+        getgenv().TradeActiveSession = true
         Notify("📨 ส่งคำขอเทรด", "ส่งคำขอเทรดไปยัง " .. tostring(targetPlayer.DisplayName or targetPlayer.Name) .. " แล้ว", 3)
         task.delay(20, function()
             if not getgenv().CurrentTradeSession and not GetTradeWindow() then
@@ -5602,39 +5603,53 @@ task.spawn(function()
         local inTrade = IsInTrade()
         if not inTrade then
             -- 1. ฝั่งส่ง (Sender): ส่งคำขอเทรดไปยังเป้าหมาย (ตรวจสอบคูลดาวน์ความปลอดภัยเสมอ)
-            if CFG.SenderMode and CFG.TradeTargetId then
-                local lastComplete = getgenv().LastTradeCompleteTime or 0
-                local elapsed = tick() - lastComplete
-                local cd = CFG.TradeCooldown or 90
-                
-                if elapsed >= cd then
-                    CircuitBreaker.Execute("TradeSender", function()
-                        local inWBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-                        if inWBoss then return end
-                        
-                        local targetPlayer = Players:GetPlayerByUserId(CFG.TradeTargetId)
-                        if targetPlayer and targetPlayer.Parent == Players then
-                            -- เคลียร์การลงหอคอย/อารีน่าอย่างปลอดภัยก่อนส่งคำขอเทรด
-                            if IsTowerInArena and IsTowerInArena() then
-                                Fire("TowerExit")
-                                Humanizer.Wait(0.5, 0.8)
-                            end
+            if CFG.SenderMode then
+                if not CFG.TradeTargetId and CFG.TradeTarget and CFG.TradeTarget ~= "[ เลือกทุกคนในห้อง ]" then
+                    local p = Players:FindFirstChild(CFG.TradeTarget)
+                    if p then CFG.TradeTargetId = p.UserId end
+                end
+
+                if CFG.TradeTargetId then
+                    local lastComplete = getgenv().LastTradeCompleteTime or 0
+                    local elapsed = tick() - lastComplete
+                    local cd = CFG.TradeCooldown or 90
+                    
+                    if elapsed >= cd then
+                        CircuitBreaker.Execute("TradeSender", function()
+                            local inWBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+                            if inWBoss then return end
                             
-                            -- ล็อค TradeActiveSession ทันที เพื่อป้องกันหอคอยหรือลูปอื่นแทรกแซงระหว่างส่งคำขอ
-                            getgenv().TradeActiveSession = true
-                            getgenv().LastTradeRequestTime = tick()
-                            Fire("TradeRequest", CFG.TradeTargetId)
-                            Notify("📨 ส่งคำขอเทรด", "ส่งคำขอเทรดไปยัง " .. tostring(targetPlayer.DisplayName or targetPlayer.Name) .. " แล้ว", 3)
-                            Humanizer.Wait(2.5, 4.0)
-                            -- หากคู่เทรดยังไม่ตอบรับภายใน 20 วินาที และไม่มีเซสชันเทรดเปิด ให้ปลดล็อคสถานะ
-                            task.delay(20, function()
-                                if not getgenv().CurrentTradeSession and not GetTradeWindow() then
-                                    getgenv().TradeActiveSession = false
-                                    if FlushTradeDeferredQueue then FlushTradeDeferredQueue() end
+                            local targetPlayer = Players:GetPlayerByUserId(CFG.TradeTargetId)
+                            if targetPlayer and targetPlayer.Parent == Players then
+                                if targetPlayer:GetAttribute("PetDiceTradeOff") == true then
+                                    return
                                 end
-                            end)
-                        end
-                    end)
+                                if targetPlayer:GetAttribute("PetDiceTradeLocked") == true then
+                                    return
+                                end
+
+                                -- เคลียร์การลงหอคอย/อารีน่าอย่างปลอดภัยก่อนส่งคำขอเทรด
+                                if IsTowerInArena and IsTowerInArena() then
+                                    Fire("TowerExit")
+                                    Humanizer.Wait(0.5, 0.8)
+                                end
+                                
+                                -- ส่งคำขอเทรดและล็อคสถานะ TradeActiveSession
+                                getgenv().LastTradeRequestTime = tick()
+                                Fire("TradeRequest", CFG.TradeTargetId)
+                                getgenv().TradeActiveSession = true
+                                Notify("📨 ส่งคำขอเทรด", "ส่งคำขอเทรดไปยัง " .. tostring(targetPlayer.DisplayName or targetPlayer.Name) .. " แล้ว", 3)
+                                Humanizer.Wait(2.5, 4.0)
+                                -- หากคู่เทรดยังไม่ตอบรับภายใน 20 วินาที และไม่มีเซสชันเทรดเปิด ให้ปลดล็อคสถานะ
+                                task.delay(20, function()
+                                    if not getgenv().CurrentTradeSession and not GetTradeWindow() then
+                                        getgenv().TradeActiveSession = false
+                                        if FlushTradeDeferredQueue then FlushTradeDeferredQueue() end
+                                    end
+                                end)
+                            end
+                        end)
+                    end
                 end
             end
             
