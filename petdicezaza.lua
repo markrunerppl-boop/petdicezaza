@@ -483,6 +483,9 @@ getgenv().LastPetUpgradedTime = 0
 -- Centralized Remote Dispatcher Queue (100% Single-Threaded Anti-Collision & Anti-Kick Dispatcher)
 -- ป้องกันการยิงคำสั่งพร้อมกันในเฟรมเดียวกัน (Single-Threaded FIFO Serializer)
 local RemoteQueue = {}
+getgenv().RemoteQueue = RemoteQueue
+local LoopHeartbeats = {}
+getgenv().LoopHeartbeats = LoopHeartbeats
 local MIN_GLOBAL_REMOTE_INTERVAL = 0.18
 local LastGlobalRemoteFireTime = 0
 
@@ -564,12 +567,9 @@ local function Fire(...)
             return -- ตัวละครไม่อยู่ในสภาพพร้อมเปลี่ยนโซน ยกเลิกทันทีเพื่อป้องกัน Error 267 / 600
         end
         local now = tick()
-        if isZoneTransitionLocked and (now - LastZoneTransitionTime < 3.5) then
-            return -- กำลังอยู่ในหน้าต่างเปลี่ยนโซน ปฏิเสธคำสั่งซ้ำซ้อนทันที ป้องกัน Error 267
-        end
         local elapsedSinceZone = now - LastZoneTransitionTime
-        if elapsedSinceZone < 3.5 then
-            task.wait(3.5 - elapsedSinceZone)
+        if elapsedSinceZone < 3.6 then
+            task.wait(3.6 - elapsedSinceZone)
         end
         isZoneTransitionLocked = true
         LastZoneTransitionTime = tick()
@@ -5379,6 +5379,7 @@ task.spawn(function()
     while true do
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        LoopHeartbeats["Loop1_AutoRoll"] = tick()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
         
@@ -5407,6 +5408,7 @@ task.spawn(function()
     while true do
         task.wait(3.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        LoopHeartbeats["Loop2_AutoBuyDice"] = tick()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
         if CFG.AutoBuyDice then
@@ -5453,6 +5455,7 @@ task.spawn(function()
     while true do
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        LoopHeartbeats["Loop3_AutoTower"] = tick()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
         local char = LocalPlayer.Character or Character
@@ -5575,6 +5578,7 @@ task.spawn(function()
     while true do
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        LoopHeartbeats["Loop3_WorldBoss"] = tick()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         local char = LocalPlayer.Character or Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
