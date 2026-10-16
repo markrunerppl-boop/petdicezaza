@@ -102,12 +102,6 @@ end)
 getgenv().PetDiceScriptToken = tick()
 local scriptToken = getgenv().PetDiceScriptToken
 getgenv().TradeActiveSession = false
-getgenv().IsCandyStormActiveRunning = false
-getgenv().CandyStormMutex = false
-getgenv().LastCandyStormStartTime = 0
-getgenv().IsTrickOrTreatActiveRunning = false
-getgenv().TrickOrTreatMutex = false
-getgenv().LastTrickOrTreatStartTime = 0
 
 -- Anti-AFK Dual-Layer (VirtualUser Event + 10-Min Periodic Heartbeat) ป้องกันเซิร์ฟเวอร์เตะเมื่อฟาร์ม 24/7
 pcall(function()
@@ -400,8 +394,6 @@ local Expeditions = require(PetDice.Logic.Expeditions)
 local ExpeditionConfig = require(PetDice.Configs.ExpeditionConfig)
 local PetData = require(PetDice.Configs.PetData)
 local Season = PetDice.Logic:FindFirstChild("Season") and require(PetDice.Logic.Season) or nil
-local HalloweenConfig = (PetDice.Configs:FindFirstChild("HalloweenConfig") and require(PetDice.Configs.HalloweenConfig)) or { Goals = {}, Items = {} }
-local HalloweenShopConfig = (PetDice.Configs:FindFirstChild("HalloweenShopConfig") and require(PetDice.Configs.HalloweenShopConfig)) or {}
 local Towers = require(PetDice.Logic.Towers)
 local TeamPairs = require(PetDice.Logic.TeamPairs)
 local RewardsConfig = require(PetDice.Configs.RewardsConfig)
@@ -432,9 +424,6 @@ local RemoteRateLimits = {
     Rebirth = 2.00,
     UsePotion = 0.40,
     OpenLootBag = 0.80,
-    TrickOrTreat = 2.50,
-    SpookyBuy = 1.20,
-    HalloweenGoalClaim = 1.50,
     QuestClaim = 0.40,
     ClaimDaily = 1.00,
     ClaimPlaytime = 1.00,
@@ -465,17 +454,11 @@ local ZoneTransitionActions = {
 local SwitchOrStartTower
 local IsTowerRunning
 local IsTowerInArena
-local GetHalloweenEntry
-local CanTrickOrTreat
 local isPetEnhanceRolling = false
-local isTrickOrTreatMutex = false
-local isCollectingCandyMutex = false
 local isPetOperationMutex = false
 local isEconomyActionMutex = false
 local isAutoSellingActive = false
 
-getgenv().TrickOrTreatMutex = false
-getgenv().CandyStormMutex = false
 getgenv().PetOperationMutex = false
 getgenv().EconomyActionMutex = false
 getgenv().LastPetOperationStartTime = 0
@@ -595,9 +578,6 @@ local function Fire(...)
         if not IsFeatureUnlocked("Towers", "towers") then
             return
         end
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
-            return -- ป้องกันการเริ่มหอคอยขณะกำลังเก็บแคนดี้หรือขอขนมฮาโลวีน
-        end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then
             return -- ป้องกันการเริ่มหอคอยระหว่างศึกบอสโลก
@@ -687,26 +667,6 @@ local function Fire(...)
         end)
         if waiting <= 0 then return end
     end
-    if action == "TrickOrTreat" then
-        if not CanTrickOrTreat or not CanTrickOrTreat() then
-            return -- ยังติดคูลดาวน์ Trick or Treat ไม่ส่ง
-        end
-        -- ตรวจสอบระยะห่างจากเคานต์พาวคูลา ต้องอยู่ใกล้ไม่เกิน 20 studs ป้องกันเซิร์ฟเวอร์เตะ Error 267
-        local char = LocalPlayer.Character or Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
-        if not hrp or (hrp.Position - pawculaPos).Magnitude > 20 then
-            return -- อยู่ไกลเกินไป ไม่ส่งคำสั่งเด็ดขาด ป้องกันเซิร์ฟเวอร์เตะ Error 267
-        end
-    end
-    if action == "SpookyBuy" then
-        local itemKey = args[2]
-        local itemDef = HalloweenShopConfig and HalloweenShopConfig.Items and HalloweenShopConfig.Items[itemKey]
-        local candyCost = itemDef and itemDef.Price or 0
-        local entry = GetHalloweenEntry and GetHalloweenEntry()
-        local candyHave = (entry and entry.Candy) or (data and (data.Candy or data.Candies or (data.Halloween and data.Halloween.Candy))) or 0
-        if candyHave < candyCost or candyCost <= 0 then return end
-    end
     if action == "MarketBuyAll" then
         if not data or not Market then return end
         local now = State.Now and State.Now() or os.time()
@@ -722,7 +682,6 @@ local function Fire(...)
     end
     if action == "EquipBest" or action == "EquipDice" then
         if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
@@ -737,18 +696,12 @@ local function Fire(...)
         end
     end
     if action == "Rebirth" then
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then return end
         if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return end
         local cost = Stats and Stats.RebirthCost and Stats.RebirthCost(data)
         if not cost or not data or (data.Money or 0) < cost then
             return -- เงินไม่พอเกิดใหม่ ยกเลิกทันที
-        end
-    end
-    if action == "RollGrade" or action == "RollTrait" or action == "UpgradePet" or action == "UpgradePetLevels" or action == "BuyAllUpgrades" then
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
-            return -- พักคำสั่งสุ่ม/อัปเกรดชั่วคราวระหว่างเก็บพายุลูกกวาดหรือขอขนม ป้องกัน Remote Burst & Error 267
         end
     end
     if action == "Roll" and State.Rolling then
@@ -767,23 +720,6 @@ local function Fire(...)
         end
         
         local dest = args[2]
-        -- ป้องกันการวาร์ปขัดจังหวะ Trick or Treat (ยกเว้นการวาร์ปกลับบ้านของ Loop 8 เองเมื่อขอขนมเสร็จ)
-        if (getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex) and dest == "Home" then
-            local char = LocalPlayer.Character or Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
-            if hrp and (hrp.Position - pawculaPos).Magnitude > 25 and CanTrickOrTreat and CanTrickOrTreat() then
-                return -- ยังเดินไม่ถึงหรือขอขนมไม่เสร็จ ห้ามวาร์ปกลับบ้านเด็ดขาด
-            end
-        end
-        
-        -- ป้องกันการวาร์ปขัดจังหวะ Candy Storm
-        if (getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex) and dest == "Home" then
-            local isStormActive = IsCandyStormActive and IsCandyStormActive()
-            if isStormActive then
-                return -- พายุกำลังตกอยู่ ห้ามวาร์ปกลับบ้าน
-            end
-        end
         
         -- ตรวจสอบตัวละครและสภาพร่างกายก่อนวาร์ป ป้องกัน desync และ Error 600
         local char = LocalPlayer.Character or Character
@@ -994,48 +930,6 @@ local function WalkAlongPath(destination, maxTime)
     return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(destination.X, 0, destination.Z)).Magnitude <= 10
 end
 
-local function WalkToPawcula()
-    local char = LocalPlayer.Character or Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not char or not hum or not hrp or hum.Health <= 0 then return false end
-    
-    local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
-    local targetStand = Vector3.new(36.5, 2.25, -36.0)
-    
-    -- หากตัวละครอยู่ใกล้เคานต์พาวคูลาอยู่แล้ว (ไม่เกิน 15 studs) ให้ถือว่าถึงแล้วทันที
-    if (hrp.Position - pawculaPos).Magnitude <= 15 then
-        return true
-    end
-    
-    -- หากตัวละครไม่ได้อยู่ในพลาซ่า ให้ใช้วาร์ปทางการของเกมไปที่ Hub (พลาซ่า) ก่อน ปลอดภัย 100%
-    local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150
-    if not isAlreadyInHub then
-        Fire("Teleport", "Hub")
-        Humanizer.Wait(2.5, 3.5)
-        char = LocalPlayer.Character or Character
-        hum = char and char:FindFirstChildOfClass("Humanoid")
-        hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hum or not hrp or hum.Health <= 0 then return false end
-    end
-    
-    -- คำนวณระยะทางและตั้งเวลาเดินแบบไดนามิก ป้องกันการหมดเวลากลางคัน
-    local curDist = (hrp.Position - targetStand).Magnitude
-    local timeLimit = math.max(16.0, math.ceil(curDist / 10.0) + 8.0)
-    
-    -- เดินด้วย PathfindingService ตามเส้นทางที่ปลอดภัย กระโดดข้ามสิ่งกีดขวางอัตโนมัติ ไร้การติดขัดกลางแมพ
-    local reached = WalkAlongPath(targetStand, timeLimit)
-    
-    Humanizer.Wait(0.4, 0.8)
-    char = LocalPlayer.Character or Character
-    hrp = char and char:FindFirstChild("HumanoidRootPart")
-    -- ตรวจสอบระยะห่างจากเคานต์พาวคูลาจริง ต้องไม่เกิน 15 studs (ตามระยะ ProximityPrompt สูงสุดของเกม)
-    if hrp and (hrp.Position - pawculaPos).Magnitude <= 15 then
-        return true
-    end
-    return reached or false
-end
-
 local function SafeWalkTo(targetPos, maxWait)
     local char = LocalPlayer.Character or Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -1238,12 +1132,6 @@ local defaultCFG = {
     Reward = false, Quest = false, Cutscene = false,
     UpgradeTree = false, UpgradeTreeDelay = 3,
     AutoExpedition = false, ExpeditionPetCount = 1,
-    HalloweenAutoClaim = false,
-    HalloweenAutoBuyBags = false,
-    HalloweenAutoBuyLimitedPull = false,
-    HalloweenAutoOpenBags = false,
-    HalloweenAutoTrickOrTreat = false,
-    HalloweenAutoCollectCandy = true,
     AutoDropItems = true, AutoReady = true,
     SenderMode = false, ReceiverMode = false, 
     TradeTarget = "[ เลือกทุกคนในห้อง ]", 
@@ -1462,7 +1350,6 @@ local Tabs = {
     Rebirth    = Window:AddTab({ Title = "เกิดใหม่ & สกิลทรี", Icon = "refresh-cw" }),
     Items      = Window:AddTab({ Title = "ไอเทม & บัฟขวด", Icon = "flask-conical" }),
     Expedition = Window:AddTab({ Title = "ผจญภัย & เควส", Icon = "compass" }),
-    Halloween  = Window:AddTab({ Title = "อีเวนต์ฮาโลวีน", Icon = "ghost" }),
     Trade      = Window:AddTab({ Title = "ระบบเทรดปลอดภัย", Icon = "arrow-left-right" }),
     Settings   = Window:AddTab({ Title = "ความปลอดภัย & ตั้งค่า", Icon = "shield" })
 }
@@ -1784,14 +1671,13 @@ local function UpdateOverviewTab()
         local moneyStr = Format.Money(data.Money or 0)
         local gemsStr = Format.Commas(data.Gems or 0)
         local shardsStr = Format.Commas(data.Shards or 0)
-        local candyStr = Format.Commas((data.Season and data.Season.Candy) or 0)
         local towerFloor = (data.TowerResume and data.TowerResume.Floor) or (data.TowerBest and data.TowerBest.Infinity) or 0
         local totalPets = 0
         if data.Pets then for _ in pairs(data.Pets) do totalPets = totalPets + 1 end end
         
         SafeUpdatePara(OverviewStats, 
             string.format("💰 เงิน: %s | 💎 เพชร: %s | 🔮 ชาร์ด: %s", moneyStr, gemsStr, shardsStr),
-            string.format("🏰 หอคอยชั้น: %d | 🐾 สัตว์เลี้ยงทั้งหมด: %d ตัว | 🍬 ลูกอม: %s", towerFloor, totalPets, candyStr)
+            string.format("🏰 หอคอยชั้น: %d | 🐾 สัตว์เลี้ยงทั้งหมด: %d ตัว", towerFloor, totalPets)
         )
         
         if SecurityStatusPara then
@@ -2455,7 +2341,7 @@ pcall(function()
                 task.spawn(function()
                     local delaySec = math.max(1.5, tonumber(CFG.TowerRestartDelay) or 2.5)
                     task.wait(delaySec)
-                    if CFG.Tower and getgenv().PetDiceScriptToken == scriptToken and not IsTowerRunning() and not getgenv().IsCandyStormActiveRunning then
+                    if CFG.Tower and getgenv().PetDiceScriptToken == scriptToken and not IsTowerRunning() then
                         local targetId = ResolveTowerId(CFG.SelectedTower)
                         lastLoopStartAttempt = tick()
                         SwitchOrStartTower(targetId, true)
@@ -2473,178 +2359,6 @@ pcall(function()
         end
     end)
 end)
-
--- ==============================================================================
--- [HALLOWEEN CANDY STORM EVENT TRACKER]
--- ==============================================================================
-local ActiveCandies = {}
-
-pcall(function()
-    if getgenv().PetDiceCandyConn then
-        pcall(function() getgenv().PetDiceCandyConn:Disconnect() end)
-        getgenv().PetDiceCandyConn = nil
-    end
-    local candyRemote = PetDice:WaitForChild("Remotes"):WaitForChild("CandyStorm", 15)
-    if candyRemote then
-        getgenv().PetDiceCandyConn = candyRemote.OnClientEvent:Connect(function(cmd, id, kind, pos)
-            if getgenv().PetDiceScriptToken ~= scriptToken then return end
-            if cmd == "Drop" and type(id) == "number" and typeof(pos) == "Vector3" then
-                ActiveCandies[id] = { Id = id, Kind = kind, Position = pos, Born = tick() }
-            elseif cmd == "Grabbed" and type(id) == "number" then
-                ActiveCandies[id] = nil
-            elseif cmd == "Clear" then
-                table.clear(ActiveCandies)
-            end
-        end)
-    end
-end)
-
-local function GetCurrentTimestamp()
-    local ok, t = pcall(function() return workspace:GetServerTimeNow() end)
-    if ok and t then return t end
-    return os.time()
-end
-
-local function IsCandyStormActive()
-    local now = GetCurrentTimestamp()
-    
-    -- 1. ตรวจสอบจาก Attributes บน ReplicatedStorage.PetDice (ระบบหลักของเกม 100%)
-    local okAttr, isHappeningAttr, secLeftAttr = pcall(function()
-        local PetDice = RS:FindFirstChild("PetDice")
-        local attrStart = PetDice and PetDice:GetAttribute("CandyStorm")
-        local attrEnd = PetDice and PetDice:GetAttribute("CandyStormEnds")
-        if type(attrStart) == "number" and type(attrEnd) == "number" then
-            if now >= attrStart and now < attrEnd then
-                return true, math.max(0, attrEnd - now)
-            end
-        end
-        return false, 0
-    end)
-    if okAttr and isHappeningAttr then
-        return true, secLeftAttr
-    end
-    
-    -- 2. ระบบสำรอง: คำนวณจาก ScheduleConfig และรอบเวลา 600 วินาที (Every = 600, Lasts = 75)
-    local lasts = 75
-    local okCs, isHappening, secLeft = pcall(function()
-        local cs = ScheduleConfig and ScheduleConfig.CandyStorm
-        if cs then
-            lasts = tonumber(cs.Lasts) or 75
-            local curIdx = ScheduleConfig.Index(cs, now)
-            local startOf = ScheduleConfig.StartOf(cs, curIdx)
-            if (now - startOf) < lasts then
-                return true, math.max(0, lasts - (now - startOf))
-            end
-        end
-        return false, 0
-    end)
-    if okCs and isHappening then
-        return true, secLeft
-    end
-    
-    local mod = now % 600
-    if mod < lasts then
-        return true, math.max(0, lasts - mod)
-    end
-    return false, 0
-end
-
-local function GetSecondsUntilNextStorm()
-    local now = GetCurrentTimestamp()
-    
-    -- หากพายุกำลังเกิดอยู่ขณะนี้ ให้คืนค่า 0 ทันที
-    local isRunning, _ = IsCandyStormActive()
-    if isRunning then return 0 end
-    
-    -- ตรวจสอบจาก PetDice Attribute
-    local okAttr, secAttr = pcall(function()
-        local PetDice = RS:FindFirstChild("PetDice")
-        local attrStart = PetDice and PetDice:GetAttribute("CandyStorm")
-        if type(attrStart) == "number" and attrStart > now then
-            return math.max(0, attrStart - now)
-        end
-    end)
-    if okAttr and type(secAttr) == "number" then
-        return secAttr
-    end
-    
-    local okCs, secCs = pcall(function()
-        local cs = ScheduleConfig and ScheduleConfig.CandyStorm
-        if cs then
-            local nextStorm = ScheduleConfig.Next(cs, now)
-            if type(nextStorm) == "number" and nextStorm > now then
-                return math.max(0, nextStorm - now)
-            end
-        end
-    end)
-    if okCs and type(secCs) == "number" then
-        return secCs
-    end
-    
-    local mod = now % 600
-    return math.max(0, 600 - mod)
-end
-
-local VisitedCandies = {}
-
-local function GetAvailableCandies()
-    local list = {}
-    local seen = {}
-    local now = tick()
-    
-    -- ล้างประวัติลูกอมที่เคยเก็บไปแล้วเกิน 10 วินาที
-    for k, t in pairs(VisitedCandies) do
-        if now - t > 10.0 then VisitedCandies[k] = nil end
-    end
-    
-    -- 1. จากรายการ ActiveCandies ที่ดักจับจากแพ็กเก็ต Remote
-    for id, c in pairs(ActiveCandies) do
-        if c and c.Position and (now - (c.Born or 0) < 65) then
-            local posKey = string.format("%.1f_%.1f", c.Position.X, c.Position.Z)
-            if not VisitedCandies[id] and not VisitedCandies[posKey] then
-                table.insert(list, {
-                    Id = id,
-                    Kind = c.Kind,
-                    Position = c.Position,
-                    Born = c.Born,
-                    Key = id
-                })
-                seen[posKey] = true
-            end
-        else
-            ActiveCandies[id] = nil
-        end
-    end
-    
-    -- 2. สำรวจจาก workspace.PetDiceCandy.Pieces ในกรณีที่สคริปต์เพิ่งโหลดตอนพายุกำลังตกอยู่
-    pcall(function()
-        local folder = workspace:FindFirstChild("PetDiceCandy")
-        local pieces = folder and folder:FindFirstChild("Pieces")
-        if pieces then
-            for _, m in ipairs(pieces:GetChildren()) do
-                if m:IsA("Model") and not VisitedCandies[m] then
-                    local rootPart = m.PrimaryPart or m:FindFirstChild("Root") or m:FindFirstChildWhichIsA("BasePart")
-                    local pos = rootPart and rootPart.Position
-                    if pos and pos.Y > 1.0 and pos.Magnitude > 2.0 then
-                        local posKey = string.format("%.1f_%.1f", pos.X, pos.Z)
-                        if not VisitedCandies[posKey] and not seen[posKey] then
-                            table.insert(list, {
-                                Model = m,
-                                Kind = m.Name,
-                                Position = pos,
-                                Born = now,
-                                Key = m
-                            })
-                            seen[posKey] = true
-                        end
-                    end
-                end
-            end
-        end
-    end)
-    
-    return list
-end
 
 local function SyncLiveTowerFromGame()
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
@@ -2976,13 +2690,6 @@ SwitchOrStartTower = function(targetTowerId, force)
             Notify("⚠️ พักหอคอยชั่วคราว", "ระบบกำลังเตรียมพร้อมเข้าสู้บอสโลก (ปิด 'พักหอคอยเพื่อตีบอส' หากต้องการลงหอคอยทันที)", 3)
         end
         return false, "In World Boss"
-    end
-    
-    if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex then
-        if force then
-            Notify("🍬 พายุลูกกวาด", "กำลังเก็บแคนดี้ จะเริ่มหอคอยหลังเก็บเสร็จสิ้น", 3)
-        end
-        return false, "Candy Storm Active"
     end
     
     local char = LocalPlayer.Character or Character
@@ -3713,13 +3420,12 @@ local function UpdatePotionStatus()
         local cashCount = tonumber(potions.Cash) or 0
         local speedCount = tonumber(potions.Speed) or 0
         local lootBags = tonumber(data.LootBags) or 0
-        local halloweenBags = tonumber(data.SeasonBags and data.SeasonBags.Halloween) or 0
         
-        local desc = string.format("🍀 น้ำยาโชคดี: มี %d ขวด | บัฟ: %s\n💰 น้ำยาเงิน: มี %d ขวด | บัฟ: %s\n⚡ น้ำยาความเร็ว: มี %d ขวด | บัฟ: %s\n🎒 ถุงสมบัติ: %d ใบ | 🎃 ถุงฮาโลวีน: %d ใบ",
+        local desc = string.format("🍀 น้ำยาโชคดี: มี %d ขวด | บัฟ: %s\n💰 น้ำยาเงิน: มี %d ขวด | บัฟ: %s\n⚡ น้ำยาความเร็ว: มี %d ขวด | บัฟ: %s\n🎒 ถุงสมบัติ: %d ใบ",
             luckCount, GetTimeStr(ends.Luck),
             cashCount, GetTimeStr(ends.Cash),
             speedCount, GetTimeStr(ends.Speed),
-            lootBags, halloweenBags
+            lootBags
         )
         
         SafeUpdatePara(PotionStatusPara, "🧪 สถานะน้ำยา & ไอเทมปัจจุบัน (นับถอยหลังวินาที)", desc)
@@ -4185,675 +3891,7 @@ Tabs.Expedition:AddToggle("TogCutscene", {
 })
 
 -- ------------------------------------------------------------------------------
--- 🎃 TAB 7: HALLOWEEN EVENT
--- ------------------------------------------------------------------------------
-Tabs.Halloween:AddSection("🎃 กิจกรรมฮาโลวีน (Halloween Event)")
-
-local function GetHalloweenEntry()
-    local data = State.Data
-    if not data or not data.Seasons then return nil end
-    if data.Seasons.Halloween2026 then return data.Seasons.Halloween2026 end
-    for k, v in pairs(data.Seasons) do
-        if string.find(tostring(k), "Halloween") then
-            return v
-        end
-    end
-    return nil
-end
-
-local function CanTrickOrTreat()
-    local data = State.Data
-    if not data then return false end
-    local entry = GetHalloweenEntry()
-    if not entry then return false end
-    if not entry.TreatDay then return true end
-    
-    local now = workspace:GetServerTimeNow()
-    local okSeason, currentDay = pcall(function()
-        if Season and type(Season.TreatDay) == "function" then
-            return Season.TreatDay(now)
-        end
-    end)
-    if okSeason and type(currentDay) == "number" then
-        return entry.TreatDay < currentDay
-    end
-    
-    local nowDay = math.floor(now / 86400)
-    return entry.TreatDay < nowDay
-end
-
-local HalloweenStatusPara = Tabs.Halloween:AddParagraph({
-    Title = "🎃 สถานะอีเวนต์ฮาโลวีน (Live Status)",
-    Content = "กำลังเชื่อมต่อข้อมูลฮาโลวีน..."
-})
-
-local function UpdateHalloweenStatus()
-    pcall(function()
-        local entry = GetHalloweenEntry()
-        local data = State.Data
-        local now = workspace:GetServerTimeNow()
-        
-        local candy = (entry and entry.Candy) or (data and data.Season and data.Season.Candy) or 0
-        local stormCandy = (entry and entry.StormCandy) or 0
-        local bags = (data and data.SeasonBags and data.SeasonBags.Halloween) or 0
-        local boughtPulls = (entry and entry.Bought and (entry.Bought.LimitedPull or entry.Bought.HalloweenPull or entry.Bought.SinglePull)) or 0
-        local canTreat = CanTrickOrTreat()
-        
-        local dayNow = math.floor(now / 86400)
-        local resetSeconds = math.max(0, ((dayNow + 1) * 86400) - now)
-        pcall(function()
-            if Season and type(Season.TreatReset) == "function" then
-                local sReset = Season.TreatReset(now)
-                if type(sReset) == "number" and sReset > 0 then
-                    resetSeconds = sReset
-                end
-            end
-        end)
-        local resetMins = math.floor(resetSeconds / 60)
-        local resetSecs = math.floor(resetSeconds % 60)
-        local countdown = string.format("%d:%02d", resetMins, resetSecs)
-        
-        local isStormActive, stormSecLeft = IsCandyStormActive()
-        local secToNext = GetSecondsUntilNextStorm()
-        
-        local stormStatusStr = ""
-        if isStormActive then
-            stormStatusStr = string.format("🚨 พายุกำลังตก! (เหลืออีก %d วิ) 🌪️ วิ่งกวาดลูกอม", math.ceil(stormSecLeft))
-        else
-            local m = math.floor(secToNext / 60)
-            local s = math.floor(secToNext % 60)
-            if secToNext <= 10 then
-                stormStatusStr = string.format("⚡ พายุกำลังจะเริ่มในอีก %d วิ! (เตรียมวาร์ปไปรอพลาซ่า)", math.ceil(secToNext))
-            else
-                stormStatusStr = string.format("⏳ รออีก %d:%02d นาที (วาร์ปไปรออัตโนมัติ)", m, s)
-            end
-        end
-        
-        local treatStatusStr = canTreat and "✅ พร้อมขอขนมฟรี! (เดินไปหาเคานต์พาวคูลาได้เลย)" or ("⏳ ขอของวันนี้แล้ว (รีเซ็ตในอีก " .. countdown .. ")")
-        local bagStr = bags > 0 and (tostring(bags) .. " ใบ (พร้อมกดเปิดทันที!)") or "0 ใบ"
-        
-        -- ประสานงานระบบหอคอย & บอสโลก & เก็บลูกอม (Safety 100%)
-        local coordStatusStr = ""
-        local inBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true) or (IsEnteringBossPortal == true)
-        local inArena = false
-        local isTowerRun = false
-        pcall(function()
-            if type(IsTowerInArena) == "function" then inArena = IsTowerInArena() end
-            if type(IsTowerRunning) == "function" then isTowerRun = IsTowerRunning() end
-        end)
-        
-        if inBoss then
-            coordStatusStr = "⚔️ กำลังต่อสู้กับบอสโลก (พักหอคอย & พักเก็บลูกอมชั่วคราวเพื่อความปลอดภัย 100%)"
-        elseif getgenv().IsCandyStormActiveRunning or isStormActive then
-            if isTowerRun then
-                coordStatusStr = "🌪️ กำลังเก็บพายุลูกกวาดในพลาซ่า | 🏰 หอคอยทำงานคู่ขนานในโหมด Away (ปลอดภัย 100%)"
-            else
-                coordStatusStr = "🌪️ กำลังเก็บพายุลูกกวาดในพลาซ่า (พักเริ่มหอคอยรอบใหม่ชั่วคราวเพื่อไม่ให้วาร์ปทับซ้อน)"
-            end
-        elseif inArena then
-            coordStatusStr = "⚠️ อยู่ในอารีน่าหอคอย (ระบบจะเปลี่ยนเป็น Away Mode อัตโนมัติเมื่อพายุมา)"
-        elseif isTowerRun then
-            coordStatusStr = "🏰 ฟาร์มหอคอยในโหมด Away (พร้อมเดินทางเก็บแคนดี้ทันทีเมื่อพายุเริ่ม)"
-        else
-            coordStatusStr = "💤 สแตนด์บายที่บ้าน (พร้อมเริ่มหอคอยรอบใหม่ & เก็บแคนดี้เมื่อพายุมา)"
-        end
-        
-        local candyStr = (Format and Format.Commas and Format.Commas(candy)) or tostring(candy)
-        local title = string.format("🎃 อีเวนต์ฮาโลวีน | 🍬 ลูกอม: %s | 🎒 กระเป๋า: %d ใบ", candyStr, bags)
-        local desc = string.format(
-            "🍬 ยอดลูกอมปัจจุบัน: %s ลูก (ซื้อกระเป๋าใช้ 270 | ซื้อตั๋วใช้ 800)\n" ..
-            "🎒 กระเป๋าฮาโลวีนในตัว: %s\n" ..
-            "🌪️ สถานะพายุลูกกวาด: %s (เก็บแล้ว: %d ลูก)\n" ..
-            "🧛 สิทธิ์ขอขนมฟรี: %s\n" ..
-            "🎟️ โควต้า Limited Pull: %d/5 ครั้ง\n" ..
-            "⚡ ประสานงานระบบ: %s",
-            candyStr,
-            bagStr,
-            stormStatusStr,
-            stormCandy,
-            treatStatusStr,
-            boughtPulls,
-            coordStatusStr
-        )
-        
-        SafeUpdatePara(HalloweenStatusPara, title, desc)
-    end)
-end
-
-task.spawn(UpdateHalloweenStatus)
-task.spawn(function()
-    while true do
-        task.wait(5.0)
-        if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        pcall(UpdateHalloweenStatus)
-    end
-end)
-
-Tabs.Halloween:AddButton({
-    Title = "🎁 กดรับรางวัลเป้าหมายฮาโลวีนทั้งหมด (1 คลิก)",
-    Callback = function()
-        local entry = GetHalloweenEntry()
-        if not entry then 
-            Notify("⚠️ ข้อมูลฮาโลวีน", "ไม่พบข้อมูลกิจกรรมฮาโลวีน", 2)
-            return 
-        end
-        local readyGoals = {}
-        for _, g in ipairs(HalloweenConfig.Goals or {}) do
-            local currentTier = entry.Goals and entry.Goals[g.Id] or 0
-            local nextTierIdx = currentTier + 1
-            local nextTier = g.Tiers and g.Tiers[nextTierIdx]
-            local stat = entry.Stats and entry.Stats[g.Stat] or 0
-            if nextTier ~= nil and nextTier.Goal ~= nil and stat >= nextTier.Goal then
-                table.insert(readyGoals, {id = g.Id, tier = nextTierIdx})
-            end
-        end
-        if #readyGoals == 0 then
-            Notify("🎃 เป้าหมายฮาโลวีน", "ไม่มีเป้าหมายที่สำเร็จพร้อมรับในขณะนี้ (ความคืบหน้ายังไม่ถึง)", 3)
-            return
-        end
-        for _, rg in ipairs(readyGoals) do
-            Fire("HalloweenGoalClaim", rg.id)
-            Humanizer.Wait(1.2, 2.0)
-        end
-        Notify("🎃 ฮาโลวีน", "รับรางวัลเป้าหมาย " .. #readyGoals .. " รายการเรียบร้อย!", 3)
-        task.delay(0.5, UpdateHalloweenStatus)
-    end
-})
-
-Tabs.Halloween:AddButton({
-    Title = "🛍️ ซื้อแพ็คกระเป๋า 10 ใบ (270 ลูกอม)",
-    Callback = function()
-        if IsInTrade() or getgenv().TradeActiveSession then
-            Notify("⚠️ กำลังทำกิจกรรมอื่น", "กรุณาจบการเทรดก่อนซื้อไอเทม", 3)
-            return
-        end
-        local entry = GetHalloweenEntry()
-        local candy = entry and entry.Candy or 0
-        if candy >= 270 then
-            Fire("SpookyBuy", "HalloweenBag10")
-            Notify("🛍️ ซื้อกระเป๋า", "ซื้อแพ็คกระเป๋าฮาโลวีน 10 ใบสำเร็จ! (เหลือลูกอม: " .. (candy - 270) .. ")", 3)
-        else
-            Notify("⚠️ ลูกอมไม่พอ", "ต้องใช้ 270 ลูกอม (คุณมี: " .. candy .. ")", 2)
-        end
-        task.delay(0.5, UpdateHalloweenStatus)
-    end
-})
-
-Tabs.Halloween:AddButton({
-    Title = "🎟️ ซื้อตั๋ว Limited Pull (800 ลูกอม)",
-    Callback = function()
-        if IsInTrade() or getgenv().TradeActiveSession then
-            Notify("⚠️ กำลังทำกิจกรรมอื่น", "กรุณาจบการเทรดก่อนซื้อไอเทม", 3)
-            return
-        end
-        local entry = GetHalloweenEntry()
-        local candy = entry and entry.Candy or 0
-        local boughtPulls = entry and entry.Bought and entry.Bought.LimitedPull or 0
-        if boughtPulls >= 5 then
-            Notify("⚠️ สิทธิ์เต็มแล้ว", "คุณซื้อตั๋ว Limited Pull ครบโควต้า 5/5 แล้ว", 3)
-            return
-        end
-        if candy >= 800 then
-            Fire("SpookyBuy", "LimitedPull")
-            Notify("🎟️ ซื้อ Limited Pull", "ซื้อสำเร็จ! (" .. (boughtPulls + 1) .. "/5) (เหลือลูกอม: " .. (candy - 800) .. ")", 3)
-        else
-            Notify("⚠️ ลูกอมไม่พอ", "ต้องใช้ 800 ลูกอม (คุณมี: " .. candy .. ")", 2)
-        end
-        task.delay(0.5, UpdateHalloweenStatus)
-    end
-})
-
-Tabs.Halloween:AddButton({
-    Title = "🎒 เปิดกระเป๋าฮาโลวีนทั้งหมด (Open All Bags)",
-    Callback = function()
-        task.spawn(function()
-            local bagCount = State.Data and State.Data.SeasonBags and State.Data.SeasonBags.Halloween or 0
-            if bagCount <= 0 then
-                Notify("⚠️ ไม่มีกระเป๋า", "คุณไม่มีกระเป๋าฮาโลวีนในตัว", 2)
-                return
-            end
-            local isBusy = false
-            pcall(function()
-                if LootBagController and LootBagController.Api and LootBagController.Api.Busy then
-                    isBusy = LootBagController.Api.Busy()
-                end
-                if not isBusy and CutsceneDirector and CutsceneDirector.Director and CutsceneDirector.Director.Playing then
-                    isBusy = CutsceneDirector.Director.Playing()
-                end
-            end)
-            if isBusy then
-                Notify("⏳ ระบบกำลังทำงาน", "กรุณารอแอนิเมชันหรือคัตซีนเดิมจบก่อน", 2)
-                return
-            end
-            if LootBagController and LootBagController.Api and LootBagController.Api.Open then
-                LootBagController.Api.Open("all", "Halloween")
-            else
-                Fire("OpenLootBag", "all", "Halloween")
-            end
-            Notify("🎒 เปิดกระเป๋า", "กำลังเปิดกระเป๋าฮาโลวีน " .. bagCount .. " ใบ...", 3)
-            Humanizer.Wait(4.5, 6.0)
-            local waitingPets = 0
-            pcall(function()
-                if State.Data and PetData and PetData.WaitingCount then
-                    waitingPets = PetData.WaitingCount(State.Data, "Season")
-                end
-            end)
-            if waitingPets > 0 then
-                Humanizer.Wait(1.0, 1.8)
-                Fire("ClaimLootPets", "Season")
-                Notify("🐾 รับสัตว์เลี้ยง", "รับสัตว์เลี้ยงฮาโลวีน " .. waitingPets .. " ตัวเรียบร้อย!", 3)
-            end
-            task.delay(0.5, UpdateHalloweenStatus)
-        end)
-    end
-})
-
-Tabs.Halloween:AddButton({
-    Title = "🐾 เคลมสัตว์เลี้ยงฮาโลวีนที่รอรับ (Claim Waiting Pets)",
-    Callback = function()
-        local waitingPets = 0
-        pcall(function()
-            if State.Data and PetData and PetData.WaitingCount then
-                waitingPets = PetData.WaitingCount(State.Data, "Season")
-            end
-        end)
-        if waitingPets > 0 then
-            Fire("ClaimLootPets", "Season")
-            Notify("🐾 รับสัตว์เลี้ยง", "รับสัตว์เลี้ยงฮาโลวีน " .. waitingPets .. " ตัวเรียบร้อย!", 3)
-        else
-            Notify("🐾 สัตว์เลี้ยงฮาโลวีน", "ไม่มีสัตว์เลี้ยงที่ค้างรอรับในระบบ", 2)
-        end
-        task.delay(0.5, UpdateHalloweenStatus)
-    end
-})
-
-Tabs.Halloween:AddButton({
-    Title = "🍬 เดินไปขอขนมฮาโลวีน (Safe Legitimate Walking)",
-    Description = "เดินไปหาเคานต์พาวคูลาด้วยระบบ Pathfinding ปลอดภัย 100% ไร้การแบน (หากขอแล้วจะพาไปเพื่อชมร้านค้าและกลับบ้านอัตโนมัติ)",
-    Callback = function()
-        task.spawn(function()
-            if IsInTrade() or getgenv().TradeActiveSession then
-                Notify("⚠️ กำลังทำกิจกรรมอื่น", "กรุณาจบการเทรดก่อนเดินไปหาเคานต์พาวคูลา", 3)
-                return
-            end
-            if IsTowerInArena() then
-                Notify("⚠️ กำลังสู้ในอารีน่า", "กำลังสู้อยู่ในอารีน่าหอคอย กรุณารอรอบสู้จบหรือกดออกจากอารีน่าก่อน", 3)
-                return
-            end
-            
-            local canTreat = CanTrickOrTreat()
-            local resetTime = Season and Season.TreatReset and Season.TreatReset(State.Now and State.Now() or os.time()) or 0
-            local countdown = Season and Season.Countdown and Season.Countdown(resetTime) or "เร็วๆ นี้"
-            
-            if canTreat then
-                Notify("🍬 กำลังไปขอขนม", "กำลังเดินไปยังเคานต์พาวคูลาเพื่อขอขนมประจำวันอย่างปลอดภัย...", 3)
-            else
-                Notify("🍬 ขอขนมวันนี้ไปแล้ว", "คุณขอขนมประจำวันนี้ไปแล้ว (รีเซ็ตในอีก " .. countdown .. ")\nระบบจะพาเดินไปหาเคานต์พาวคูลาเพื่อเยี่ยมชมร้านค้าอย่างปลอดภัย...", 4)
-            end
-            
-            local arrived = WalkToPawcula()
-            if arrived then
-                Humanizer.Wait(0.8, 1.4)
-                if CanTrickOrTreat() then
-                    Fire("TrickOrTreat")
-                    Notify("🍬 Trick or Treat", "ส่งคำขอขนมฮาโลวีนเรียบร้อย!", 3)
-                    Humanizer.Wait(2.5, 4.0)
-                    Fire("Teleport", "Home")
-                    Notify("🏠 กลับบ้าน", "เดินทางกลับบ้านเรียบร้อย พร้อมฟาร์มต่ออัตโนมัติ", 2)
-                else
-                    Notify("🧛 ถึงเคานต์พาวคูลาแล้ว", "คุณขอขนมวันนี้ไปแล้ว (รีเซ็ตในอีก " .. countdown .. ")\nเปิดบทสนทนาและร้านค้า Spooky Shop ให้แล้ว", 3)
-                    pcall(function()
-                        local p = workspace:FindFirstChild("PetDiceHalloween")
-                            and workspace.PetDiceHalloween:FindFirstChild("HauntedCorner")
-                            and workspace.PetDiceHalloween.HauntedCorner:FindFirstChild("CountPawcula")
-                        local prompt = p and p:FindFirstChildWhichIsA("ProximityPrompt", true)
-                        if prompt and typeof(fireproximityprompt) == "function" then
-                            fireproximityprompt(prompt)
-                        end
-                    end)
-                    Humanizer.Wait(3.5, 5.0)
-                    Fire("Teleport", "Home")
-                    Notify("🏠 กลับบ้าน", "เดินทางกลับบ้านเรียบร้อย", 2)
-                end
-            else
-                Notify("⚠️ เดินไม่ถึงจุด", "มีสิ่งกีดขวางหรือไม่สามารถเดินถึงเคานต์พาวคูลาได้", 3)
-            end
-            UpdateHalloweenStatus()
-        end)
-    end
-})
-
-isCollectingCandyMutex = false
-
-local function SafeCollectPlazaCandies(isManual)
-    if isCollectingCandyMutex or getgenv().CandyStormMutex or getgenv().IsCandyStormActiveRunning then
-        if isManual then
-            Notify("🌪️ กำลังเก็บแคนดี้อยู่แล้ว", "ระบบกำลังวิ่งเก็บแคนดี้ในพลาซ่าให้อยู่ในขณะนี้", 3)
-        end
-        return false
-    end
-    
-    if isTrickOrTreatMutex or getgenv().TrickOrTreatMutex or getgenv().IsTrickOrTreatActiveRunning then
-        if isManual then Notify("🎃 กำลังขอขนม", "กรุณารอระบบขอขนมฮาโลวีนเสร็จสิ้นก่อนเก็บลูกอม", 3) end
-        return false
-    end
-    
-    if IsInTrade() or getgenv().TradeActiveSession then
-        if isManual then Notify("⚠️ กำลังทำกิจกรรมอื่น", "กรุณาจบการเทรดก่อนเก็บแคนดี้", 3) end
-        return false
-    end
-    
-    local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-    if isBoss or IsEnteringBossPortal == true then
-        if isManual then Notify("⚔️ บอสโลก", "กรุณาจบรอบบอสโลกก่อนเก็บแคนดี้", 3) end
-        return false
-    end
-    
-    local isStormActive, stormSecLeft = IsCandyStormActive()
-    local targets = GetAvailableCandies()
-    if not isStormActive and #targets == 0 then
-        if isManual then
-            local secToNext = GetSecondsUntilNextStorm()
-            local m = math.floor(secToNext / 60)
-            local s = math.floor(secToNext % 60)
-            Notify("⏳ ยังไม่มีพายุลูกกวาด", string.format("ขณะนี้ยังไม่มีแคนดี้ในพลาซ่า (พายุรอบถัดไปในอีก %d นาที %02d วิ)\nระบบจะรอจนกว่าพายุจะเริ่มจริง เพื่อความปลอดภัย 100%%", m, s), 4)
-        end
-        return false
-    end
-    
-    -- ล็อค Mutex และ Flag ทันทีตั้งแต่ก้าวแรก ป้องกัน Loop อื่นๆ (เช่น Tower หรือ Boss) แทรกแซง
-    isCollectingCandyMutex = true
-    getgenv().CandyStormMutex = true
-    getgenv().IsCandyStormActiveRunning = true
-    getgenv().LastCandyStormStartTime = tick()
-    
-    -- หากกำลังลงหอคอยอยู่ ให้ออกจากหอคอยชั่วคราว เพื่อไปเก็บแคนดี้ตามความต้องการของผู้ใช้ (และจะกลับมาเริ่มใหม่เมื่อเก็บเสร็จ)
-    if CFG.Tower and IsTowerRunning() then
-        Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อไปเก็บพายุลูกกวาด...", 2)
-        Fire("TowerLeave")
-        LiveTower.Active = false
-        LiveTower.Starting = false
-        LiveTower.LastEventTime = 0
-        LiveTower.TowerId = nil
-        local leaveWaitStart = tick()
-        while IsTowerRunning() and (tick() - leaveWaitStart < 4.0) do
-            task.wait(0.2)
-        end
-        Humanizer.Wait(2.0, 3.0)
-        LastZoneTransitionTime = tick()
-    end
-    
-    local collectedThisRound = 0
-    
-    local ok, err = pcall(function()
-        local char = LocalPlayer.Character or Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not char or not hum or not hrp or hum.Health <= 0 then return end
-        
-        -- ตรวจสอบว่าผู้เล่นอยู่ใน Hub หรือยัง (ระยะห่างจากแกนศูนย์กลาง Hub (0,0,0) น้อยกว่า 150 studs คืออยู่ในพลาซ่าแล้ว)
-        local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150
-        if not isAlreadyInHub then
-            Notify("🌪️ พายุลูกกวาด", "กำลังเดินทางไปพลาซ่าเพื่อเก็บแคนดี้...", 2)
-            Fire("Teleport", "Hub")
-            Humanizer.Wait(2.0, 2.8)
-            char = LocalPlayer.Character or Character
-            hum = char and char:FindFirstChildOfClass("Humanoid")
-            hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not hum or not hrp or hum.Health <= 0 then return end
-        end
-        
-        local targets = GetAvailableCandies()
-        local isStormActive, stormSecLeft = IsCandyStormActive()
-        local secToNext = GetSecondsUntilNextStorm()
-        
-        if #targets == 0 and not isStormActive and secToNext > 8 then
-            if isManual then
-                local m = math.floor(secToNext / 60)
-                local s = math.floor(secToNext % 60)
-                Notify("⏳ ยังไม่มีพายุลูกกวาด", string.format("ขณะนี้ยังไม่มีแคนดี้ในพลาซ่า (พายุรอบถัดไปในอีก %d นาที %02d วิ)\nระบบจะพากลับบ้าน และจะวาร์ปมาเก็บให้อัตโนมัติเมื่อพายุเริ่ม", m, s), 4)
-            end
-            Humanizer.Wait(1.5, 2.0)
-            Fire("Teleport", "Home")
-            Humanizer.Wait(3.0, 4.0)
-            LastZoneTransitionTime = tick()
-            return
-        end
-        
-        Notify("🍬 เริ่มเก็บแคนดี้", "เริ่มกวาดเก็บแคนดี้ทั่วทั้งพลาซ่าแบบ Real-Time และปลอดภัย 100%...", 3)
-        
-        local lastCandySeen = tick()
-        local maxSessionTime = tick() + 90.0
-        
-        while tick() < maxSessionTime do
-            if getgenv().PetDiceScriptToken ~= scriptToken then break end
-            if not isManual and not CFG.HalloweenAutoCollectCandy then break end
-            if IsInTrade() or getgenv().TradeActiveSession then break end
-            if IsTowerInArena() then break end
-            local bossNow = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-            if bossNow or IsEnteringBossPortal == true then break end
-            
-            char = LocalPlayer.Character or Character
-            hum = char and char:FindFirstChildOfClass("Humanoid")
-            hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not hum or not hrp or hum.Health <= 0 then break end
-            
-            targets = GetAvailableCandies()
-            local stormActive, _ = IsCandyStormActive()
-            local nextWait = GetSecondsUntilNextStorm()
-            
-            if #targets == 0 then
-                -- หากพายุยังคงตกอยู่ หรือยังเหลือเวลาพายุ หรือพายุรอบใหม่กำลังจะเริ่มในอีก 8 วิ
-                -- ให้อยู่ในพลาซ่าต่อไป ไม่วาร์ปกลับบ้านเด็ดขาด ป้องกันการวาร์ปไป-กลับซ้ำซากจนโดน Error 267!
-                if stormActive or (nextWait <= 8) then
-                    local centerPos = Vector3.new(0, hrp.Position.Y, 0)
-                    if (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(0, 0, 0)).Magnitude > 12 then
-                        hum:MoveTo(centerPos)
-                    end
-                    task.wait(0.35)
-                    continue
-                else
-                    -- พายุจบลงจริง 100% แล้ว และไม่มีลูกอมเหลืออยู่บนพื้น
-                    -- รอเคลียร์เผื่อลูกอมลูกสุดท้ายอีก 4.0 วินาที
-                    if tick() - lastCandySeen > 4.0 then
-                        break
-                    end
-                    task.wait(0.35)
-                    continue
-                end
-            end
-            
-            lastCandySeen = tick()
-            
-            -- คัดเลือกเป้าหมายที่คุ้มค่าและใกล้ที่สุดทั่วทั้งพลาซ่า (ระยะไกลสุด 350 studs ครอบคลุมทั้งแผนที่)
-            local curPos = hrp.Position
-            local bestCandy = nil
-            local bestScore = math.huge
-            
-            for _, c in ipairs(targets) do
-                if c and c.Position then
-                    local d = (Vector3.new(c.Position.X, 0, c.Position.Z) - Vector3.new(curPos.X, 0, curPos.Z)).Magnitude
-                    if d <= 350 then
-                        local weight = 1.0
-                        local kind = c.Kind or (c.Model and c.Model.Name) or ""
-                        if kind:find("Bucket") then
-                            weight = 3.5 -- Pumpkin Bucket: 15 ลูกอม
-                        elseif kind:find("Bag") then
-                            weight = 2.2 -- Candy Bag: 5 ลูกอม
-                        elseif kind:find("Lollipop") then
-                            weight = 1.4 -- Lollipop: 2 ลูกอม
-                        end
-                        
-                        local score = d / weight
-                        if score < bestScore then
-                            bestScore = score
-                            bestCandy = c
-                        end
-                    end
-                end
-            end
-            
-            if bestCandy and bestCandy.Position then
-                local targetCandy = bestCandy
-                local targetPos = targetCandy.Position
-                local groundTarget = Vector3.new(targetPos.X, hrp.Position.Y, targetPos.Z)
-                local startDist = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
-                
-                local moveSpeed = math.max(16, hum.WalkSpeed)
-                local walkTimeout = math.clamp((startDist / moveSpeed) * 1.35 + 1.8, 1.8, 7.0)
-                
-                hum:MoveTo(groundTarget)
-                
-                local moveStart = tick()
-                local lastCheckPos = hrp.Position
-                local lastCheckTime = tick()
-                local isCollected = false
-                
-                while (tick() - moveStart < walkTimeout) do
-                    task.wait(0.04)
-                    if getgenv().PetDiceScriptToken ~= scriptToken then break end
-                    if not isManual and not CFG.HalloweenAutoCollectCandy then break end
-                    
-                    char = LocalPlayer.Character or Character
-                    hum = char and char:FindFirstChildOfClass("Humanoid")
-                    hrp = char and char:FindFirstChild("HumanoidRootPart")
-                    if not hum or not hrp or hum.Health <= 0 then break end
-                    
-                    -- ตรวจสอบว่าแคนดี้ถูกเซิร์ฟเวอร์เก็บไปแล้วหรือไม่
-                    if targetCandy.Id and not ActiveCandies[targetCandy.Id] then
-                        isCollected = true
-                        break
-                    end
-                    if targetCandy.Model and not targetCandy.Model.Parent then
-                        isCollected = true
-                        break
-                    end
-                    
-                    local curDist = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
-                    
-                    -- เมื่อเข้าสู่ระยะสัมผัสของเกม (curDist <= 3.2 studs):
-                    -- ให้ตัวละครอยู่ในระยะสัมผัสสักครู่ (0.18s ตาม GrabGap 0.15s ของเกม)
-                    -- เพื่อให้สคริปต์ทางการของเกม (CandyStorm.luau) ส่ง Remote State.Send("CandyGrab", id)
-                    -- และให้เซิร์ฟเวอร์ตรวจสอบตำแหน่งตัวละครได้อย่างถูกต้องขณะอยู่ใกล้แคนดี้ 100% ป้องกันโดนเตะ Error 267
-                    if curDist <= 3.2 then
-                        isCollected = true
-                        task.wait(0.18)
-                        break
-                    end
-                    
-                    -- ระบบตรวจจับการติดสิ่งกีดขวาง (Smart Anti-Stuck & Auto-Jump)
-                    local nowTime = tick()
-                    if nowTime - lastCheckTime >= 0.35 then
-                        local deltaMoved = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(lastCheckPos.X, 0, lastCheckPos.Z)).Magnitude
-                        lastCheckPos = hrp.Position
-                        lastCheckTime = nowTime
-                        
-                        if deltaMoved < 0.8 and curDist > 4.5 then
-                            hum.Jump = true
-                            hum:MoveTo(groundTarget)
-                        else
-                            hum:MoveTo(groundTarget)
-                        end
-                    end
-                end
-                
-                local candyKey = targetCandy.Key or targetCandy.Id or targetCandy.Model or string.format("%.1f_%.1f", targetCandy.Position.X, targetCandy.Position.Z)
-                if isCollected then
-                    collectedThisRound = collectedThisRound + 1
-                    VisitedCandies[candyKey] = tick()
-                    if targetCandy.Id then
-                        ActiveCandies[targetCandy.Id] = nil
-                    end
-                else
-                    VisitedCandies[candyKey] = tick() - 7.0
-                end
-                
-                task.wait(0.04)
-            else
-                task.wait(0.1)
-            end
-        end
-        
-        -- เมื่อเสร็จสิ้นรอบการเก็บ ให้ตรวจสอบตำแหน่ง หากยังอยู่ในพลาซ่า ให้วาร์ปกลับบ้าน (Home) อย่างปลอดภัย
-        local char = LocalPlayer.Character or Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local isStillInHub = hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150)
-        if isStillInHub then
-            Fire("Teleport", "Home")
-            Notify("🌪️ พายุลูกกวาด", string.format("เสร็จสิ้นรอบการเก็บแคนดี้ (%d ชิ้น)! เดินทางกลับบ้านเรียบร้อย", collectedThisRound), 3)
-            Humanizer.Wait(3.5, 4.5)
-            LastZoneTransitionTime = tick()
-        end
-    end)
-    
-    Humanizer.Wait(1.0, 1.5)
-    isCollectingCandyMutex = false
-    getgenv().CandyStormMutex = false
-    getgenv().IsCandyStormActiveRunning = false
-    getgenv().LastCandyStormStartTime = 0
-    LastZoneTransitionTime = tick()
-    pcall(UpdateHalloweenStatus)
-    return true
-end
-
-Tabs.Halloween:AddButton({
-    Title = "🌪️ เดินไปเก็บแคนดี้พายุลูกกวาดทันที (Collect Plaza Candy Now)",
-    Description = "เดินทางไปลานพลาซ่าเพื่อกวาดเก็บแคนดี้ทันที (หากยังไม่ถึงเวลาพายุ จะตรวจสอบและแจ้งเวลานับถอยหลังรอบถัดไปให้ทราบทันที)",
-    Callback = function()
-        task.spawn(function()
-            SafeCollectPlazaCandies(true)
-        end)
-    end
-})
-
-Tabs.Halloween:AddSection("🔄 ระบบฮาโลวีนอัตโนมัติ")
-
-Tabs.Halloween:AddToggle("TogHalClaim", {
-    Title = "1. รับรางวัลเป้าหมายอัตโนมัติ (Auto Claim Goals)",
-    Default = CFG.HalloweenAutoClaim,
-    Callback = function(V) UpdateCFG("HalloweenAutoClaim", V) end
-})
-
-Tabs.Halloween:AddToggle("TogHalBuyBags", {
-    Title = "2. ซื้อแพ็ค 10 กระเป๋าอัตโนมัติ (270 ลูกอม)",
-    Default = CFG.HalloweenAutoBuyBags,
-    Callback = function(V) UpdateCFG("HalloweenAutoBuyBags", V) end
-})
-
-Tabs.Halloween:AddToggle("TogHalOpenBags", {
-    Title = "3. เปิดกระเป๋าฮาโลวีนอัตโนมัติ (Auto Open Bags)",
-    Default = CFG.HalloweenAutoOpenBags,
-    Callback = function(V) UpdateCFG("HalloweenAutoOpenBags", V) end
-})
-
-Tabs.Halloween:AddToggle("TogHalLimitedPull", {
-    Title = "4. ซื้อตั๋ว Limited Pull อัตโนมัติ (800 ลูกอม)",
-    Default = CFG.HalloweenAutoBuyLimitedPull,
-    Callback = function(V) UpdateCFG("HalloweenAutoBuyLimitedPull", V) end
-})
-
-Tabs.Halloween:AddToggle("TogHalTrick", {
-    Title = "5. เดินไปขอขนมฟรีอัตโนมัติ (Auto Trick or Treat)",
-    Default = CFG.HalloweenAutoTrickOrTreat,
-    Callback = function(V) UpdateCFG("HalloweenAutoTrickOrTreat", V) end
-})
-
-Tabs.Halloween:AddToggle("TogHalCollectCandy", {
-    Title = "6. เก็บแคนดี้พายุลูกกวาดอัตโนมัติ (Auto Collect Candy Storm)",
-    Description = "เดินเก็บแคนดี้ (Candy Corn, Lollipop, Candy Bag, Bucket) ในพลาซ่าอัตโนมัติเมื่อพายุเริ่ม ปลอดภัย 100% ด้วยระบบฟิสิกส์เดินปกติ ไร้การบิน/Tween และกลับบ้านอัตโนมัติ",
-    Default = CFG.HalloweenAutoCollectCandy,
-    Callback = function(V)
-        UpdateCFG("HalloweenAutoCollectCandy", V)
-        if V then
-            Notify("🍬 แคนดี้ฮาโลวีน", "เปิดระบบเก็บแคนดี้พายุลูกกวาดอัตโนมัติแล้ว!", 3)
-        else
-            Notify("🍬 แคนดี้ฮาโลวีน", "ปิดระบบเก็บแคนดี้พายุลูกกวาด", 2)
-        end
-    end
-})
-
--- ------------------------------------------------------------------------------
--- 🤝 TAB 8: SAFE AUTO TRADE
+-- 🤝 TAB 7: SAFE AUTO TRADE
 -- ------------------------------------------------------------------------------
 Tabs.Trade:AddSection("🎯 เป้าหมายการเทรด")
 
@@ -5340,11 +4378,6 @@ pcall(function()
                     UpdateMarketStatus()
                 end
                 
-                -- อัปเดตสถานะฮาโลวีนทันทีเมื่อลูกอม กระเป๋า หรือข้อมูลซีซั่นเปลี่ยน
-                if UpdateHalloweenStatus and (syncData.Full or syncData.Season or syncData.Seasons or syncData.SeasonBags) then
-                    UpdateHalloweenStatus()
-                end
-                
                 -- สวมใส่สัตว์เลี้ยงที่ดีที่สุดทันทีแบบเรียลไทม์ เมื่อได้รับสัตว์เลี้ยงใหม่หรือสัตว์เลี้ยงเปลี่ยน
                 if CFG.AutoEquipBest and (syncData.Full or syncData.Pets or syncData.PetAdds or syncData.PetDels) then
                     local now = tick()
@@ -5372,18 +4405,6 @@ pcall(function()
         if getgenv().PetDiceScriptToken ~= scriptToken then return end
         if UpdateTowerStatus then task.delay(0.2, UpdateTowerStatus) end
     end)
-    
-    local PetDice = RS:FindFirstChild("PetDice")
-    if PetDice then
-        PetDice:GetAttributeChangedSignal("CandyStorm"):Connect(function()
-            if getgenv().PetDiceScriptToken ~= scriptToken then return end
-            if UpdateHalloweenStatus then task.delay(0.1, UpdateHalloweenStatus) end
-        end)
-        PetDice:GetAttributeChangedSignal("CandyStormEnds"):Connect(function()
-            if getgenv().PetDiceScriptToken ~= scriptToken then return end
-            if UpdateHalloweenStatus then task.delay(0.1, UpdateHalloweenStatus) end
-        end)
-    end
 end)
 
 -- ==============================================================================
@@ -5513,8 +4534,8 @@ task.spawn(function()
                 local isBossJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
                 if not (CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isBossJoined or IsEnteringBossPortal == true)) then
                     if isRunning then
-                        -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย (เว้นแต่กำลังเก็บแคนดี้หรือขอขนมอยู่)
-                        if activeId and activeId ~= targetId and not isSwitchingTower and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and not getgenv().CandyStormMutex and not getgenv().IsTrickOrTreatActiveRunning and not isTrickOrTreatMutex and not getgenv().TrickOrTreatMutex then
+                        -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย
+                        if activeId and activeId ~= targetId and not isSwitchingTower then
                             SwitchOrStartTower(targetId, true)
                         end
                         
@@ -5532,28 +4553,17 @@ task.spawn(function()
                         end
                         
                         -- Watchdog: ตรวจสอบกรณีติดค้าง (ตาม FloorTimeout ของเกมคือ 55 วินาที จึงใช้ 75 วินาทีเพื่อความปลอดภัย 100%)
-                        if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 75.0) and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and not getgenv().CandyStormMutex and not getgenv().IsTrickOrTreatActiveRunning and not isTrickOrTreatMutex and not getgenv().TrickOrTreatMutex and (now - LastZoneTransitionTime > 5.0) then
+                        if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 75.0) and (now - LastZoneTransitionTime > 5.0) then
                             LiveTower.LastFloorTime = now
                             Fire("TowerLeave")
                             task.wait(1.0)
                             SwitchOrStartTower(targetId, true)
                         end
                     else
-                        -- หอคอยไม่ได้ทำงานอยู่: ตรวจสอบหากพายุลูกกวาดกำลังตกอยู่ กำลังขอขนม หรืออยู่ในพลาซ่า ให้รอจนกว่าจะกลับบ้าน
-                        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
-                            task.wait(2.0)
-                            continue
-                        end
-                        
                         local char = LocalPlayer.Character or Character
                         local hrp = char and char:FindFirstChild("HumanoidRootPart")
                         if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150 then
-                            -- หากกำลังขอขนมฮาโลวีน หรือเก็บแคนดี้ ห้ามวาร์ปกลับบ้านเด็ดขาด
-                            if getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex or getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then
-                                task.wait(2.0)
-                                continue
-                            end
-                            -- หากตัวละครอยู่ในลานพลาซ่า และไม่มีพายุลูกกวาดหรือศึกบอส ให้พากลับบ้านอย่างปลอดภัยเพื่อเริ่มหอคอย
+                            -- หากตัวละครอยู่ในลานพลาซ่า ให้พากลับบ้านอย่างปลอดภัยเพื่อเริ่มหอคอย
                             if (now - LastZoneTransitionTime >= 4.0) then
                                 Fire("Teleport", "Home")
                                 Humanizer.Wait(3.5, 4.5)
@@ -5567,11 +4577,6 @@ task.spawn(function()
                         -- รอให้การเปลี่ยนโซนก่อนหน้า (เช่น วาร์ปกลับบ้าน) โหลดเสร็จอย่างสมบูรณ์ ป้องกัน Error 267
                         if (now - LastZoneTransitionTime < 4.0) then
                             task.wait(1.5)
-                            continue
-                        end
-                        
-                        if getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
-                            task.wait(2.0)
                             continue
                         end
                         
@@ -5638,18 +4643,6 @@ task.spawn(function()
                                      (tostring(CFG.WorldBossDifficultyFilter):find(wbDiff))
                     
                     if elemMatch and diffMatch then
-                        if getgenv().TrickOrTreatMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex then
-                            task.wait(2.0)
-                            return
-                        end
-                        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex then
-                            local wbTimer = RS:GetAttribute("WorldBossTimer") or 60
-                            if wbTimer > 10 then
-                                task.wait(1.5)
-                                return
-                            end
-                        end
-                        
                         local now = tick()
                         if now - lastBossJoinAttempt >= 5.0 then
                             lastBossJoinAttempt = now
@@ -5707,7 +4700,6 @@ task.spawn(function()
         task.wait(4.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(2.0) continue end
         
         if CFG.AutoRebirth then
             if isEconomyActionMutex then task.wait(1.5) continue end
@@ -5741,7 +4733,6 @@ task.spawn(function()
         task.wait(delayTime)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(2.0) continue end
         
         if CFG.UpgradeTree then
             if isEconomyActionMutex then task.wait(1.5) continue end
@@ -5802,9 +4793,6 @@ task.spawn(function()
                         maxEquipped = Stats.MaxEquipped(data) or 1
                     end
                 end)
-                if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then
-                    return
-                end
                 if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then
                     return
                 end
@@ -5867,216 +4855,15 @@ task.spawn(function()
     end
 end)
 
--- 8. Auto Halloween (100% Anti-Ban, Real-Time & Safe Execution)
-task.spawn(function()
-    local claimedGoalsCache = {}
-    local lastHalloweenBagBuyTick = 0
-    local lastHalloweenLimitedPullTick = 0
-    local lastHalloweenBagOpenTick = 0
-    while true do
-        task.wait(4.0)
-        if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        
-        -- ป้องกันการทำงานแทรกแซงระหว่างเทรด หรือระหว่างสู้อยู่ในบอสโลก
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0) continue end
-        local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isJoined or IsEnteringBossPortal == true then task.wait(3.0) continue end
-        local char = LocalPlayer.Character or Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if not char or not hum or hum.Health <= 0 then task.wait(3.0) continue end
-        
-        CircuitBreaker.Execute("AutoHalloween", function()
-            local entry = GetHalloweenEntry()
-            if not entry then return end
-            
-            -- 1. Auto Claim Goals: ตรวจสอบความพร้อม 100% ตามเงื่อนไขทางการของตัวเกมก่อนเริ่มยิงคำสั่ง
-            if CFG.HalloweenAutoClaim and HalloweenConfig.Goals then
-                for _, g in ipairs(HalloweenConfig.Goals) do
-                    local currentTier = entry.Goals and entry.Goals[g.Id] or 0
-                    local nextTierIdx = currentTier + 1
-                    local nextTier = g.Tiers and g.Tiers[nextTierIdx]
-                    local stat = entry.Stats and entry.Stats[g.Stat] or 0
-                    
-                    -- ตรวจสอบอย่างรัดกุม: ขั้นถัดไปต้องมีจริง และ stat ถึงเกณฑ์จริงเท่านั้น
-                    if nextTier ~= nil and nextTier.Goal ~= nil and stat >= nextTier.Goal then
-                        local cacheKey = g.Id .. "_" .. tostring(nextTierIdx)
-                        local lastClaim = claimedGoalsCache[cacheKey] or 0
-                        if tick() - lastClaim > 60 then
-                            claimedGoalsCache[cacheKey] = tick()
-                            Fire("HalloweenGoalClaim", g.Id)
-                            Notify("🎁 เป้าหมายฮาโลวีน", "รับรางวัลเป้าหมาย " .. tostring(g.Id) .. " (ขั้นที่ " .. nextTierIdx .. ") เรียบร้อย!", 2)
-                            Humanizer.Wait(1.5, 2.5)
-                            break -- เคลมทีละ 1 รายการต่อรอบ ป้องกัน server rate limit / flag ตรวจจับ
-                        end
-                    end
-                end
-            end
-            
-            -- 2. Auto Buy Limited Pull (800 Candy): ให้สิทธิ์ตั๋วจำกัดก่อน ตรวจสอบโควต้าสูงสุด 5 ครั้ง และลูกอม 800
-            local nowTick = tick()
-            if CFG.HalloweenAutoBuyLimitedPull and (nowTick - lastHalloweenLimitedPullTick > 8) then
-                local boughtPulls = entry.Bought and (entry.Bought.LimitedPull or entry.Bought.HalloweenPull or entry.Bought.SinglePull) or 0
-                local currentCandy = entry.Candy or (State.Data and State.Data.Season and State.Data.Season.Candy) or 0
-                if boughtPulls < 5 and currentCandy >= 800 and (not Season or not Season.Leaving or not Season.Leaving()) then
-                    lastHalloweenLimitedPullTick = nowTick
-                    Fire("SpookyBuy", "LimitedPull")
-                    Notify("🎟️ ฮาโลวีน", "ซื้อ Limited Pull สำเร็จ! (" .. (boughtPulls + 1) .. "/5) (เหลือลูกอม: " .. (currentCandy - 800) .. ")", 3)
-                    Humanizer.Wait(2.0, 3.5)
-                end
-            end
-            
-            -- 3. Auto Buy Bags (270 Candy): ตรวจสอบยอดลูกอมจริงและสถานะร้านค้าก่อนซื้อ
-            nowTick = tick()
-            if CFG.HalloweenAutoBuyBags and (nowTick - lastHalloweenBagBuyTick > 6) then
-                local currentCandy = entry.Candy or (State.Data and State.Data.Season and State.Data.Season.Candy) or 0
-                if currentCandy >= 270 and (not Season or not Season.Leaving or not Season.Leaving()) then
-                    lastHalloweenBagBuyTick = nowTick
-                    Fire("SpookyBuy", "HalloweenBag10")
-                    Notify("🛍️ ฮาโลวีน", "ซื้อแพ็ค 10 กระเป๋าฮาโลวีนเรียบร้อย! (เหลือลูกอม: " .. (currentCandy - 270) .. ")", 2)
-                    Humanizer.Wait(2.0, 3.5)
-                end
-            end
-            
-            -- 4. Auto Open Bags: ตรวจสอบจำนวนกระเป๋าและสถานะคัตซีน Busy ก่อนยิงคำสั่งเปิด และเคลมสัตว์เลี้ยงเมื่อมีจริงเท่านั้น
-            local bagNowTick = tick()
-            if CFG.HalloweenAutoOpenBags and (bagNowTick - lastHalloweenBagOpenTick > 10) then
-                local isBusy = false
-                pcall(function()
-                    if LootBagController and LootBagController.Api and LootBagController.Api.Busy then
-                        isBusy = LootBagController.Api.Busy()
-                    end
-                    if not isBusy and CutsceneDirector and CutsceneDirector.Director and CutsceneDirector.Director.Playing then
-                        isBusy = CutsceneDirector.Director.Playing()
-                    end
-                end)
-                
-                if not isBusy then
-                    local bagCount = State.Data and State.Data.SeasonBags and State.Data.SeasonBags.Halloween or 0
-                    if bagCount > 0 then
-                        lastHalloweenBagOpenTick = bagNowTick
-                        if LootBagController and LootBagController.Api and LootBagController.Api.Open then
-                            LootBagController.Api.Open("all", "Halloween")
-                        else
-                            Fire("OpenLootBag", "all", "Halloween")
-                        end
-                        Notify("🎒 ฮาโลวีน", "กำลังเปิดกระเป๋าฮาโลวีน (" .. bagCount .. " ใบ)...", 3)
-                        Humanizer.Wait(4.5, 6.0) -- รอให้คัตซีนและการคำนวณของเซิร์ฟเวอร์เสร็จสิ้น
-                    end
-                    
-                    -- ตรวจสอบสัตว์เลี้ยงค้างรอรับจริง
-                    local waitingPets = 0
-                    pcall(function()
-                        if State.Data and PetData and PetData.WaitingCount then
-                            waitingPets = PetData.WaitingCount(State.Data, "Season")
-                        end
-                    end)
-                    
-                    if waitingPets > 0 then
-                        Humanizer.Wait(1.0, 1.8)
-                        Fire("ClaimLootPets", "Season")
-                        Notify("🐾 รับสัตว์เลี้ยง", "รับสัตว์เลี้ยงฮาโลวีน " .. waitingPets .. " ตัวเรียบร้อย!", 3)
-                        Humanizer.Wait(1.5, 2.5)
-                    end
-                end
-            end
-            
-            -- 5. Auto Trick or Treat: ตรวจสอบสิทธิ์ประจำวัน และล็อค Mutex ป้องกันคำสั่งซ้อนกัน 100%
-            if CFG.HalloweenAutoTrickOrTreat and CanTrickOrTreat() then
-                local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-                if not IsInTrade() and not getgenv().TradeActiveSession and not isBoss and not IsEnteringBossPortal and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and not getgenv().CandyStormMutex and not isTrickOrTreatMutex then
-                    -- ล็อค Mutex ข้ามระบบทันที ป้องกัน Loop 3 (Auto Tower) และคำสั่งอื่นแทรกแซง
-                    isTrickOrTreatMutex = true
-                    getgenv().IsTrickOrTreatActiveRunning = true
-                    getgenv().TrickOrTreatMutex = true
-                    getgenv().LastTrickOrTreatStartTime = tick()
-                    
-                    pcall(function()
-                        if CFG.Tower and IsTowerRunning() then
-                            Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อไปขอขนมฮาโลวีน...", 2)
-                            Fire("TowerLeave")
-                            LiveTower.Active = false
-                            LiveTower.Starting = false
-                            LiveTower.LastEventTime = 0
-                            LiveTower.TowerId = nil
-                            local leaveWait = tick()
-                            while IsTowerRunning() and (tick() - leaveWait < 4.0) do
-                                task.wait(0.2)
-                            end
-                            Humanizer.Wait(2.5, 3.5)
-                            LastZoneTransitionTime = tick()
-                        end
-                        
-                        Notify("🍬 ขอขนมฮาโลวีน", "กำลังเดินไปหาเคานต์พาวคูลาเพื่อขอขนมประจำวัน...", 3)
-                        local arrived = WalkToPawcula()
-                        if arrived and CanTrickOrTreat() then
-                            Humanizer.Wait(0.8, 1.4)
-                            
-                            -- กระตุ้น ProximityPrompt บทสนทนาตามกลไกปกติของเกม
-                            pcall(function()
-                                local p = workspace:FindFirstChild("PetDiceHalloween")
-                                    and workspace.PetDiceHalloween:FindFirstChild("HauntedCorner")
-                                    and workspace.PetDiceHalloween.HauntedCorner:FindFirstChild("CountPawcula")
-                                local prompt = p and p:FindFirstChildWhichIsA("ProximityPrompt", true)
-                                if prompt and typeof(fireproximityprompt) == "function" then
-                                    fireproximityprompt(prompt)
-                                end
-                            end)
-                            
-                            Humanizer.Wait(0.4, 0.8)
-                            Fire("TrickOrTreat")
-                            Notify("🍬 Trick or Treat", "ขอขนมฮาโลวีนสำเร็จเรียบร้อย!", 4)
-                            Humanizer.Wait(2.5, 4.0)
-                            Fire("Teleport", "Home")
-                            Humanizer.Wait(3.5, 4.5)
-                            LastZoneTransitionTime = tick()
-                        end
-                    end)
-                    
-                    -- ปลดล็อค Mutex ให้ระบบอื่นกลับมาทำงานต่อได้ตามปกติ
-                    isTrickOrTreatMutex = false
-                    getgenv().IsTrickOrTreatActiveRunning = false
-                    getgenv().TrickOrTreatMutex = false
-                    getgenv().LastTrickOrTreatStartTime = 0
-                end
-            end
-            pcall(UpdateHalloweenStatus)
-        end)
-    end
-end)
-
--- 8.1. Auto Candy Storm Collector (100% Anti-Detection High-Speed Real-Time Vacuum & Auto Return)
+-- 8. Master Mutex Watchdogs (100% Deadlock Prevention)
 task.spawn(function()
     while true do
         task.wait(1.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         
-        -- Watchdogs: ปลดล็อค Mutex อัตโนมัติหากติดค้างเกินเวลาความปลอดภัย ป้องกัน Deadlock 100%
         local nowTick = tick()
         
-        -- 1. Candy Storm Mutex (105s)
-        if getgenv().CandyStormMutex or getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then
-            local startT = getgenv().LastCandyStormStartTime or 0
-            if startT > 0 and (nowTick - startT > 105.0) then
-                getgenv().CandyStormMutex = false
-                getgenv().IsCandyStormActiveRunning = false
-                isCollectingCandyMutex = false
-                getgenv().LastCandyStormStartTime = 0
-            end
-        end
-        
-        -- 2. TrickOrTreat Mutex (60s)
-        if getgenv().TrickOrTreatMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex then
-            local startT = getgenv().LastTrickOrTreatStartTime or 0
-            if startT > 0 and (nowTick - startT > 60.0) then
-                getgenv().TrickOrTreatMutex = false
-                getgenv().IsTrickOrTreatActiveRunning = false
-                isTrickOrTreatMutex = false
-                getgenv().LastTrickOrTreatStartTime = 0
-                pcall(function() Fire("Teleport", "Home") end)
-            end
-        end
-
-        -- 3. Pet Operation Mutex (20s)
+        -- 1. Pet Operation Mutex (20s)
         if getgenv().PetOperationMutex or isPetOperationMutex then
             local startT = getgenv().LastPetOperationStartTime or 0
             if startT > 0 and (nowTick - startT > 20.0) then
@@ -6088,7 +4875,7 @@ task.spawn(function()
             end
         end
 
-        -- 4. Economy Action Mutex (12s)
+        -- 2. Economy Action Mutex (12s)
         if getgenv().EconomyActionMutex or isEconomyActionMutex then
             local startT = getgenv().LastEconomyActionStartTime or 0
             if startT > 0 and (nowTick - startT > 12.0) then
@@ -6098,33 +4885,9 @@ task.spawn(function()
             end
         end
 
-        -- 5. Zone Transition Lock (8s)
+        -- 3. Zone Transition Lock (8s)
         if isZoneTransitionLocked and (nowTick - LastZoneTransitionTime > 8.0) then
             isZoneTransitionLocked = false
-        end
-        
-        -- ตรวจสอบหาก TrickOrTreat กำลังทำงานอยู่ ให้พัก Candy Storm Collector ทันที ป้องกันการแย่งการเดิน
-        if getgenv().TrickOrTreatMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex then
-            task.wait(2.0)
-            continue
-        end
-
-        if not CFG.HalloweenAutoCollectCandy then 
-            task.wait(2.0)
-            continue 
-        end
-        
-        -- ป้องกันการทำงานแทรกแซงระหว่างเทรด หรือระหว่างสู้อยู่ในอารีน่าต่อสู้
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
-        local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isJoined or IsEnteringBossPortal == true then task.wait(2.0) continue end
-        
-        local isStormActive, stormSecLeft = IsCandyStormActive()
-        local targets = GetAvailableCandies()
-        
-        -- ตรวจสอบเงื่อนไขเริ่มทำงาน: พายุกำลังตกจริง หรือมีลูกอมในพลาซ่าจริงเท่านั้น (ตัด secToNext <= 5 ออก 100% ป้องกันวาร์ปไปมา)
-        if isStormActive or #targets > 0 then
-            SafeCollectPlazaCandies(false)
         end
     end
 end)
@@ -6326,7 +5089,6 @@ task.spawn(function()
         task.wait(2.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(1.5) continue end
         
         if CFG.AutoUpgradePetLevel then
             if isPetOperationMutex or isAutoSellingActive then
@@ -6416,7 +5178,6 @@ task.spawn(function()
         task.wait(0.35)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(1.5) continue end
         
         if CFG.AutoRollGrade then
             if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive then
@@ -6499,7 +5260,6 @@ task.spawn(function()
         task.wait(0.35)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(1.5) continue end
         
         if CFG.AutoRollTrait then
             if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive then
