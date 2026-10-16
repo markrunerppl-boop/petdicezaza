@@ -215,6 +215,8 @@ local function CheckGamePatch()
             SafeNotify("🚨 ตรวจพบเกมอัปเดตแพทช์ใหม่!", string.format("เกม Pet Dice เพิ่งอัปเดตแพทช์ใหม่ (v%d -> v%d)\nระบบหยุดส่งคำสั่งทั้งหมด 100%% ทันที เพื่อป้องกันไอดีโดนแบน (Error 600)\nกรุณารอสคริปต์อัปเดตความปลอดภัยก่อนเปิดใช้งาน", VERIFIED_GAME_PLACE_VERSION, curVersion), 15)
         end
         return false
+    else
+        getgenv().EmergencyPatchHalt = false
     end
     return true
 end
@@ -244,7 +246,7 @@ local function CheckCloudSecurity()
                     getgenv().EmergencyCloudHalt = false
                 end
                 if cfg.verified_game_place_version and type(cfg.verified_game_place_version) == "number" then
-                    VERIFIED_GAME_PLACE_VERSION = cfg.verified_game_place_version
+                    VERIFIED_GAME_PLACE_VERSION = math.max(VERIFIED_GAME_PLACE_VERSION, cfg.verified_game_place_version)
                 end
             end
         end
