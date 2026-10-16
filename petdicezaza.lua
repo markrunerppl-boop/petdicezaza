@@ -462,6 +462,9 @@ local ZoneTransitionActions = {
 }
 
 -- Forward Declarations & Master Cross-System Mutex Locks (100% Concurrency Collision Protection)
+local SwitchOrStartTower
+local IsTowerRunning
+local IsTowerInArena
 local GetHalloweenEntry
 local CanTrickOrTreat
 local isPetEnhanceRolling = false
@@ -613,9 +616,6 @@ local function Fire(...)
         end
         if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.5) then
             return -- หน่วง 3.5 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
-        end
-        if (tick() - LastZoneTransitionTime < 3.5) then
-            return -- หน่วง 3.5 วินาทีหลังการเปลี่ยนโซนใดๆ
         end
     end
     if action == "TowerLeave" then
@@ -2370,9 +2370,6 @@ if not CFG.SelectedTower or CFG.SelectedTower == "" then
     CFG.SelectedTowerOption = defaultTowerOpt
 end
 
-local SwitchOrStartTower
-local IsTowerRunning
-local IsTowerInArena
 local isSwitchingTower = false
 local lastLoopStartAttempt = 0  -- shared across TogTower + supervisor loops
 
@@ -2970,22 +2967,33 @@ end
 
 SwitchOrStartTower = function(targetTowerId, force)
     if IsInTrade() or getgenv().TradeActiveSession then
-        return false
+        return false, "In Trade"
     end
     
     local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
     if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
+        if force then
+            Notify("⚠️ พักหอคอยชั่วคราว", "ระบบกำลังเตรียมพร้อมเข้าสู้บอสโลก (ปิด 'พักหอคอยเพื่อตีบอส' หากต้องการลงหอคอยทันที)", 3)
+        end
         return false, "In World Boss"
     end
     
     if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex then
+        if force then
+            Notify("🍬 พายุลูกกวาด", "กำลังเก็บแคนดี้ จะเริ่มหอคอยหลังเก็บเสร็จสิ้น", 3)
+        end
         return false, "Candy Storm Active"
     end
     
     local char = LocalPlayer.Character or Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150 then
-        return false, "In Hub/Plaza"
+        if force then
+            Fire("Teleport", "Home")
+            Humanizer.Wait(2.0, 3.0)
+        else
+            return false, "In Hub/Plaza"
+        end
     end
     
     local nowTick = tick()
