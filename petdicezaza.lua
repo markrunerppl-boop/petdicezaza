@@ -6328,23 +6328,24 @@ task.spawn(function()
             isPetOperationMutex = true
             getgenv().PetOperationMutex = true
             getgenv().LastPetOperationStartTime = tick()
+            local waitAfter = 0
             
             pcall(function()
                 CircuitBreaker.Execute("AutoUpgradePetLevel", function()
                     local data = State.Data
                     if not data or not data.Pets or not data.Money or data.Money <= 0 then 
-                        task.wait(3.0)
+                        waitAfter = 3.0
                         return 
                     end
                     
                     -- ตรวจสอบว่าปลดล็อคระบบอัปเลเวลในต้นไม้ทักษะแล้วหรือไม่ ("PetUpgrades" / "petup")
                     if not IsFeatureUnlocked("PetUpgrades", "petup") then
-                        task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
+                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
                         return
                     end
                     
                     local cap = Stats.PetLevelCap(data.Upgrades)
-                    if not cap or cap <= 0 then task.wait(3.0) return end
+                    if not cap or cap <= 0 then waitAfter = 3.0 return end
                     
                     local targetLvl = math.min(CFG.TargetPetLevel or cap, cap)
                     local step = CFG.UpgradeLevelStep or 1
@@ -6380,7 +6381,6 @@ task.spawn(function()
                         end
                     end
                     
-                    local waitAfter = 0
                     if not upgradedAny then
                         -- สัตว์เลี้ยงทั้งหมดถึงเป้าหมายแล้ว หรือเงินไม่พออัปเกรด พัก 3.5 วินาที
                         waitAfter = 3.5
@@ -6394,7 +6394,7 @@ task.spawn(function()
             isPetOperationMutex = false
             getgenv().PetOperationMutex = false
             getgenv().LastPetOperationStartTime = 0
-            if waitAfter > 0 then task.wait(waitAfter) end
+            if (waitAfter or 0) > 0 then task.wait(waitAfter) end
         else
             task.wait(2.0)
         end
@@ -6419,17 +6419,18 @@ task.spawn(function()
             isPetEnhanceRolling = true
             getgenv().PetOperationMutex = true
             getgenv().LastPetOperationStartTime = tick()
+            local waitAfter = 0
             pcall(function()
                 CircuitBreaker.Execute("AutoRollGrade", function()
                     local data = State.Data
                     if not data or not data.Pets or not data.Gems or data.Gems < 1 then
-                        task.wait(3.0)
+                        waitAfter = 3.0
                         return
                     end
                     
                     -- ตรวจสอบว่าปลดล็อคระบบเกรดในต้นไม้ทักษะแล้วหรือไม่ ("Grades" / "grades")
                     if not IsFeatureUnlocked("Grades", "grades") then
-                        task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
+                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
                         return
                     end
                     
@@ -6463,7 +6464,6 @@ task.spawn(function()
                         end
                     end
                     
-                    local waitAfter = 0
                     if not anyRolled then
                         consecutiveRolls = 0
                         waitAfter = 3.0 -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือเพชรหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
@@ -6476,7 +6476,7 @@ task.spawn(function()
             isPetOperationMutex = false
             getgenv().PetOperationMutex = false
             getgenv().LastPetOperationStartTime = 0
-            if waitAfter > 0 then task.wait(waitAfter) end
+            if (waitAfter or 0) > 0 then task.wait(waitAfter) end
         else
             consecutiveRolls = 0
             task.wait(2.0)
@@ -6502,17 +6502,18 @@ task.spawn(function()
             isPetEnhanceRolling = true
             getgenv().PetOperationMutex = true
             getgenv().LastPetOperationStartTime = tick()
+            local waitAfter = 0
             pcall(function()
                 CircuitBreaker.Execute("AutoRollTrait", function()
                     local data = State.Data
                     if not data or not data.Pets or not data.Shards or data.Shards < 1 then
-                        task.wait(3.0)
+                        waitAfter = 3.0
                         return
                     end
                     
                     -- ตรวจสอบว่าปลดล็อคระบบ Trait (บัฟ) ในต้นไม้ทักษะแล้วหรือไม่ ("Traits" / "traits")
                     if not IsFeatureUnlocked("Traits", "traits") then
-                        task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
+                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
                         return
                     end
                     
@@ -6546,7 +6547,6 @@ task.spawn(function()
                         end
                     end
                     
-                    local waitAfter = 0
                     if not anyRolled then
                         consecutiveRolls = 0
                         waitAfter = 3.0 -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือชาร์ดหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
@@ -6559,7 +6559,7 @@ task.spawn(function()
             isPetOperationMutex = false
             getgenv().PetOperationMutex = false
             getgenv().LastPetOperationStartTime = 0
-            if waitAfter > 0 then task.wait(waitAfter) end
+            if (waitAfter or 0) > 0 then task.wait(waitAfter) end
         else
             consecutiveRolls = 0
             task.wait(2.0)
