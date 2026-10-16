@@ -125,9 +125,9 @@ local RemoteRateLimits = {
     UpgradePetLevels = 0.35,
     BuyAllUpgrades = 1.50,   -- ป้องกันการยิงรัวซื้ออัปเกรดต้นไม้
     Teleport = 3.00,         -- ป้องกัน Error 600 / Teleport State Collision / Desync
-    TowerStart = 2.00,       -- ป้องกัน Tower Spurt
-    TowerExit = 1.50,
-    TowerLeave = 1.50,
+    TowerStart = 2.50,       -- ป้องกัน Tower Spurt
+    TowerExit = 2.00,
+    TowerLeave = 2.50,
     WorldBossJoin = 2.50,
     WorldBossLeave = 2.00,
     Rebirth = 2.00,
@@ -3204,6 +3204,10 @@ end
 Tabs.Expedition:AddButton({
     Title = "⚡ ส่งผจญภัยฝันร้ายทันที (1 ช่อง)",
     Callback = function()
+        if not IsFeatureUnlocked("Expeditions", "expeditions") then
+            Notify("🔒 ยังไม่ปลดล็อค", "ระบบสำรวจ (Expeditions) ยังไม่ปลดล็อคในผังอัปเกรด/หอคอย", 3)
+            return
+        end
         local pets = GetNightmarePets(CFG.ExpeditionPetCount or 1)
         if #pets > 0 then
             Fire("SendExpedition", "Nightmare", pets)
@@ -3217,6 +3221,10 @@ Tabs.Expedition:AddButton({
 Tabs.Expedition:AddButton({
     Title = "🎁 กดรับรางวัลผจญภัยที่สำเร็จทั้งหมด",
     Callback = function()
+        if not IsFeatureUnlocked("Expeditions", "expeditions") then
+            Notify("🔒 ยังไม่ปลดล็อค", "ระบบสำรวจ (Expeditions) ยังไม่ปลดล็อคในผังอัปเกรด/หอคอย", 3)
+            return
+        end
         local count = ClaimAllDoneExpeditions()
         Notify("🎁 รับรางวัลผจญภัย", count > 0 and ("กดรับแล้ว " .. count .. " ช่อง!") or "ยังไม่มีช่องที่เสร็จสิ้น", 3)
     end
@@ -4665,11 +4673,11 @@ task.spawn(function()
                             Humanizer.Wait(1.0, 1.8)
                         end
                         
-                        -- Watchdog: ตรวจสอบกรณีติดค้าง (หากชั้นไม่เดินเกิน 20 วินาที ให้รีสตาร์ทหอคอยใหม่ทันที)
-                        if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 20.0) and not getgenv().IsCandyStormActiveRunning then
+                        -- Watchdog: ตรวจสอบกรณีติดค้าง (ตาม FloorTimeout ของเกมคือ 55 วินาที จึงใช้ 75 วินาทีเพื่อความปลอดภัย 100%)
+                        if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 75.0) and not getgenv().IsCandyStormActiveRunning then
                             LiveTower.LastFloorTime = now
                             Fire("TowerLeave")
-                            task.wait(0.5)
+                            task.wait(1.0)
                             SwitchOrStartTower(targetId, true)
                         end
                     else
@@ -4902,6 +4910,7 @@ task.spawn(function()
         
         if CFG.AutoExpedition then
             CircuitBreaker.Execute("AutoExpedition", function()
+                if not IsFeatureUnlocked("Expeditions", "expeditions") then return end
                 local data = State.Data
                 if not data or not data.Expeditions then return end
                 
@@ -5619,77 +5628,7 @@ task.spawn(function()
     end
 end)
 
--- 15. Continuous Tower Auto-Farm Engine & Supervisor Loop (Backup / Secondary Check)
-task.spawn(function()
-    task.wait(2.0)
-    
-    while true do
-        task.wait(2.0)
-        if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
-        
-        if CFG.Tower then
-            local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-            if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
-                task.wait(3.0)
-                continue
-            end
-            
-            if getgenv().IsCandyStormActiveRunning then
-                task.wait(2.0)
-                continue
-            end
-            
-            local now = tick()
-            
-            -- ปลดล็อค isSwitchingTower อัตโนมัติหากค้างเกิน 6 วินาที
-            if isSwitchingTower and (now - (LiveTower.SwitchingTick or 0) > 6.0) then
-                isSwitchingTower = false
-            end
-            
-            local isRunning = IsTowerRunning()
-            local inArena = IsTowerInArena()
-            
-            -- ปิดหน้าต่าง BattleResults ถ้ามีค้างอยู่
-            pcall(function()
-                local pg = LocalPlayer:FindFirstChild("PlayerGui")
-                local br = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Effects") and pg.PetDiceUI.Root.Effects:FindFirstChild("BattleResults")
-                if br and br.Visible then br.Visible = false end
-            end)
-            
-            -- ตรวจสอบการเปิดโหมดเบื้องหลัง (Away Mode) หากผู้ใช้เปิด AutoExitArena ไว้
-            if isRunning and inArena and CFG.AutoExitArena then
-                Fire("TowerExit")
-                task.wait(0.5)
-            end
-            
-            -- หากไม่ได้อยู่ในหอคอยจริง ให้เริ่มรอบใหม่ทันที (ใช้ shared lastLoopStartAttempt)
-            if not isRunning then
-                local restartDelay = math.max(1.5, tonumber(CFG.TowerRestartDelay) or 2.5)
-                local sinceLastAttempt = now - lastLoopStartAttempt
-                local sinceEnded = LiveTower.EndedTick and (now - LiveTower.EndedTick) or math.huge
-                
-                if sinceLastAttempt >= restartDelay and sinceEnded >= restartDelay then
-                    lastLoopStartAttempt = now
-                    local targetId = ResolveTowerId(CFG.SelectedTower)
-                    SwitchOrStartTower(targetId, true)
-                end
-            else
-                -- Anti-Stuck Watchdog: หากติดค้างนานเกิน 25 วินาทีในชั้นเดิม ให้รีเซ็ตและเริ่มใหม่
-                if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 25.0) then
-                    LiveTower.LastFloorTime = now
-                    Fire("TowerLeave")
-                    task.wait(1.0)
-                    LiveTower.Active = false
-                    LiveTower.Starting = false
-                    local targetId = ResolveTowerId(CFG.SelectedTower)
-                    lastLoopStartAttempt = 0
-                    SwitchOrStartTower(targetId, true)
-                end
-            end
-        end
-    end
-end)
+
 
 -- 16. Auto Sell Pets Loop: ตรวจสอบและขายสัตว์เลี้ยงส่วนเกินอัตโนมัติ (เก็บเฉพาะ N ตัวแรกที่ค่าพลัง Base สูงสุด)
 task.spawn(function()
