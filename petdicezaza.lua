@@ -4986,9 +4986,13 @@ TradeRemote.OnClientEvent:Connect(function(event, payload)
         getgenv().CurrentTradeSession = payload
         getgenv().TradeItemsDropped = false
         getgenv().ReceiverItemPut = false
+        getgenv().TradeLockedUntil = tick() + ((payload and payload.You and payload.You.LockedFor) or 3)
     elseif event == "Update" then
         getgenv().TradeActiveSession = true
         getgenv().CurrentTradeSession = payload
+        if payload and payload.You and payload.You.LockedFor and payload.You.LockedFor > 0 then
+            getgenv().TradeLockedUntil = tick() + payload.You.LockedFor
+        end
     elseif event == "Closed" then
         getgenv().CurrentTradeSession = nil
         getgenv().TradeItemsDropped = false
@@ -5734,7 +5738,8 @@ task.spawn(function()
                 local readyBtnFace, readyStatusText = GetTradeReadyButton()
                 
                 -- ถ้าปุ่มอยู่ในสถานะรอคูลดาวน์ (เช่น "WAIT 3", "WAIT 2", "WAIT 1") ให้รอจนกว่าคูลดาวน์หมด
-                if readyStatusText:find("WAIT") or (you and you.LockedFor and you.LockedFor > 0) then
+                local isLocked = readyStatusText:find("WAIT") or (getgenv().TradeLockedUntil and tick() < getgenv().TradeLockedUntil)
+                if isLocked then
                     task.wait(0.5)
                 elseif readyStatusText == "UNREADY" or (you and you.Ready) then
                     -- ฝั่งเรากดพร้อมเรียบร้อยแล้ว ไม่ต้องกดซ้ำ (ป้องกันการกดยกเลิก)
@@ -5766,11 +5771,14 @@ task.spawn(function()
                         
                         -- Re-check confirmation before sending
                         if IsInTrade() then
-                            local _, textNow = GetTradeReadyButton()
+                            local readyFaceNow, textNow = GetTradeReadyButton()
                             local curSession = getgenv().CurrentTradeSession
                             local curYou = curSession and curSession.You
                             if (textNow == "READY" or textNow == "") and (not curYou or not curYou.Ready) then
                                 Fire("TradeReady", true)
+                                if readyFaceNow and firesignal then
+                                    pcall(function() firesignal(readyFaceNow.MouseButton1Click) end)
+                                end
                                 Notify("✅ พร้อมเทรด", "กดยืนยัน Ready เรียบร้อย!", 2)
                                 Humanizer.Wait(2.0, 3.0)
                             end
