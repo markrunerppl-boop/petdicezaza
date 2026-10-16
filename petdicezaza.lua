@@ -364,6 +364,7 @@ local RemoteRateLimits = {
 -- Global Zone Transition Serialization & Anti-Conflict State Machine
 -- ป้องกันการส่งคำสั่งเปลี่ยนแมพ/อารีน่าซ้อนกัน (Tower, Boss, Teleport) ซึ่งเป็นสาเหตุหลักของ Error 267
 local LastZoneTransitionTime = 0
+local isZoneTransitionLocked = false
 local ZoneTransitionActions = {
     TowerStart = true,
     TowerExit = true,
@@ -373,12 +374,29 @@ local ZoneTransitionActions = {
     Teleport = true,
 }
 
--- Forward Declarations & Cross-System Mutex Locks
+-- Forward Declarations & Master Cross-System Mutex Locks (100% Concurrency Collision Protection)
 local GetHalloweenEntry
 local CanTrickOrTreat
 local isPetEnhanceRolling = false
 local isTrickOrTreatMutex = false
+local isCollectingCandyMutex = false
+local isPetOperationMutex = false
+local isEconomyActionMutex = false
+local isAutoSellingActive = false
+
+getgenv().TrickOrTreatMutex = false
+getgenv().CandyStormMutex = false
+getgenv().PetOperationMutex = false
+getgenv().EconomyActionMutex = false
+getgenv().LastPetOperationStartTime = 0
+getgenv().LastEconomyActionStartTime = 0
+getgenv().LastZoneTransitionTime = 0
 getgenv().LastPetUpgradedTime = 0
+
+-- Global Inter-Packet Serializer (ป้องกัน Harmonic Collision เมื่อเปิด 10+ ฟังก์ชันพร้อมกัน)
+-- รับประกันว่าไม่มีทางที่คำสั่ง 2 คำสั่งใดๆ จากทุก Loop จะยิงชนกันในเฟรมเดียวกัน (เว้นอย่างน้อย 0.12s เสมอ)
+local MIN_GLOBAL_REMOTE_INTERVAL = 0.12
+local LastGlobalRemoteFireTime = 0
 
 -- Global Token Bucket Rate Limiter (ป้องกันการยิงพร้อมกันจากทุกฟังก์ชันเกินขีดจำกัดเซิร์ฟเวอร์)
 -- ขีดจำกัดเซิร์ฟเวอร์ของตัวเกมแท้: PerSecond = 12, Burst = 24
@@ -422,6 +440,21 @@ local function Fire(...)
         return -- ตัดการส่งคำสั่ง 100% เมื่อตรวจพบความเสี่ยงหรือเกมอัปเดตแพทช์ใหม่ ป้องกัน Error 267 / 600
     end
 
+    -- 0.1 Blanket Trade Isolation Guard (ป้องกันคำสั่งอื่นแทรกแซงระหว่างเทรด 100%)
+    local TradeAllowedActions = {
+        TradeRequest = true,
+        TradeRespond = true,
+        TradeReady = true,
+        TradeItem = true,
+        TradeCancel = true,
+        SetSetting = true,
+    }
+    if (IsInTrade and IsInTrade()) or getgenv().TradeActiveSession then
+        if not TradeAllowedActions[action] then
+            return -- ระงับคำสั่งทุกชนิดระหว่างเซสชันเทรด ป้องกัน Error 267/600 100%
+        end
+    end
+
     -- 1. ตรวจสอบการโหลดของตัวเกม (ถ้าเกมกำลังโหลดข้อมูลหรือแมพ รอให้พร้อมก่อน เพื่อป้องกัน Error 600 / 267)
     if LocalPlayer:GetAttribute("PetDiceLoading") == true then
         local t0 = tick()
@@ -443,10 +476,15 @@ local function Fire(...)
             return -- ตัวละครไม่อยู่ในสภาพพร้อมเปลี่ยนโซน ยกเลิกทันทีเพื่อป้องกัน Error 267 / 600
         end
         local now = tick()
+        if isZoneTransitionLocked and (now - LastZoneTransitionTime < 3.5) then
+            return -- กำลังอยู่ในหน้าต่างเปลี่ยนโซน ปฏิเสธคำสั่งซ้ำซ้อนทันที ป้องกัน Error 267
+        end
         local elapsedSinceZone = now - LastZoneTransitionTime
         if elapsedSinceZone < 3.5 then
             task.wait(3.5 - elapsedSinceZone)
         end
+        isZoneTransitionLocked = true
+        LastZoneTransitionTime = tick()
     end
 
     -- 2. ป้องกันฟีเจอร์ที่ยังไม่ปลดล็อค 100% (ป้องกัน Error 267 จากการส่งคำสั่งที่เซิร์ฟเวอร์ปฏิเสธ)
@@ -520,13 +558,20 @@ local function Fire(...)
     -- 3. ตรวจสอบความสมบูรณ์ของพารามิเตอร์และการมีอยู่จริงของไอเทม / ทรัพยากร (Sanity Drop ป้องกันเตะ)
     local data = State.Data
     if action == "RollGrade" then
-        if not data or (data.Gems or 0) <= 0 then
-            return -- ไม่มีตั๋วหมุนเกรด (Gems) ไม่ส่ง
+        local uid = args[2]
+        if not data or (data.Gems or 0) <= 0 or not data.Pets or not data.Pets[uid] then
+            return -- ไม่มีตั๋วหมุนเกรด (Gems) หรือสัตว์เลี้ยงไม่มีอยู่จริง ไม่ส่ง ป้องกัน Error 267
         end
     end
     if action == "RollTrait" then
-        if not data or (data.Shards or 0) <= 0 then
-            return -- ไม่มีชาร์ดหมุน Trait (Shards) ไม่ส่ง
+        local uid = args[2]
+        if not data or (data.Shards or 0) <= 0 or not data.Pets or not data.Pets[uid] then
+            return -- ไม่มีชาร์ดหมุน Trait (Shards) หรือสัตว์เลี้ยงไม่มีอยู่จริง ไม่ส่ง ป้องกัน Error 267
+        end
+    end
+    if action == "BuyAllUpgrades" then
+        if not data or not data.Money or data.Money <= 0 then
+            return -- ไม่มีเงิน ไม่ส่ง ป้องกัน Error 267
         end
     end
     if action == "UpgradePet" or action == "UpgradePetLevels" then
@@ -614,8 +659,8 @@ local function Fire(...)
         end
     end
     if action == "RollGrade" or action == "RollTrait" or action == "UpgradePet" or action == "UpgradePetLevels" or action == "BuyAllUpgrades" then
-        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then
-            return -- พักคำสั่งสุ่ม/อัปเกรดชั่วคราวระหว่างเก็บพายุลูกกวาด ป้องกัน Remote Burst & Error 267
+        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
+            return -- พักคำสั่งสุ่ม/อัปเกรดชั่วคราวระหว่างเก็บพายุลูกกวาดหรือขอขนม ป้องกัน Remote Burst & Error 267
         end
     end
     if action == "Roll" and State.Rolling then
@@ -632,6 +677,26 @@ local function Fire(...)
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then
             return -- ห้ามส่งคำสั่ง Teleport ระหว่างเทรด
         end
+        
+        local dest = args[2]
+        -- ป้องกันการวาร์ปขัดจังหวะ Trick or Treat (ยกเว้นการวาร์ปกลับบ้านของ Loop 8 เองเมื่อขอขนมเสร็จ)
+        if (getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex) and dest == "Home" then
+            local char = LocalPlayer.Character or Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
+            if hrp and (hrp.Position - pawculaPos).Magnitude > 25 and CanTrickOrTreat and CanTrickOrTreat() then
+                return -- ยังเดินไม่ถึงหรือขอขนมไม่เสร็จ ห้ามวาร์ปกลับบ้านเด็ดขาด
+            end
+        end
+        
+        -- ป้องกันการวาร์ปขัดจังหวะ Candy Storm
+        if (getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex) and dest == "Home" then
+            local isStormActive = IsCandyStormActive and IsCandyStormActive()
+            if isStormActive then
+                return -- พายุกำลังตกอยู่ ห้ามวาร์ปกลับบ้าน
+            end
+        end
+        
         -- ตรวจสอบตัวละครและสภาพร่างกายก่อนวาร์ป ป้องกัน desync และ Error 600
         local char = LocalPlayer.Character or Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -640,7 +705,6 @@ local function Fire(...)
             return
         end
         
-        local dest = args[2]
         local mag = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude
         if dest == "Hub" and mag < 150 then
             return -- อยู่ในลานพลาซ่า/ฮับอยู่แล้ว (ระยะศูนย์กลาง < 150 studs) ห้ามส่ง Teleport Hub ซ้ำ ป้องกัน Error 267
@@ -661,6 +725,15 @@ local function Fire(...)
         end
         LastRemoteFire[action] = tick()
     end
+
+    -- 4.1 Strict Global Inter-Packet Serializer (ป้องกัน Harmonic Collision เมื่อเปิด 10+ ฟังก์ชั่นพร้อมกัน)
+    -- รับประกันว่าไม่มีทางที่คำสั่ง 2 คำสั่งใดๆ จากทุก Loop จะยิงชนกันในเฟรมเดียวกัน (เว้นระยะอย่างน้อย 0.12s เสมอ)
+    local nowFire = tick()
+    local globalDiff = nowFire - LastGlobalRemoteFireTime
+    if globalDiff < MIN_GLOBAL_REMOTE_INTERVAL then
+        task.wait(MIN_GLOBAL_REMOTE_INTERVAL - globalDiff)
+    end
+    LastGlobalRemoteFireTime = tick()
 
     -- 5. ควบคุมปริมาณทราฟฟิกรวมทั่วทั้งสคริปต์ (Global Token Bucket Rate Limiter)
     -- ป้องกันกรณีที่เปิด 10+ ฟังก์ชั่นพร้อมกันแล้วส่งคำสั่งซ้อนกันในเสี้ยววินาทีเดียว
@@ -683,6 +756,7 @@ local function Fire(...)
 
     if ZoneTransitionActions[action] then
         LastZoneTransitionTime = tick()
+        task.delay(3.5, function() isZoneTransitionLocked = false end)
     end
 
     Action:FireServer(unpack(args)) 
@@ -1348,13 +1422,16 @@ Tabs.Overview:AddButton({
 -- ==============================================================================
 -- 💰 AUTO SELL PETS ENGINE (ขายสัตว์เลี้ยงอัตโนมัติ เก็บเฉพาะ N ตัวที่ดีที่สุด)
 -- ==============================================================================
-local isAutoSellingActive = false
+isAutoSellingActive = false
 local SliderKeepPetCount = nil
 local InputCustomKeepCount = nil
 local AutoSellStatusPara = nil
 
 local function ExecuteAutoSellPets(targetCountOverride)
     if isAutoSellingActive then return false, "กำลังดำเนินการขายสัตว์เลี้ยงอยู่..." end
+    if isPetOperationMutex or isPetEnhanceRolling then
+        return false, "กำลังสุ่มหรืออัปเกรดสัตว์เลี้ยงอยู่ ชะลอการขายชั่วคราว..."
+    end
     local data = State.Data
     if not data or not data.Pets then return false, "ไม่มีข้อมูลสัตว์เลี้ยงในขณะนี้" end
     
@@ -1365,6 +1442,9 @@ local function ExecuteAutoSellPets(targetCountOverride)
     if not stacks or #stacks == 0 then return false, "ไม่พบรายการสัตว์เลี้ยงในกระเป๋า" end
     
     isAutoSellingActive = true
+    isPetOperationMutex = true
+    getgenv().PetOperationMutex = true
+    getgenv().LastPetOperationStartTime = tick()
     local success, totalSoldOrErr, keptCount = pcall(function()
         local stackInfos = {}
         for _, s in ipairs(stacks) do
@@ -1472,6 +1552,9 @@ local function ExecuteAutoSellPets(targetCountOverride)
         return toSell, kept
     end)
     isAutoSellingActive = false
+    isPetOperationMutex = false
+    getgenv().PetOperationMutex = false
+    getgenv().LastPetOperationStartTime = 0
     
     if not success then
         return false, totalSoldOrErr
@@ -4289,13 +4372,18 @@ Tabs.Halloween:AddButton({
     end
 })
 
-local isCollectingCandyMutex = false
+isCollectingCandyMutex = false
 
 local function SafeCollectPlazaCandies(isManual)
     if isCollectingCandyMutex or getgenv().CandyStormMutex or getgenv().IsCandyStormActiveRunning then
         if isManual then
             Notify("🌪️ กำลังเก็บแคนดี้อยู่แล้ว", "ระบบกำลังวิ่งเก็บแคนดี้ในพลาซ่าให้อยู่ในขณะนี้", 3)
         end
+        return false
+    end
+    
+    if isTrickOrTreatMutex or getgenv().TrickOrTreatMutex or getgenv().IsTrickOrTreatActiveRunning then
+        if isManual then Notify("🎃 กำลังขอขนม", "กรุณารอระบบขอขนมฮาโลวีนเสร็จสิ้นก่อนเก็บลูกอม", 3) end
         return false
     end
     
@@ -5259,8 +5347,8 @@ task.spawn(function()
                 local isBossJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
                 if not (CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isBossJoined or IsEnteringBossPortal == true)) then
                     if isRunning then
-                        -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย (เว้นแต่กำลังเก็บแคนดี้อยู่)
-                        if activeId and activeId ~= targetId and not isSwitchingTower and not getgenv().IsCandyStormActiveRunning then
+                        -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย (เว้นแต่กำลังเก็บแคนดี้หรือขอขนมอยู่)
+                        if activeId and activeId ~= targetId and not isSwitchingTower and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and not getgenv().CandyStormMutex and not getgenv().IsTrickOrTreatActiveRunning and not isTrickOrTreatMutex and not getgenv().TrickOrTreatMutex then
                             SwitchOrStartTower(targetId, true)
                         end
                         
@@ -5271,7 +5359,7 @@ task.spawn(function()
                         end
                         
                         -- Watchdog: ตรวจสอบกรณีติดค้าง (ตาม FloorTimeout ของเกมคือ 55 วินาที จึงใช้ 75 วินาทีเพื่อความปลอดภัย 100%)
-                        if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 75.0) and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and (now - LastZoneTransitionTime > 5.0) then
+                        if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 75.0) and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and not getgenv().CandyStormMutex and not getgenv().IsTrickOrTreatActiveRunning and not isTrickOrTreatMutex and not getgenv().TrickOrTreatMutex and (now - LastZoneTransitionTime > 5.0) then
                             LiveTower.LastFloorTime = now
                             Fire("TowerLeave")
                             task.wait(1.0)
@@ -5376,7 +5464,11 @@ task.spawn(function()
                                      (tostring(CFG.WorldBossDifficultyFilter):find(wbDiff))
                     
                     if elemMatch and diffMatch then
-                        if getgenv().IsCandyStormActiveRunning then
+                        if getgenv().TrickOrTreatMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex then
+                            task.wait(2.0)
+                            return
+                        end
+                        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex then
                             local wbTimer = ReplicatedStorage:GetAttribute("WorldBossTimer") or 60
                             if wbTimer > 10 then
                                 task.wait(1.5)
@@ -5444,15 +5536,26 @@ task.spawn(function()
         if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(2.0) continue end
         
         if CFG.AutoRebirth then
-            CircuitBreaker.Execute("AutoRebirth", function()
-                local data = State.Data
-                if not data then return end
-                local cost = Stats.RebirthCost(data)
-                if cost and (data.Money or 0) >= cost then
-                    Fire("Rebirth")
-                    Humanizer.Wait(2.0, 3.5)
-                end
+            if isEconomyActionMutex then task.wait(1.5) continue end
+            isEconomyActionMutex = true
+            getgenv().EconomyActionMutex = true
+            getgenv().LastEconomyActionStartTime = tick()
+            
+            pcall(function()
+                CircuitBreaker.Execute("AutoRebirth", function()
+                    local data = State.Data
+                    if not data then return end
+                    local cost = Stats.RebirthCost(data)
+                    if cost and (data.Money or 0) >= cost then
+                        Fire("Rebirth")
+                        Humanizer.Wait(2.0, 3.5)
+                    end
+                end)
             end)
+            
+            isEconomyActionMutex = false
+            getgenv().EconomyActionMutex = false
+            getgenv().LastEconomyActionStartTime = 0
         end
     end
 end)
@@ -5467,25 +5570,36 @@ task.spawn(function()
         if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(2.0) continue end
         
         if CFG.UpgradeTree then
-            CircuitBreaker.Execute("UpgradeTree", function()
-                local data = State.Data
-                if not data or not data.Upgrades or not data.Money or data.Money <= 0 then 
-                    task.wait(3.0)
-                    return 
-                end
-                
-                -- สแกนเรียลไทม์: ตรวจสอบความพร้อมใช้งานจริงว่ามีอัปเกรดที่เงินพอซื้อได้จริงหรือไม่
-                if Upgrades and Upgrades.PlanBuyAll then
-                    local planned, totalCost = Upgrades.PlanBuyAll(data.Upgrades, data.Money, 50)
-                    if planned and #planned > 0 and totalCost and data.Money >= totalCost then
-                        Fire("BuyAllUpgrades")
-                        Humanizer.Wait(1.8, 2.8)
-                    else
-                        -- ไม่มีอัปเกรดที่เงินพอซื้อในขณะนี้ พัก 4 วินาที ไม่ยิงคำสั่งรัว
-                        task.wait(4.0)
+            if isEconomyActionMutex then task.wait(1.5) continue end
+            isEconomyActionMutex = true
+            getgenv().EconomyActionMutex = true
+            getgenv().LastEconomyActionStartTime = tick()
+            
+            pcall(function()
+                CircuitBreaker.Execute("UpgradeTree", function()
+                    local data = State.Data
+                    if not data or not data.Upgrades or not data.Money or data.Money <= 0 then 
+                        task.wait(3.0)
+                        return 
                     end
-                end
+                    
+                    -- สแกนเรียลไทม์: ตรวจสอบความพร้อมใช้งานจริงว่ามีอัปเกรดที่เงินพอซื้อได้จริงหรือไม่
+                    if Upgrades and Upgrades.PlanBuyAll then
+                        local planned, totalCost = Upgrades.PlanBuyAll(data.Upgrades, data.Money, 50)
+                        if planned and #planned > 0 and totalCost and data.Money >= totalCost then
+                            Fire("BuyAllUpgrades")
+                            Humanizer.Wait(1.8, 2.8)
+                        else
+                            -- ไม่มีอัปเกรดที่เงินพอซื้อในขณะนี้ พัก 4 วินาที ไม่ยิงคำสั่งรัว
+                            task.wait(4.0)
+                        end
+                    end
+                end)
             end)
+            
+            isEconomyActionMutex = false
+            getgenv().EconomyActionMutex = false
+            getgenv().LastEconomyActionStartTime = 0
         end
     end
 end)
@@ -5696,7 +5810,7 @@ task.spawn(function()
             -- 5. Auto Trick or Treat: ตรวจสอบสิทธิ์ประจำวัน และล็อค Mutex ป้องกันคำสั่งซ้อนกัน 100%
             if CFG.HalloweenAutoTrickOrTreat and CanTrickOrTreat() then
                 local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-                if not IsInTrade() and not getgenv().TradeActiveSession and not isBoss and not IsEnteringBossPortal and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and not isTrickOrTreatMutex then
+                if not IsInTrade() and not getgenv().TradeActiveSession and not isBoss and not IsEnteringBossPortal and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and not getgenv().CandyStormMutex and not isTrickOrTreatMutex then
                     -- ล็อค Mutex ข้ามระบบทันที ป้องกัน Loop 3 (Auto Tower) และคำสั่งอื่นแทรกแซง
                     isTrickOrTreatMutex = true
                     getgenv().IsTrickOrTreatActiveRunning = true
@@ -5763,10 +5877,13 @@ task.spawn(function()
         task.wait(1.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         
-        -- Watchdog ปลดล็อค Mutex อัตโนมัติหากติดค้างเกิน 105 วินาที
+        -- Watchdogs: ปลดล็อค Mutex อัตโนมัติหากติดค้างเกินเวลาความปลอดภัย ป้องกัน Deadlock 100%
+        local nowTick = tick()
+        
+        -- 1. Candy Storm Mutex (105s)
         if getgenv().CandyStormMutex or getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then
             local startT = getgenv().LastCandyStormStartTime or 0
-            if startT > 0 and (tick() - startT > 105.0) then
+            if startT > 0 and (nowTick - startT > 105.0) then
                 getgenv().CandyStormMutex = false
                 getgenv().IsCandyStormActiveRunning = false
                 isCollectingCandyMutex = false
@@ -5774,10 +5891,10 @@ task.spawn(function()
             end
         end
         
-        -- Watchdog ปลดล็อค TrickOrTreat Mutex อัตโนมัติหากติดค้างเกิน 60 วินาที
+        -- 2. TrickOrTreat Mutex (60s)
         if getgenv().TrickOrTreatMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex then
             local startT = getgenv().LastTrickOrTreatStartTime or 0
-            if startT > 0 and (tick() - startT > 60.0) then
+            if startT > 0 and (nowTick - startT > 60.0) then
                 getgenv().TrickOrTreatMutex = false
                 getgenv().IsTrickOrTreatActiveRunning = false
                 isTrickOrTreatMutex = false
@@ -5785,7 +5902,40 @@ task.spawn(function()
                 pcall(function() Fire("Teleport", "Home") end)
             end
         end
+
+        -- 3. Pet Operation Mutex (20s)
+        if getgenv().PetOperationMutex or isPetOperationMutex then
+            local startT = getgenv().LastPetOperationStartTime or 0
+            if startT > 0 and (nowTick - startT > 20.0) then
+                getgenv().PetOperationMutex = false
+                isPetOperationMutex = false
+                isPetEnhanceRolling = false
+                isAutoSellingActive = false
+                getgenv().LastPetOperationStartTime = 0
+            end
+        end
+
+        -- 4. Economy Action Mutex (12s)
+        if getgenv().EconomyActionMutex or isEconomyActionMutex then
+            local startT = getgenv().LastEconomyActionStartTime or 0
+            if startT > 0 and (nowTick - startT > 12.0) then
+                getgenv().EconomyActionMutex = false
+                isEconomyActionMutex = false
+                getgenv().LastEconomyActionStartTime = 0
+            end
+        end
+
+        -- 5. Zone Transition Lock (8s)
+        if isZoneTransitionLocked and (nowTick - LastZoneTransitionTime > 8.0) then
+            isZoneTransitionLocked = false
+        end
         
+        -- ตรวจสอบหาก TrickOrTreat กำลังทำงานอยู่ ให้พัก Candy Storm Collector ทันที ป้องกันการแย่งการเดิน
+        if getgenv().TrickOrTreatMutex or getgenv().IsTrickOrTreatActiveRunning or isTrickOrTreatMutex then
+            task.wait(2.0)
+            continue
+        end
+
         if not CFG.HalloweenAutoCollectCandy then 
             task.wait(2.0)
             continue 
@@ -6007,64 +6157,78 @@ task.spawn(function()
         if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(1.5) continue end
         
         if CFG.AutoUpgradePetLevel then
-            CircuitBreaker.Execute("AutoUpgradePetLevel", function()
-                local data = State.Data
-                if not data or not data.Pets or not data.Money or data.Money <= 0 then 
-                    task.wait(3.0)
-                    return 
-                end
-                
-                -- ตรวจสอบว่าปลดล็อคระบบอัปเลเวลในต้นไม้ทักษะแล้วหรือไม่ ("PetUpgrades" / "petup")
-                if not IsFeatureUnlocked("PetUpgrades", "petup") then
-                    task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
-                    return
-                end
-                
-                local cap = Stats.PetLevelCap(data.Upgrades)
-                if not cap or cap <= 0 then task.wait(3.0) return end
-                
-                local targetLvl = math.min(CFG.TargetPetLevel or cap, cap)
-                local step = CFG.UpgradeLevelStep or 1
-                local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
-                local virtualMoney = data.Money
-                local upgradedAny = false
-                
-                for _, uid in ipairs(targetUids) do
-                    if IsInTrade() or getgenv().TradeActiveSession then break end
-                    if virtualMoney <= 0 then break end
+            if isPetOperationMutex or isAutoSellingActive then
+                task.wait(0.5)
+                continue
+            end
+            isPetOperationMutex = true
+            getgenv().PetOperationMutex = true
+            getgenv().LastPetOperationStartTime = tick()
+            
+            pcall(function()
+                CircuitBreaker.Execute("AutoUpgradePetLevel", function()
+                    local data = State.Data
+                    if not data or not data.Pets or not data.Money or data.Money <= 0 then 
+                        task.wait(3.0)
+                        return 
+                    end
                     
-                    local pet = data.Pets[uid]
-                    if pet and IsPetEligibleForEnhance(pet) and (pet.L or 0) < targetLvl then
-                        local curLvl = pet.L or 0
-                        local needed = targetLvl - curLvl
-                        local countToUpgrade = math.min(needed, step)
-                        if step >= 999 then countToUpgrade = needed end
+                    -- ตรวจสอบว่าปลดล็อคระบบอัปเลเวลในต้นไม้ทักษะแล้วหรือไม่ ("PetUpgrades" / "petup")
+                    if not IsFeatureUnlocked("PetUpgrades", "petup") then
+                        task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
+                        return
+                    end
+                    
+                    local cap = Stats.PetLevelCap(data.Upgrades)
+                    if not cap or cap <= 0 then task.wait(3.0) return end
+                    
+                    local targetLvl = math.min(CFG.TargetPetLevel or cap, cap)
+                    local step = CFG.UpgradeLevelStep or 1
+                    local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
+                    local virtualMoney = data.Money
+                    local upgradedAny = false
+                    
+                    for _, uid in ipairs(targetUids) do
+                        if IsInTrade() or getgenv().TradeActiveSession then break end
+                        if virtualMoney <= 0 then break end
                         
-                        local affordable = FindAffordableLevels(pet, data.Upgrades, virtualMoney, countToUpgrade)
-                        if affordable > 0 then
-                            local cost = affordable == 1 and Stats.PetLevelCost(pet, data.Upgrades) or Stats.PetLevelsCost(pet, data.Upgrades, affordable)
-                            if cost and virtualMoney >= cost then
-                                virtualMoney = virtualMoney - cost
-                                if affordable == 1 then
-                                    Fire("UpgradePet", uid)
-                                else
-                                    Fire("UpgradePetLevels", uid, affordable)
+                        local pet = data.Pets[uid]
+                        if pet and IsPetEligibleForEnhance(pet) and (pet.L or 0) < targetLvl then
+                            local curLvl = pet.L or 0
+                            local needed = targetLvl - curLvl
+                            local countToUpgrade = math.min(needed, step)
+                            if step >= 999 then countToUpgrade = needed end
+                            
+                            local affordable = FindAffordableLevels(pet, data.Upgrades, virtualMoney, countToUpgrade)
+                            if affordable > 0 then
+                                local cost = affordable == 1 and Stats.PetLevelCost(pet, data.Upgrades) or Stats.PetLevelsCost(pet, data.Upgrades, affordable)
+                                if cost and virtualMoney >= cost then
+                                    virtualMoney = virtualMoney - cost
+                                    if affordable == 1 then
+                                        Fire("UpgradePet", uid)
+                                    else
+                                        Fire("UpgradePetLevels", uid, affordable)
+                                    end
+                                    upgradedAny = true
+                                    Humanizer.Wait(0.40, 0.70)
                                 end
-                                upgradedAny = true
-                                Humanizer.Wait(0.40, 0.70)
                             end
                         end
                     end
-                end
-                
-                if not upgradedAny then
-                    -- สัตว์เลี้ยงทั้งหมดถึงเป้าหมายแล้ว หรือเงินไม่พออัปเกรด พัก 3.5 วินาที
-                    task.wait(3.5)
-                else
-                    getgenv().LastPetUpgradedTime = tick()
-                    task.wait(1.5) -- หน่วงรอเซิร์ฟเวอร์อัปเดตข้อมูลสเตตัส
-                end
+                    
+                    if not upgradedAny then
+                        -- สัตว์เลี้ยงทั้งหมดถึงเป้าหมายแล้ว หรือเงินไม่พออัปเกรด พัก 3.5 วินาที
+                        task.wait(3.5)
+                    else
+                        getgenv().LastPetUpgradedTime = tick()
+                        task.wait(1.5) -- หน่วงรอเซิร์ฟเวอร์อัปเดตข้อมูลสเตตัส
+                    end
+                end)
             end)
+            
+            isPetOperationMutex = false
+            getgenv().PetOperationMutex = false
+            getgenv().LastPetOperationStartTime = 0
         else
             task.wait(2.0)
         end
@@ -6081,11 +6245,14 @@ task.spawn(function()
         if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(1.5) continue end
         
         if CFG.AutoRollGrade then
-            if isPetEnhanceRolling then
+            if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive then
                 task.wait(0.25)
                 continue
             end
+            isPetOperationMutex = true
             isPetEnhanceRolling = true
+            getgenv().PetOperationMutex = true
+            getgenv().LastPetOperationStartTime = tick()
             pcall(function()
                 CircuitBreaker.Execute("AutoRollGrade", function()
                     local data = State.Data
@@ -6139,6 +6306,9 @@ task.spawn(function()
                 end)
             end)
             isPetEnhanceRolling = false
+            isPetOperationMutex = false
+            getgenv().PetOperationMutex = false
+            getgenv().LastPetOperationStartTime = 0
         else
             consecutiveRolls = 0
             task.wait(2.0)
@@ -6156,11 +6326,14 @@ task.spawn(function()
         if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(1.5) continue end
         
         if CFG.AutoRollTrait then
-            if isPetEnhanceRolling then
+            if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive then
                 task.wait(0.25)
                 continue
             end
+            isPetOperationMutex = true
             isPetEnhanceRolling = true
+            getgenv().PetOperationMutex = true
+            getgenv().LastPetOperationStartTime = tick()
             pcall(function()
                 CircuitBreaker.Execute("AutoRollTrait", function()
                     local data = State.Data
@@ -6214,6 +6387,9 @@ task.spawn(function()
                 end)
             end)
             isPetEnhanceRolling = false
+            isPetOperationMutex = false
+            getgenv().PetOperationMutex = false
+            getgenv().LastPetOperationStartTime = 0
         else
             consecutiveRolls = 0
             task.wait(2.0)
@@ -6398,28 +6574,39 @@ task.spawn(function()
         if LocalPlayer:GetAttribute("PetDiceLoading") == true then task.wait(2.0) continue end
         
         if CFG.AutoBuyMarket then
-            CircuitBreaker.Execute("AutoBuyMarket", function()
-                if not IsFeatureUnlocked("Market", "market") then
-                    return
-                end
-                
-                local data = State.Data
-                if not data or not Market then return end
-                
-                local now = State.Now and State.Now() or os.time()
-                local currentWindow = Market.Window(now)
-                local bought = data.Market and (data.Market.Window ~= currentWindow and {} or data.Market.Bought) or {}
-                local _, canBuyCount, totalCost, totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
-                
-                if canBuyCount and canBuyCount > 0 and (data.Money or 0) >= (totalCost or 0) then
-                    Humanizer.Wait(0.8, 1.5)
-                    Fire("MarketBuyAll")
-                    Notify("🛒 ตลาด (Market)", "กวาดซื้อสินค้าทั้งหมดในตลาด (" .. canBuyCount .. " ชิ้น) เรียบร้อย!", 3)
-                    Humanizer.Wait(2.0, 3.5)
-                    if UpdateMarketStatus then pcall(UpdateMarketStatus) end
-                    if UpdatePotionStatus then pcall(UpdatePotionStatus) end
-                end
+            if isEconomyActionMutex then task.wait(1.5) continue end
+            isEconomyActionMutex = true
+            getgenv().EconomyActionMutex = true
+            getgenv().LastEconomyActionStartTime = tick()
+            
+            pcall(function()
+                CircuitBreaker.Execute("AutoBuyMarket", function()
+                    if not IsFeatureUnlocked("Market", "market") then
+                        return
+                    end
+                    
+                    local data = State.Data
+                    if not data or not Market then return end
+                    
+                    local now = State.Now and State.Now() or os.time()
+                    local currentWindow = Market.Window(now)
+                    local bought = data.Market and (data.Market.Window ~= currentWindow and {} or data.Market.Bought) or {}
+                    local _, canBuyCount, totalCost, totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
+                    
+                    if canBuyCount and canBuyCount > 0 and (data.Money or 0) >= (totalCost or 0) then
+                        Humanizer.Wait(0.8, 1.5)
+                        Fire("MarketBuyAll")
+                        Notify("🛒 ตลาด (Market)", "กวาดซื้อสินค้าทั้งหมดในตลาด (" .. canBuyCount .. " ชิ้น) เรียบร้อย!", 3)
+                        Humanizer.Wait(2.0, 3.5)
+                        if UpdateMarketStatus then pcall(UpdateMarketStatus) end
+                        if UpdatePotionStatus then pcall(UpdatePotionStatus) end
+                    end
+                end)
             end)
+            
+            isEconomyActionMutex = false
+            getgenv().EconomyActionMutex = false
+            getgenv().LastEconomyActionStartTime = 0
         end
     end
 end)
@@ -6431,7 +6618,7 @@ task.spawn(function()
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0) continue end
         
-        if CFG.AutoSellPets and not isAutoSellingActive then
+        if CFG.AutoSellPets and not isAutoSellingActive and not isPetOperationMutex and not isPetEnhanceRolling then
             pcall(function()
                 local data = State.Data
                 if not data or not data.Pets then return end
