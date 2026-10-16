@@ -150,6 +150,18 @@ local RemoteRateLimits = {
     EquipBest = 1.00,
 }
 
+-- Global Zone Transition Serialization & Anti-Conflict State Machine
+-- ป้องกันการส่งคำสั่งเปลี่ยนแมพ/อารีน่าซ้อนกัน (Tower, Boss, Teleport) ซึ่งเป็นสาเหตุหลักของ Error 267
+local LastZoneTransitionTime = 0
+local ZoneTransitionActions = {
+    TowerStart = true,
+    TowerExit = true,
+    TowerLeave = true,
+    WorldBossJoin = true,
+    WorldBossLeave = true,
+    Teleport = true,
+}
+
 -- Global Token Bucket Rate Limiter (ป้องกันการยิงพร้อมกันจากทุกฟังก์ชันเกินขีดจำกัดเซิร์ฟเวอร์)
 -- ขีดจำกัดเซิร์ฟเวอร์ของตัวเกมแท้: PerSecond = 12, Burst = 24
 -- ขีดจำกัดความปลอดภัยขั้นสูงสุดของสคริปต์: PerSecond = 4.0 (ปลอดภัยกว่าขีดจำกัดเซิร์ฟเวอร์ 67%), MaxBurst = 10 (ปลอดภัย 58%)
@@ -185,11 +197,24 @@ local function Fire(...)
         return
     end
 
-    -- 1. ตรวจสอบการโหลดของตัวเกม (ถ้าเกมกำลังโหลดข้อมูลหรือแมพ รอให้พร้อมก่อน เพื่อป้องกัน Error 600)
+    -- 1. ตรวจสอบการโหลดของตัวเกม (ถ้าเกมกำลังโหลดข้อมูลหรือแมพ รอให้พร้อมก่อน เพื่อป้องกัน Error 600 / 267)
     if LocalPlayer:GetAttribute("PetDiceLoading") == true then
         local t0 = tick()
-        while LocalPlayer:GetAttribute("PetDiceLoading") == true and (tick() - t0 < 3.0) do
+        while LocalPlayer:GetAttribute("PetDiceLoading") == true and (tick() - t0 < 4.0) do
             task.wait(0.2)
+        end
+        if LocalPlayer:GetAttribute("PetDiceLoading") == true then
+            return -- กำลังโหลดแมพอยู่ ยกเลิกคำสั่งทันทีเพื่อป้องกัน desync และเตะ
+        end
+    end
+
+    -- 1.1 ควบคุมการสลับโซนข้ามแมพทั้งหมด (Zone Transition Cross-Action Serialization)
+    -- ป้องกันการส่งคำสั่งเปลี่ยนโซน (Tower, Boss, Teleport) ซ้อนกันในเสี้ยววินาทีจนเซิร์ฟเวอร์เตะ Error 267
+    if ZoneTransitionActions[action] then
+        local now = tick()
+        local elapsedSinceZone = now - LastZoneTransitionTime
+        if elapsedSinceZone < 3.5 then
+            task.wait(3.5 - elapsedSinceZone)
         end
     end
 
@@ -210,12 +235,22 @@ local function Fire(...)
         if not IsFeatureUnlocked("Towers", "towers") then
             return
         end
+        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex then
+            return -- ป้องกันการเริ่มหอคอยขณะกำลังเก็บแคนดี้
+        end
+        local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if isBoss or IsEnteringBossPortal == true then
+            return -- ป้องกันการเริ่มหอคอยระหว่างศึกบอสโลก
+        end
         local d = State.Data
         if (IsTowerRunning and IsTowerRunning()) or (d and d.TowerResume ~= nil and d.TowerResume.Floor and d.TowerResume.Floor > 0) then
             return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
         end
-        if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.0) then
-            return -- หน่วง 3 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
+        if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.5) then
+            return -- หน่วง 3.5 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
+        end
+        if (tick() - LastZoneTransitionTime < 3.5) then
+            return -- หน่วง 3.5 วินาทีหลังการเปลี่ยนโซนใดๆ
         end
     end
     if action == "TowerLeave" then
@@ -319,6 +354,16 @@ local function Fire(...)
         return -- กำลังทอยเต๋าอยู่ ไม่ยิงซ้อน
     end
     if action == "Teleport" then
+        if IsTowerInArena and IsTowerInArena() then
+            return -- ห้ามส่งคำสั่ง Teleport เด็ดขาดขณะอยู่ในอารีน่าหอคอย ป้องกัน Error 267
+        end
+        local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if isBoss or IsEnteringBossPortal == true then
+            return -- ห้ามส่งคำสั่ง Teleport ขณะกำลังสู้บอสโลก ป้องกัน Error 267
+        end
+        if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then
+            return -- ห้ามส่งคำสั่ง Teleport ระหว่างเทรด
+        end
         -- ตรวจสอบตัวละครและสภาพร่างกายก่อนวาร์ป ป้องกัน desync และ Error 600
         local char = LocalPlayer.Character or Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -356,6 +401,10 @@ local function Fire(...)
         GlobalTokenBucket.LastRefill = tick()
     else
         GlobalTokenBucket.Tokens = GlobalTokenBucket.Tokens - cost
+    end
+
+    if ZoneTransitionActions[action] then
+        LastZoneTransitionTime = tick()
     end
 
     Action:FireServer(unpack(args)) 
@@ -2441,8 +2490,10 @@ SwitchOrStartTower = function(targetTowerId, force)
                 if br and br.Visible then br.Visible = false end
             end)
             
-            -- หน่วงเวลา 0.8 วินาทีให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
-            task.wait(0.8)
+            -- หน่วงเวลาให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์อย่างน้อย 3.5 วินาที
+            while (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.5) do
+                task.wait(0.2)
+            end
         end
         
         local success = StartTowerDirect(resolvedId)
@@ -3904,7 +3955,7 @@ Tabs.Halloween:AddButton({
 local isCollectingCandyMutex = false
 
 local function SafeCollectPlazaCandies(isManual)
-    if isCollectingCandyMutex or getgenv().CandyStormMutex then
+    if isCollectingCandyMutex or getgenv().CandyStormMutex or getgenv().IsCandyStormActiveRunning then
         if isManual then
             Notify("🌪️ กำลังเก็บแคนดี้อยู่แล้ว", "ระบบกำลังวิ่งเก็บแคนดี้ในพลาซ่าให้อยู่ในขณะนี้", 3)
         end
@@ -3922,15 +3973,27 @@ local function SafeCollectPlazaCandies(isManual)
         return false
     end
     
-    if IsTowerInArena() then
-        Notify("🏰 หอคอย", "สลับหอคอยเป็น Away Mode ชั่วคราวเพื่อให้ตัวละครไปพลาซ่า...", 2)
-        Fire("TowerExit")
-        Humanizer.Wait(2.0, 3.0)
-    end
-    
+    -- ล็อค Mutex และ Flag ทันทีตั้งแต่ก้าวแรก ป้องกัน Loop อื่นๆ (เช่น Tower หรือ Boss) แทรกแซง
     isCollectingCandyMutex = true
     getgenv().CandyStormMutex = true
     getgenv().IsCandyStormActiveRunning = true
+    
+    if IsTowerInArena() then
+        Notify("🏰 หอคอย", "สลับหอคอยเป็น Away Mode ชั่วคราวเพื่อให้ตัวละครไปพลาซ่า...", 2)
+        Fire("TowerExit")
+        local exitWaitStart = tick()
+        while IsTowerInArena() and (tick() - exitWaitStart < 5.0) do
+            task.wait(0.2)
+        end
+        if IsTowerInArena() then
+            -- หากยังคงอยู่ในอารีน่า (เช่น ติดช่วงแอนิเมชั่นบอส) ให้ยกเลิกการเก็บแคนดี้รอบนี้อย่างปลอดภัย ป้องกัน Error 267
+            isCollectingCandyMutex = false
+            getgenv().CandyStormMutex = false
+            getgenv().IsCandyStormActiveRunning = false
+            return false
+        end
+        Humanizer.Wait(2.0, 3.0) -- ให้เวลาเซิร์ฟเวอร์เปลี่ยนสถานะเป็น Away Mode อย่างสมบูรณ์
+    end
     
     local collectedThisRound = 0
     
@@ -3964,7 +4027,8 @@ local function SafeCollectPlazaCandies(isManual)
             end
             Humanizer.Wait(1.5, 2.0)
             Fire("Teleport", "Home")
-            Humanizer.Wait(1.5, 2.5)
+            Humanizer.Wait(3.0, 4.0)
+            LastZoneTransitionTime = tick()
             return
         end
         
@@ -4127,13 +4191,16 @@ local function SafeCollectPlazaCandies(isManual)
         if not stillGoing and #GetAvailableCandies() == 0 then
             Fire("Teleport", "Home")
             Notify("🌪️ พายุลูกกวาด", string.format("เก็บแคนดี้สำเร็จ %d ชิ้น! เดินทางกลับบ้านเรียบร้อย", collectedThisRound), 3)
-            Humanizer.Wait(1.8, 2.5)
+            Humanizer.Wait(3.5, 4.5)
+            LastZoneTransitionTime = tick()
         end
     end)
     
+    Humanizer.Wait(1.0, 1.5)
     isCollectingCandyMutex = false
     getgenv().CandyStormMutex = false
     getgenv().IsCandyStormActiveRunning = false
+    LastZoneTransitionTime = tick()
     UpdateHalloweenStatus()
     return true
 end
@@ -4848,7 +4915,7 @@ task.spawn(function()
                         end
                         
                         -- Watchdog: ตรวจสอบกรณีติดค้าง (ตาม FloorTimeout ของเกมคือ 55 วินาที จึงใช้ 75 วินาทีเพื่อความปลอดภัย 100%)
-                        if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 75.0) and not getgenv().IsCandyStormActiveRunning then
+                        if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 75.0) and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex and (now - LastZoneTransitionTime > 5.0) then
                             LiveTower.LastFloorTime = now
                             Fire("TowerLeave")
                             task.wait(1.0)
@@ -4857,12 +4924,18 @@ task.spawn(function()
                     else
                         -- หอคอยไม่ได้ทำงานอยู่: ตรวจสอบหากพายุลูกกวาดกำลังตกอยู่ ให้รอจนกว่าจะเก็บแคนดี้เสร็จก่อน
                         -- เพื่อป้องกันไม่ให้คำสั่ง TowerStart วาร์ปตัวละครเข้าสู่อารีน่าตัดหน้าการเก็บแคนดี้
-                        if getgenv().IsCandyStormActiveRunning then
+                        if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex or getgenv().CandyStormMutex then
+                            task.wait(2.0)
+                            continue
+                        end
+                        
+                        -- รอให้การเปลี่ยนโซนก่อนหน้า (เช่น วาร์ปกลับบ้าน) โหลดเสร็จอย่างสมบูรณ์ ป้องกัน Error 267
+                        if (now - LastZoneTransitionTime < 4.0) then
                             task.wait(1.5)
                             continue
                         end
                         
-                        local delaySec = math.max(1.5, tonumber(CFG.TowerRestartDelay) or 2.5)
+                        local delaySec = math.max(2.5, tonumber(CFG.TowerRestartDelay) or 3.0)
                         if not isSwitchingTower and (now - lastLoopStartAttempt >= delaySec) then
                             lastLoopStartAttempt = now
                             SwitchOrStartTower(targetId, true)
@@ -4896,11 +4969,12 @@ task.spawn(function()
         -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และให้ Loop Engine หอคอยกลับมาฟาร์มต่ออัตโนมัติ
         if wasInBoss and not isJoined then
             wasInBoss = false
-            task.wait(1.5)
+            task.wait(2.0)
             pcall(function()
                 Fire("Teleport", "Home")
             end)
-            Humanizer.Wait(1.5, 2.5)
+            Humanizer.Wait(3.5, 4.5)
+            LastZoneTransitionTime = tick()
             Notify("🏰 หอคอย", "จบศึกบอสโลกเรียบร้อย กลับถึงบ้านแล้ว ระบบหอคอยจะเริ่มฟาร์มต่ออัตโนมัติ", 3)
         end
         
@@ -4950,7 +5024,11 @@ task.spawn(function()
                                 -- 1. พักหอคอยก่อนเพื่อให้สัตว์เลี้ยงว่างพร้อมตีบอส
                                 if CFG.PauseTowerForBoss and IsTowerRunning() then
                                     Fire("TowerLeave")
-                                    Humanizer.Wait(0.8, 1.5)
+                                    local leaveWaitStart = tick()
+                                    while IsTowerRunning() and (tick() - leaveWaitStart < 4.0) do
+                                        task.wait(0.2)
+                                    end
+                                    Humanizer.Wait(2.0, 3.0)
                                 end
                                 
                                 -- 2. เดินทางไปหน้าประตูบอสด้วยระบบทางการของตัวเกม และเดินขึ้นบันไดตามธรรมชาติ (ปลอดภัยจากการตรวจจับ 100%)
@@ -5233,7 +5311,8 @@ task.spawn(function()
                         Notify("🍬 Trick or Treat", "ขอขนมฮาโลวีนสำเร็จ!", 3)
                         Humanizer.Wait(2.5, 4.0)
                         Fire("Teleport", "Home")
-                        Humanizer.Wait(1.0, 2.0)
+                        Humanizer.Wait(3.5, 4.5)
+                        LastZoneTransitionTime = tick()
                     end
                 end
             end
@@ -5262,8 +5341,8 @@ task.spawn(function()
         local secToNext = GetSecondsUntilNextStorm()
         local targets = GetAvailableCandies()
         
-        -- ตรวจสอบเงื่อนไขเริ่มทำงาน: พายุกำลังตก หรือจะมาใน 8 วิ หรือมีลูกอมในพลาซ่า
-        if isStormActive or (secToNext <= 8) or (#targets > 0) then
+        -- ตรวจสอบเงื่อนไขเริ่มทำงาน: พายุกำลังตก หรือมีลูกอมในพลาซ่า หรือจะมาใน 5 วิ (และไม่อยู่ในอารีน่า)
+        if (isStormActive or #targets > 0) or (secToNext <= 5 and not IsTowerInArena()) then
             SafeCollectPlazaCandies(false)
         end
     end
