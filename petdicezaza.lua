@@ -3095,45 +3095,45 @@ local function SyncLiveTowerFromGame()
     local isArena = battle and battle.Visible == true
     
     -- ตรวจสอบว่า UI กำลังแสดงผลช่วงจบหรือนับถอยหลังรอบใหม่หรือไม่
-    local isCountdown = false
+    local isTransitioning = false
+    local isRunEnded = false
     local isClearStuck = false
     local now = tick()
     
-    if isAway and tracker then
-        for _, lbl in ipairs(tracker:GetDescendants()) do
+    local function checkStatusText(container)
+        for _, lbl in ipairs(container:GetDescendants()) do
             if lbl:IsA("TextLabel") and lbl.Text ~= "" then
                 local txt = lbl.Text:upper()
-                if txt:find("NEXT RUN IN") or txt:find("STARTING...") or txt:find("VICTORY") or txt:find("DEFEAT") or txt:find("TIME'S UP") or txt:find("LEFT TOWER") or txt:find("แพ้") or txt:find("หมดเวลา") then
-                    isCountdown = true
-                    break
-                elseif (txt:find("CLEAR") or txt:find("เคลียร์")) and LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 12.0) then
+                if txt:find("NEXT RUN IN") or txt:find("STARTING...") or txt:find("VICTORY") then
+                    isTransitioning = true
+                elseif txt:find("DEFEAT") or txt:find("TIME'S UP") or txt:find("LEFT TOWER") or txt:find("แพ้") or txt:find("หมดเวลา") then
+                    isRunEnded = true
+                elseif (txt:find("CLEAR") or txt:find("เคลียร์")) and LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 15.0) then
                     isClearStuck = true
-                    break
-                end
-            end
-        end
-    end
-    if isArena and battle then
-        for _, lbl in ipairs(battle:GetDescendants()) do
-            if lbl:IsA("TextLabel") and lbl.Text ~= "" then
-                local txt = lbl.Text:upper()
-                if txt:find("NEXT RUN IN") or txt:find("STARTING...") or txt:find("VICTORY") or txt:find("DEFEAT") or txt:find("TIME'S UP") or txt:find("LEFT TOWER") or txt:find("แพ้") or txt:find("หมดเวลา") then
-                    isCountdown = true
-                    break
-                elseif (txt:find("CLEAR") or txt:find("เคลียร์")) and LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 12.0) then
-                    isClearStuck = true
-                    break
                 end
             end
         end
     end
     
-    if isCountdown or isClearStuck then
+    if isAway and tracker then checkStatusText(tracker) end
+    if isArena and battle then checkStatusText(battle) end
+    
+    if isRunEnded or isClearStuck then
         LiveTower.Active = false
         LiveTower.Starting = false
         LiveTower.TowerId = nil
         LiveTower.InArena = false
         LiveTower.Away = false
+        return
+    end
+    
+    -- หากกำลังอยู่ในช่วงเปลี่ยนผ่านระหว่างชั้น (VICTORY, NEXT RUN IN, STARTING...)
+    -- ถือว่าหอคอยยังคงทำงานอยู่อย่างต่อเนื่อง (ห้ามเริ่มใหม่เด็ดขาด ป้องกันการส่งคำสั่งซ้อนจนโดนเตะ)
+    if isTransitioning then
+        LiveTower.Active = true
+        LiveTower.InArena = isArena
+        LiveTower.Away = isAway
+        LiveTower.LastEventTime = tick()
         return
     end
     
@@ -6278,7 +6278,7 @@ task.spawn(function()
                         local delaySec = math.max(2.5, tonumber(CFG.TowerRestartDelay) or 3.0)
                         if not isSwitchingTower and (now - lastLoopStartAttempt >= delaySec) then
                             lastLoopStartAttempt = now
-                            SwitchOrStartTower(targetId, true)
+                            SwitchOrStartTower(targetId, false)
                         end
                     end
                 end
