@@ -204,7 +204,13 @@ local function Fire(...)
     if action == "TowerStart" and not IsFeatureUnlocked("Towers", "towers") then
         return
     end
-    if action == "WorldBossJoin" and not IsFeatureUnlocked("WorldBoss", "worldboss") then
+    if (action == "WorldBossJoin" or action == "WorldBossLeave" or action == "PortalRepair") and not IsFeatureUnlocked("WorldBoss", "worldboss") then
+        return
+    end
+    if action == "Teleport" and args[2] == "Portal" and not IsFeatureUnlocked("WorldBoss", "worldboss") then
+        return
+    end
+    if action == "BuyUpgrade" and args[2] == "worldboss" and not IsFeatureUnlocked("PetUpgrades", "petup") then
         return
     end
 
@@ -2102,6 +2108,9 @@ local BossStatusPara = Tabs.Tower:AddParagraph({
 })
 
 local function SafeWalkToBossPortal()
+    if not IsFeatureUnlocked("WorldBoss", "worldboss") then
+        return false
+    end
     IsEnteringBossPortal = true
     local ok, res = pcall(function()
         local char = LocalPlayer.Character or Character
@@ -2447,10 +2456,7 @@ local function UpdateTowerStatus()
             bossTitle = string.format("💤 บอสโลกรอบถัดไปจะเปิดรับสมัครใน: %s (เริ่มสู้ %s)", timeToJoinStr, timeStr)
         end
         
-        local isBossUnlocked = false
-        if Upgrades and Upgrades.IsOpen and data and data.Upgrades then
-            isBossUnlocked = Upgrades.IsOpen(data.Upgrades, "WorldBoss")
-        end
+        local isBossUnlocked = IsFeatureUnlocked("WorldBoss", "worldboss")
         local unlockStatus = isBossUnlocked and "🟢 ปลดล็อคแล้ว" or "🔒 ยังไม่ปลดล็อค (ต้องการ 1 Qi)"
         
         local playerStatus = isPlayerIn and "🟢 คุณเข้าร่วมแล้ว" or "⚪ ยังไม่ได้เข้าร่วม"
@@ -2771,25 +2777,11 @@ Tabs.Tower:AddButton({
     Description = "เดินขึ้นบันไดตามธรรมชาติอย่างปลอดภัย และส่งคำสั่งเข้าร่วมบอสโลก",
     Callback = function()
         local data = State.Data
-        local isBossUnlocked = false
-        if Upgrades and Upgrades.IsOpen and data and data.Upgrades then
-            isBossUnlocked = Upgrades.IsOpen(data.Upgrades, "WorldBoss")
-        end
-        
-        -- ตรวจสอบหากยังไม่ปลดล็อค แต่มีเงินพอซื้อ 1 Qi
-        if not isBossUnlocked and data and (data.Money or 0) >= 1e18 then
-            Notify("⚔️ บอสโลก", "กำลังปลดล็อค 'WORLD BOSSES' ในผังอัปเกรดให้อัตโนมัติ...", 3)
-            Fire("BuyUpgrade", "worldboss")
-            Humanizer.Wait(1.0, 1.5)
-            data = State.Data
-            if Upgrades and Upgrades.IsOpen and data and data.Upgrades then
-                isBossUnlocked = Upgrades.IsOpen(data.Upgrades, "WorldBoss")
-            end
-        end
+        local isBossUnlocked = IsFeatureUnlocked("WorldBoss", "worldboss")
         
         if not isBossUnlocked then
             local curMoneyStr = (data and data.Money and Format and Format.Money) and Format.Money(data.Money) or tostring(data and data.Money or 0)
-            Notify("🔒 ยังไม่ปลดล็อค", "ต้องปลดล็อค 'WORLD BOSSES' ในผังอัปเกรดก่อน (ต้องการ 1 Qi - ปัจจุบันมี: " .. curMoneyStr .. ")", 4)
+            Notify("🔒 ยังไม่ปลดล็อค", "ต้องปลดล็อค 'WORLD BOSSES' ในผังอัปเกรดก่อน (ต้องการ Pet Upgrades และเงิน 1 Qi - ปัจจุบันมี: " .. curMoneyStr .. ")", 4)
             return
         end
         
@@ -2812,14 +2804,6 @@ Tabs.Tower:AddButton({
             Humanizer.Wait(0.3, 0.6)
             
             Fire("WorldBossJoin")
-            local portalModel = workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")
-            local promptSpot = portalModel and portalModel:FindFirstChild("PromptSpot")
-            if promptSpot then
-                local prompt = promptSpot:FindFirstChild("JoinPrompt")
-                if prompt and typeof(fireproximityprompt) == "function" and prompt.Enabled then
-                    pcall(fireproximityprompt, prompt)
-                end
-            end
             Notify("⚔️ บอสโลก", string.format("ส่งคำสั่งเข้าร่วมบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 3)
         else
             -- คำนวณเวลานับถอยหลังที่เหลืออยู่จริงจนกว่าจะเปิดรับสมัคร
@@ -4770,21 +4754,7 @@ task.spawn(function()
                             lastBossJoinAttempt = now
                             CircuitBreaker.Execute("WorldBossJoin", function()
                                 local data = State.Data
-                                local isBossUnlocked = false
-                                if Upgrades and Upgrades.IsOpen and data and data.Upgrades then
-                                    isBossUnlocked = Upgrades.IsOpen(data.Upgrades, "WorldBoss")
-                                end
-                                
-                                -- ตรวจสอบหากยังไม่ปลดล็อค แต่มีเงินพอซื้อ 1 Qi
-                                if not isBossUnlocked and data and (data.Money or 0) >= 1e18 then
-                                    Notify("⚔️ บอสโลก", "กำลังปลดล็อค 'WORLD BOSSES' ในผังอัปเกรดให้อัตโนมัติ...", 3)
-                                    Fire("BuyUpgrade", "worldboss")
-                                    Humanizer.Wait(1.0, 1.5)
-                                    data = State.Data
-                                    if Upgrades and Upgrades.IsOpen and data and data.Upgrades then
-                                        isBossUnlocked = Upgrades.IsOpen(data.Upgrades, "WorldBoss")
-                                    end
-                                end
+                                local isBossUnlocked = IsFeatureUnlocked("WorldBoss", "worldboss")
                                 
                                 -- ถ้ายังไม่ปลดล็อค ไม่ต้องออกจากหอคอย ไม่ต้องเดินไปประตูบอสโลก ให้ฟาร์มหอคอยต่อไปอย่างปลอดภัย 100%
                                 if not isBossUnlocked then return end
@@ -4810,16 +4780,6 @@ task.spawn(function()
                                 
                                 -- 4. ส่งคำสั่งเข้าร่วมบอสโลก
                                 Fire("WorldBossJoin")
-                                
-                                local portalModel = workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")
-                                local promptSpot = portalModel and portalModel:FindFirstChild("PromptSpot")
-                                if promptSpot then
-                                    local prompt = promptSpot:FindFirstChild("JoinPrompt")
-                                    if prompt and typeof(fireproximityprompt) == "function" and prompt.Enabled then
-                                        pcall(fireproximityprompt, prompt)
-                                    end
-                                end
-                                
                                 Notify("⚔️ บอสโลก", string.format("เข้าร่วมการตีบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 4)
                             end)
                         end
