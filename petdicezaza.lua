@@ -5,6 +5,27 @@
 -- ==============================================================================
 
 -- ==============================================================================
+-- [0] REAL-TIME AUTO-UPDATE & CDN CACHE-BUSTER BOOTSTRAP
+-- Ensures loadstring(game:HttpGet("https://raw.githubusercontent.com/.../petdicezaza.lua"))()
+-- ALWAYS fetches and runs the latest real-time code, bypassing GitHub Fastly 300s cache.
+-- ==============================================================================
+if not getgenv()._PetDiceBypassCDN then
+    getgenv()._PetDiceBypassCDN = true
+    local ts = os.time()
+    local okFetch, freshScript = pcall(function()
+        return game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua?v=" .. tostring(ts))
+    end)
+    if okFetch and freshScript and #freshScript > 5000 and not freshScript:find("404: Not Found") then
+        local chunk, compileErr = loadstring(freshScript)
+        if chunk then
+            getgenv()._PetDiceBypassCDN = nil
+            return chunk()
+        end
+    end
+    getgenv()._PetDiceBypassCDN = nil
+end
+
+-- ==============================================================================
 -- [0] CLEAN STARTUP & HOT-RELOAD GATEKEEPER
 -- ==============================================================================
 local executionTime = tick()
@@ -48,27 +69,35 @@ LocalPlayer.CharacterAdded:Connect(function(c)
     HRP = c:WaitForChild("HumanoidRootPart", 15)
 end)
 
--- ป้องกันรันสคริปต์ซ้ำซ้อน และเคลียร์ UI เก่าก่อนรันใหม่ (Clean Startup & Hot-Reload Support)
-if getgenv().PetDiceOldFluent then
-    pcall(function() getgenv().PetDiceOldFluent:Destroy() end)
-    getgenv().PetDiceOldFluent = nil
-end
-if getgenv().PetDiceFluent then
-    pcall(function() getgenv().PetDiceFluent:Destroy() end)
-    getgenv().PetDiceFluent = nil
-end
-if getgenv().PetDiceMobileToggleGui then
-    pcall(function() getgenv().PetDiceMobileToggleGui:Destroy() end)
-    getgenv().PetDiceMobileToggleGui = nil
-end
+-- เคลียร์ UI เก่าและเธรดเก่าทั้งหมดก่อนรันใหม่ (Clean Startup & Hot-Reload Support)
 pcall(function()
-    local pg = LocalPlayer:WaitForChild("PlayerGui", 3)
+    if getgenv().PetDiceWindow and getgenv().PetDiceWindow.Root then
+        pcall(function() getgenv().PetDiceWindow.Root:Destroy() end)
+        getgenv().PetDiceWindow = nil
+    end
+    if getgenv().PetDiceFluentGui then
+        pcall(function() getgenv().PetDiceFluentGui:Destroy() end)
+        getgenv().PetDiceFluentGui = nil
+    end
+    if getgenv().PetDiceMobileToggleGui then
+        pcall(function() getgenv().PetDiceMobileToggleGui:Destroy() end)
+        getgenv().PetDiceMobileToggleGui = nil
+    end
+    local cg = game:GetService("CoreGui")
+    for _, gui in ipairs(cg:GetChildren()) do
+        if gui:IsA("ScreenGui") and (gui.Name == "ScreenGui" or gui.Name == "Fluent") then
+            if gui:FindFirstChild("Main") or gui:FindFirstChild("Holder") or gui:FindFirstChild("Window") then
+                pcall(function() gui:Destroy() end)
+            end
+        end
+    end
+    local pg = LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui")
     if pg then
         local oldToggle = pg:FindFirstChild("PetDiceMobileToggle")
-        if oldToggle then oldToggle:Destroy() end
+        if oldToggle then pcall(function() oldToggle:Destroy() end) end
     end
     local oldCgToggle = CG:FindFirstChild("PetDiceMobileToggle")
-    if oldCgToggle then oldCgToggle:Destroy() end
+    if oldCgToggle then pcall(function() oldCgToggle:Destroy() end) end
 end)
 
 getgenv().PetDiceScriptToken = tick()
@@ -130,30 +159,44 @@ pcall(function()
         end)
     end
     
-    -- รีเซ็ตประวัติหากการเตะครั้งล่าสุดผ่านไปเกิน 30 นาที
-    if nowTime - (kickData.lastKick or 0) > 1800 then
+    -- ตรวจสอบ Error Message ปัจจุบันใน GuiService
+    local currentErr = ""
+    pcall(function() currentErr = GuiService:GetErrorMessage() end)
+    local isCurrentlyKicked = currentErr and (currentErr:find("267") or currentErr:lower():find("kicked") or currentErr:find("unexpected client behavior"))
+    
+    -- รีเซ็ตประวัติหากการเตะครั้งล่าสุดผ่านไปเกิน 30 นาที หรือผู้เล่นกลับเข้ามาเล่นในเกมได้ตามปกติ
+    if nowTime - (kickData.lastKick or 0) > 1800 or not isCurrentlyKicked then
         kickData.count = 0
+        getgenv().EmergencyKickLockout = false
+        if writefile then
+            pcall(function() writefile(kickLogFile, HS:JSONEncode(kickData)) end)
+        end
     end
     
-    -- หากถูกเตะติดต่อกัน 2 ครั้งขึ้นไปภายใน 30 นาที สั่งล็อกดาวน์ทันทีเพื่อป้องกันแบน Error 600
-    if kickData.count >= 2 and (nowTime - kickData.lastKick < 1800) then
+    -- หากผู้เล่นกำลังติดหน้าจอเตะจริง และถูกเตะติดต่อกัน 2 ครั้งขึ้นไป สั่งล็อกดาวน์เพื่อความปลอดภัย
+    if isCurrentlyKicked and kickData.count >= 2 and (nowTime - kickData.lastKick < 1800) then
         getgenv().EmergencyKickLockout = true
         getgenv().SecurityStatusMessage = string.format("ล็อกดาวน์ฉุกเฉิน: ถูกเตะติดต่อกัน %d ครั้ง (ป้องกันแบน 600)", kickData.count)
         task.spawn(function()
             task.wait(2)
-            SafeNotify("🛑 ล็อกดาวน์ความปลอดภัยฉุกเฉิน", string.format("ตรวจพบว่าไอดีนี้เพิ่งถูกเตะ (Error 267) ติดต่อกัน %d ครั้ง!\nระบบสั่งหยุดทำงานอัตโนมัติ 30 นาที เพื่อป้องกันไม่ให้ไอดีถูกเซิร์ฟเวอร์แบนถาวร (Error 600)", kickData.count), 15)
+            SafeNotify("🛑 ล็อกดาวน์ความปลอดภัยฉุกเฉิน", string.format("ตรวจพบว่าไอดีนี้เพิ่งถูกเตะ (Error 267) ติดต่อกัน %d ครั้ง!\nระบบสั่งหยุดทำงานอัตโนมัติเพื่อป้องกันไอดีโดนแบนถาวร (Error 600)", kickData.count), 15)
         end)
+    else
+        getgenv().EmergencyKickLockout = false
     end
     
-    -- บันทึกเหตุการณ์ถูกเตะแบบเรียลไทม์
+    -- บันทึกเหตุการณ์ถูกเตะแบบเรียลไทม์ (กรองเฉพาะ Error 267 / ข้อความเตะจริงเท่านั้น)
     GuiService.ErrorMessageChanged:Connect(function(msg)
-        if msg and msg ~= "" then
-            kickData.count = (kickData.count or 0) + 1
-            kickData.lastKick = os.time()
-            if writefile then
-                pcall(function()
-                    writefile(kickLogFile, HS:JSONEncode(kickData))
-                end)
+        if msg and type(msg) == "string" and msg ~= "" then
+            local isRealKick = msg:find("267") or msg:lower():find("kicked") or msg:find("unexpected client behavior") or msg:lower():find("banned") or msg:find("Security")
+            if isRealKick then
+                kickData.count = (kickData.count or 0) + 1
+                kickData.lastKick = os.time()
+                if writefile then
+                    pcall(function()
+                        writefile(kickLogFile, HS:JSONEncode(kickData))
+                    end)
+                end
             end
         end
     end)
@@ -1091,7 +1134,14 @@ end)
 if okFluent and fluentRes then
     Fluent = fluentRes
 else
-    Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/main/main.lua"))()
+    local ok2, fluentRes2 = pcall(function()
+        return loadstring(game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/fluent.lua"))()
+    end)
+    if ok2 and fluentRes2 then
+        Fluent = fluentRes2
+    else
+        Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+    end
 end
 getgenv().PetDiceFluent = Fluent
 
@@ -1105,6 +1155,7 @@ local Window = Fluent:CreateWindow({
     MinimizeKey = Enum.KeyCode.RightControl
 })
 getgenv().PetDiceWindow = Window
+getgenv().PetDiceFluentGui = Window and Window.Root
 
 -- Fix transparency: Make background 100% solid dark and high contrast for crystal clear readability
 local function ApplySolidWindowStyle(win)
@@ -4864,6 +4915,22 @@ Tabs.Settings:AddButton({
             pcall(function() writefile(ConfigFile, HS:JSONEncode(defaultCFG)) end)
         end
         Notify("🔄 รีเซ็ตสำเร็จ", "คืนค่าเริ่มต้นเรียบร้อยแล้ว!", 3)
+    end
+})
+
+Tabs.Settings:AddButton({
+    Title = "🛡️ ปลดล็อกระบบฉุกเฉิน (Clear Anti-Ban Lockout)",
+    Description = "ล้างประวัติการเตะและรีเซ็ตระบบความปลอดภัยให้ส่งคำสั่งฟาร์มได้ทันที",
+    Callback = function()
+        getgenv().EmergencyKickLockout = false
+        getgenv().EmergencyPatchHalt = false
+        getgenv().EmergencyCloudHalt = false
+        getgenv().EmergencyStructuralHalt = false
+        getgenv().SecurityStatusMessage = "ระบบปลอดภัย ทำงานปกติ"
+        if writefile then
+            pcall(function() writefile("petdice_kick_guard.json", HS:JSONEncode({ count = 0, lastKick = 0 })) end)
+        end
+        Notify("🛡️ ปลดล็อกสำเร็จ", "ล้างสถานะล็อกดาวน์เรียบร้อย สคริปต์พร้อมทำงานตามปกติ 100%!", 4)
     end
 })
 
