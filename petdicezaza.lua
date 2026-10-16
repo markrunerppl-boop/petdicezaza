@@ -111,6 +111,7 @@ local TeamPairs = require(PetDice.Logic.TeamPairs)
 local RewardsConfig = require(PetDice.Configs.RewardsConfig)
 local QuestsLogic = require(PetDice.Logic.Quests)
 local Upgrades = require(PetDice.Logic.Upgrades)
+local Market = PetDice.Logic:FindFirstChild("Market") and require(PetDice.Logic.Market) or nil
 local WorldBossConfig = PetDice.Configs:FindFirstChild("WorldBossConfig") and require(PetDice.Configs.WorldBossConfig) or nil
 local ScheduleConfig = PetDice.Configs:FindFirstChild("ScheduleConfig") and require(PetDice.Configs.ScheduleConfig) or nil
 local CombatConfig = PetDice.Configs:FindFirstChild("CombatConfig") and require(PetDice.Configs.CombatConfig) or nil
@@ -124,6 +125,8 @@ local RemoteRateLimits = {
     UpgradePet = 0.35,       -- อัปเกรดเลเวลสัตว์เลี้ยง
     UpgradePetLevels = 0.35,
     BuyAllUpgrades = 1.50,   -- ป้องกันการยิงรัวซื้ออัปเกรดต้นไม้
+    MarketBuyAll = 2.00,     -- ป้องกันการยิงรัวกวาดซื้อของในตลาด
+    MarketBuy = 0.50,        -- ซื้อของชิ้นเดี่ยวในตลาด
     Teleport = 3.00,         -- ป้องกัน Error 600 / Teleport State Collision / Desync
     TowerStart = 2.50,       -- ป้องกัน Tower Spurt
     TowerExit = 2.00,
@@ -158,6 +161,8 @@ local GlobalTokenBucket = {
     Costs = {
         RollTrait = 0.5,
         RollGrade = 0.5,
+        MarketBuyAll = 1.0,
+        MarketBuy = 0.5,
         Menu = 0,
         -- รายการอื่นๆ มี Cost เริ่มต้นเป็น 1.0 ตามระบบเกม
     }
@@ -201,8 +206,14 @@ local function Fire(...)
     if (action == "SendExpedition" or action == "ClaimExpedition") and not IsFeatureUnlocked("Expeditions", "expeditions") then
         return
     end
-    if action == "TowerStart" and not IsFeatureUnlocked("Towers", "towers") then
-        return
+    if action == "TowerStart" then
+        if not IsFeatureUnlocked("Towers", "towers") then
+            return
+        end
+        local d = State.Data
+        if (IsTowerRunning and IsTowerRunning()) or (d and d.TowerResume ~= nil and d.TowerResume.Floor and d.TowerResume.Floor > 0) then
+            return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
+        end
     end
     if (action == "WorldBossJoin" or action == "WorldBossLeave" or action == "PortalRepair") and not IsFeatureUnlocked("WorldBoss", "worldboss") then
         return
@@ -213,9 +224,22 @@ local function Fire(...)
     if action == "BuyUpgrade" and args[2] == "worldboss" and not IsFeatureUnlocked("PetUpgrades", "petup") then
         return
     end
+    if (action == "MarketBuyAll" or action == "MarketBuy") and not IsFeatureUnlocked("Market", "market") then
+        return
+    end
 
     -- 3. ตรวจสอบความสมบูรณ์ของพารามิเตอร์และการมีอยู่จริงของไอเทม / ทรัพยากร (Sanity Drop ป้องกันเตะ)
     local data = State.Data
+    if action == "MarketBuyAll" then
+        if not data or not Market then return end
+        local now = State.Now and State.Now() or os.time()
+        local currentWindow = Market.Window(now)
+        local bought = data.Market and (data.Market.Window ~= currentWindow and {} or data.Market.Bought) or {}
+        local _, canBuyCount, totalCost = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
+        if (canBuyCount or 0) <= 0 or (data.Money or 0) < (totalCost or 0) then
+            return -- ไม่มีสินค้าให้ซื้อ หรือเงินไม่พอ ปฏิเสธทันที ไม่ยิงไปเซิร์ฟเวอร์
+        end
+    end
     if action == "BuyDice" and not args[2] then
         return -- ป้องกันการยิง BuyDice แบบไม่มี ID
     end
@@ -664,7 +688,8 @@ local defaultCFG = {
     AutoUsePotionSpeed = false,
     AutoOpenLootBags = false,
     AutoSellPets = false,
-    KeepTopPetsCount = 100
+    KeepTopPetsCount = 100,
+    AutoBuyMarket = false
 }
 
 getgenv().CFG = getgenv().CFG or {}
@@ -2081,7 +2106,9 @@ end
 
 IsTowerRunning = function()
     SyncLiveTowerFromGame()
-    return LiveTower.Active == true
+    local data = State.Data
+    local hasResume = (data and data.TowerResume ~= nil and data.TowerResume.Floor ~= nil and data.TowerResume.Floor > 0)
+    return LiveTower.Active == true or hasResume == true
 end
 
 IsTowerInArena = function()
@@ -3024,12 +3051,55 @@ local function UpdatePotionStatus()
     end)
 end
 
+local MarketStatusPara = Tabs.Items:AddParagraph({
+    Title = "🛒 กำลังโหลดสถานะตลาด (The Market)...",
+    Content = "กำลังตรวจสอบสินค้าและเวลารีสต็อกของตลาด..."
+})
+
+local function UpdateMarketStatus()
+    pcall(function()
+        if not Market then return end
+        local data = State.Data
+        if not data then return end
+        local isUnlocked = IsFeatureUnlocked("Market", "market")
+        local now = State.Now and State.Now() or os.time()
+        local currentWindow = Market.Window(now)
+        local restockSec = math.max(0, math.floor(Market.WindowEnds(currentWindow) - now))
+        local restockMin = math.floor(restockSec / 60)
+        local restockRemainderSec = restockSec % 60
+        local restockStr = string.format("%d:%02d นาที", restockMin, restockRemainderSec)
+        
+        local bought = data.Market and (data.Market.Window ~= currentWindow and {} or data.Market.Bought) or {}
+        local _, canBuyCount, totalCost, totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
+        
+        local unlockStr = isUnlocked and "✅ ปลดล็อกแล้ว (พร้อมซื้อ)" or "🔒 ล็อกอยู่ (ต้องปลดล็อกที่ต้นไม้อัปเกรด)"
+        local costStr = Format and Format.Money and Format.Money(totalCost or 0) or tostring(totalCost or 0)
+        local moneyStr = Format and Format.Money and Format.Money(data.Money or 0) or tostring(data.Money or 0)
+        
+        local desc = string.format("🏪 สถานะตลาด: %s\n⏳ รีสต็อกสินค้าใหม่ในอีก: %s\n📦 สินค้าที่ซื้อได้: %d ชิ้น (คงเหลือในสต็อก %d ชิ้น)\n💰 ราคารวมทั้งหมด: %s (ยอดเงินของคุณ: %s)",
+            unlockStr, restockStr, canBuyCount or 0, totalLeft or 0, costStr, moneyStr
+        )
+        
+        local title = "🛒 ข้อมูลตลาดสดและเวลารีสต็อก (Market Realtime)"
+        local okT = pcall(function() MarketStatusPara:SetTitle(title) end)
+        if not okT and MarketStatusPara and MarketStatusPara.TitleLabel then
+            pcall(function() MarketStatusPara.TitleLabel.Text = title end)
+        end
+        local okD = pcall(function() MarketStatusPara:SetDesc(desc) end)
+        if not okD and MarketStatusPara and MarketStatusPara.DescLabel then
+            pcall(function() MarketStatusPara.DescLabel.Text = desc end)
+        end
+    end)
+end
+
 task.spawn(UpdatePotionStatus)
+task.spawn(UpdateMarketStatus)
 task.spawn(function()
     while true do
         task.wait(1.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         pcall(UpdatePotionStatus)
+        pcall(UpdateMarketStatus)
     end
 end)
 
@@ -3121,6 +3191,39 @@ Tabs.Items:AddButton({
     end
 })
 
+Tabs.Items:AddButton({
+    Title = "🛒 กวาดซื้อของทั้งหมดในตลาดทันที (Buy All Market Now)",
+    Description = "ส่งคำสั่งกวาดซื้อสินค้าทั้งหมดที่สต็อกมีและเงินพอซื้อทันทีในคลิกเดียว",
+    Callback = function()
+        if not IsFeatureUnlocked("Market", "market") then
+            Notify("🔒 ตลาดยังล็อกอยู่", "คุณยังไม่ได้ปลดล็อกตลาดในต้นไม้อัปเกรด (Skill Tree)", 3)
+            return
+        end
+        local data = State.Data
+        if not data or not Market then return end
+        local now = State.Now and State.Now() or os.time()
+        local currentWindow = Market.Window(now)
+        local bought = data.Market and (data.Market.Window ~= currentWindow and {} or data.Market.Bought) or {}
+        local _, canBuyCount, totalCost, totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
+        
+        if (canBuyCount or 0) <= 0 then
+            if (totalLeft or 0) <= 0 then
+                Notify("ℹ️ สินค้าหมด", "สินค้าในรอบนี้ถูกซื้อหมดแล้ว (SOLD OUT) กรุณารอรอบรีสต็อกถัดไป", 3)
+            else
+                Notify("⚠️ เงินไม่พอ", "เงินของคุณไม่พอสำหรับซื้อสินค้าที่เหลือในรอบนี้", 3)
+            end
+            return
+        end
+        
+        Fire("MarketBuyAll")
+        Notify("🛒 กวาดซื้อตลาด", "สั่งกวาดซื้อสินค้าทั้งหมด " .. canBuyCount .. " ชิ้น สำเร็จ!", 3)
+        task.delay(0.5, function()
+            if UpdateMarketStatus then pcall(UpdateMarketStatus) end
+            if UpdatePotionStatus then pcall(UpdatePotionStatus) end
+        end)
+    end
+})
+
 Tabs.Items:AddSection("🔄 ดื่มน้ำยาและเปิดไอเทมอัตโนมัติ")
 
 Tabs.Items:AddToggle("TogAutoPotionLuck", {
@@ -3145,6 +3248,12 @@ Tabs.Items:AddToggle("TogAutoOpenLootBags", {
     Title = "4. เปิดถุงสมบัติทั่วไปอัตโนมัติ",
     Default = CFG.AutoOpenLootBags,
     Callback = function(V) UpdateCFG("AutoOpenLootBags", V) end
+})
+
+Tabs.Items:AddToggle("TogAutoBuyMarket", {
+    Title = "5. กวาดซื้อของทั้งหมดในตลาดอัตโนมัติเมื่อพร้อม",
+    Default = CFG.AutoBuyMarket,
+    Callback = function(V) UpdateCFG("AutoBuyMarket", V) end
 })
 
 -- ------------------------------------------------------------------------------
@@ -4492,6 +4601,11 @@ pcall(function()
                     UpdatePotionStatus()
                 end
                 
+                -- อัปเดตสถานะตลาดทันทีเมื่อซื้อของ หรือเงินเปลี่ยน
+                if UpdateMarketStatus and (syncData.Full or syncData.Market or syncData.Money or syncData.Rebirths) then
+                    UpdateMarketStatus()
+                end
+                
                 -- อัปเดตสถานะฮาโลวีนทันทีเมื่อลูกอม กระเป๋า หรือข้อมูลซีซั่นเปลี่ยน
                 if UpdateHalloweenStatus and (syncData.Full or syncData.Season or syncData.Seasons or syncData.SeasonBags) then
                     UpdateHalloweenStatus()
@@ -5628,7 +5742,40 @@ task.spawn(function()
     end
 end)
 
-
+-- 15. Auto Market Buy All Loop: ซื้อของทั้งหมดในตลาดอัตโนมัติเมื่อพร้อม (ปลอดภัย 100% ไม่ทับซ้อนคำสั่งอื่น)
+task.spawn(function()
+    while true do
+        task.wait(6.0)
+        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0) continue end
+        if LocalPlayer:GetAttribute("PetDiceLoading") == true then task.wait(2.0) continue end
+        
+        if CFG.AutoBuyMarket then
+            CircuitBreaker.Execute("AutoBuyMarket", function()
+                if not IsFeatureUnlocked("Market", "market") then
+                    return
+                end
+                
+                local data = State.Data
+                if not data or not Market then return end
+                
+                local now = State.Now and State.Now() or os.time()
+                local currentWindow = Market.Window(now)
+                local bought = data.Market and (data.Market.Window ~= currentWindow and {} or data.Market.Bought) or {}
+                local _, canBuyCount, totalCost, totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
+                
+                if canBuyCount and canBuyCount > 0 and (data.Money or 0) >= (totalCost or 0) then
+                    Humanizer.Wait(0.8, 1.5)
+                    Fire("MarketBuyAll")
+                    Notify("🛒 ตลาด (Market)", "กวาดซื้อสินค้าทั้งหมดในตลาด (" .. canBuyCount .. " ชิ้น) เรียบร้อย!", 3)
+                    Humanizer.Wait(2.0, 3.5)
+                    if UpdateMarketStatus then pcall(UpdateMarketStatus) end
+                    if UpdatePotionStatus then pcall(UpdatePotionStatus) end
+                end
+            end)
+        end
+    end
+end)
 
 -- 16. Auto Sell Pets Loop: ตรวจสอบและขายสัตว์เลี้ยงส่วนเกินอัตโนมัติ (เก็บเฉพาะ N ตัวแรกที่ค่าพลัง Base สูงสุด)
 task.spawn(function()
@@ -5658,18 +5805,6 @@ getgenv().PetDiceStartTower = function(towerId)
     local targetId = ResolveTowerId(towerId or CFG.SelectedTower)
     return SwitchOrStartTower(targetId, true)
 end
-
--- Startup Auto-Dispatcher: เริ่มหอคอยอัตโนมัติทันทีเมื่อเปิดสคริปต์ หากเปิดตั้งค่าไว้
-task.delay(1.5, function()
-    if getgenv().PetDiceScriptToken == scriptToken and CFG.Tower then
-        pcall(function()
-            if not IsTowerRunning() then
-                local targetId = ResolveTowerId(CFG.SelectedTower)
-                SwitchOrStartTower(targetId, true)
-            end
-        end)
-    end
-end)
 
 getgenv().PetDiceScriptLoaded = true
 getgenv().PetDiceScriptStarting = nil
