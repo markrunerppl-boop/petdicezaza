@@ -119,11 +119,48 @@ local CutsceneDirector = (PetDice.Client:FindFirstChild("Cutscenes") and PetDice
 
 local LastRemoteFire = {}
 local RemoteRateLimits = {
-    RollTrait = 0.28,        -- สอดคล้องกับ Config.RateLimit Cost=0.5 ป้องกัน remote burst
-    RollGrade = 0.28,        -- สอดคล้องกับ Config.RateLimit Cost=0.5
-    UpgradePet = 0.35,       -- ปลอดภัยจากการยิงรัวคำสั่งอัปเลเวล
+    RollTrait = 0.28,        -- Config.RateLimit Cost=0.5
+    RollGrade = 0.28,        -- Config.RateLimit Cost=0.5
+    UpgradePet = 0.35,       -- อัปเกรดเลเวลสัตว์เลี้ยง
     UpgradePetLevels = 0.35,
-    BuyAllUpgrades = 1.50    -- ป้องกันการยิงรัวซื้ออัปเกรดต้นไม้
+    BuyAllUpgrades = 1.50,   -- ป้องกันการยิงรัวซื้ออัปเกรดต้นไม้
+    Teleport = 3.00,         -- ป้องกัน Error 600 / Teleport State Collision / Desync
+    TowerStart = 2.00,       -- ป้องกัน Tower Spurt
+    TowerExit = 1.50,
+    TowerLeave = 1.50,
+    WorldBossJoin = 2.50,
+    WorldBossLeave = 2.00,
+    Rebirth = 2.00,
+    UsePotion = 0.40,
+    OpenLootBag = 0.80,
+    TrickOrTreat = 2.50,
+    SpookyBuy = 1.20,
+    HalloweenGoalClaim = 1.50,
+    QuestClaim = 0.40,
+    ClaimDaily = 1.00,
+    ClaimPlaytime = 1.00,
+    TradeRequest = 2.00,
+    TradeRespond = 1.50,
+    TradeReady = 1.50,
+    BuyDice = 1.50,
+    EquipDice = 0.50,
+    EquipBest = 1.00,
+}
+
+-- Global Token Bucket Rate Limiter (ป้องกันการยิงพร้อมกันจากทุกฟังก์ชันเกินขีดจำกัดเซิร์ฟเวอร์)
+-- ขีดจำกัดเซิร์ฟเวอร์ของตัวเกมแท้: PerSecond = 12, Burst = 24
+-- ขีดจำกัดความปลอดภัยของสคริปต์: PerSecond = 5.0 (ปลอดภัย 58%), MaxBurst = 12 (ปลอดภัย 50%)
+local GlobalTokenBucket = {
+    Tokens = 12.0,
+    MaxTokens = 12.0,
+    RefillRate = 5.0,  -- เติม 5 token ต่อวินาที ปลอดภัยกว่าเซิร์ฟเวอร์เท่าตัว ป้องกันเซิร์ฟเวอร์เตะ Error 267
+    LastRefill = tick(),
+    Costs = {
+        RollTrait = 0.5,
+        RollGrade = 0.5,
+        Menu = 0,
+        -- รายการอื่นๆ มี Cost เริ่มต้นเป็น 1.0 ตามระบบเกม
+    }
 }
 
 local function IsFeatureUnlocked(featureName, idName)
@@ -138,32 +175,99 @@ end
 local function Fire(...) 
     local args = {...}
     local action = args[1]
-    if typeof(action) == "string" then
-        -- ป้องกัน 100%: ไม่ส่ง Remote ใดๆ ไปยังเซิร์ฟเวอร์เด็ดขาดหากฟีเจอร์ยังไม่ปลดล็อคใน Upgrade Tree
-        if action == "RollGrade" and not IsFeatureUnlocked("Grades", "grades") then
-            return
-        end
-        if action == "RollTrait" and not IsFeatureUnlocked("Traits", "traits") then
-            return
-        end
-        if (action == "UpgradePet" or action == "UpgradePetLevels") and not IsFeatureUnlocked("PetUpgrades", "petup") then
-            return
-        end
-        if action == "SendExpedition" and not IsFeatureUnlocked("Expeditions", "expeditions") then
-            return
-        end
-        
-        if RemoteRateLimits[action] then
-            local now = tick()
-            local minInterval = RemoteRateLimits[action]
-            local lastTime = LastRemoteFire[action] or 0
-            local diff = now - lastTime
-            if diff < minInterval then
-                task.wait(minInterval - diff)
-            end
-            LastRemoteFire[action] = tick()
+    if typeof(action) ~= "string" then
+        Action:FireServer(unpack(args))
+        return
+    end
+
+    -- 1. ตรวจสอบการโหลดของตัวเกม (ถ้าเกมกำลังโหลดข้อมูลหรือแมพ รอให้พร้อมก่อน เพื่อป้องกัน Error 600)
+    if LocalPlayer:GetAttribute("PetDiceLoading") == true then
+        local t0 = tick()
+        while LocalPlayer:GetAttribute("PetDiceLoading") == true and (tick() - t0 < 3.0) do
+            task.wait(0.2)
         end
     end
+
+    -- 2. ป้องกันฟีเจอร์ที่ยังไม่ปลดล็อค 100% (ป้องกัน Error 267 จากการส่งคำสั่งที่เซิร์ฟเวอร์ปฏิเสธ)
+    if action == "RollGrade" and not IsFeatureUnlocked("Grades", "grades") then
+        return
+    end
+    if action == "RollTrait" and not IsFeatureUnlocked("Traits", "traits") then
+        return
+    end
+    if (action == "UpgradePet" or action == "UpgradePetLevels") and not IsFeatureUnlocked("PetUpgrades", "petup") then
+        return
+    end
+    if (action == "SendExpedition" or action == "ClaimExpedition") and not IsFeatureUnlocked("Expeditions", "expeditions") then
+        return
+    end
+    if action == "TowerStart" and not IsFeatureUnlocked("Towers", "towers") then
+        return
+    end
+    if action == "WorldBossJoin" and not IsFeatureUnlocked("WorldBoss", "worldboss") then
+        return
+    end
+
+    -- 3. ตรวจสอบความสมบูรณ์ของพารามิเตอร์และการมีอยู่จริงของไอเทม / ทรัพยากร (Sanity Drop ป้องกันเตะ)
+    local data = State.Data
+    if action == "BuyDice" and not args[2] then
+        return -- ป้องกันการยิง BuyDice แบบไม่มี ID
+    end
+    if action == "UsePotion" then
+        local potKey = args[2]
+        if not data or not data.Potions or (data.Potions[potKey] or 0) <= 0 then
+            return -- ไม่มีน้ำยาจริงในคลัง ยกเลิกทันที ไม่ยิงไปเซิร์ฟเวอร์
+        end
+    end
+    if action == "Rebirth" then
+        local cost = Stats and Stats.RebirthCost and Stats.RebirthCost(data)
+        if not cost or not data or (data.Money or 0) < cost then
+            return -- เงินไม่พอเกิดใหม่ ยกเลิกทันที
+        end
+    end
+    if action == "Roll" and State.Rolling then
+        return -- กำลังทอยเต๋าอยู่ ไม่ยิงซ้อน
+    end
+    if action == "Teleport" then
+        -- ตรวจสอบตัวละครและสภาพร่างกายก่อนวาร์ป ป้องกัน desync และ Error 600
+        local char = LocalPlayer.Character or Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not char or not hum or hum.Health <= 0 then
+            return
+        end
+    end
+
+    -- 4. ควบคุมความถี่เฉพาะของแต่ละคำสั่ง (Per-Action Rate Limiting)
+    if RemoteRateLimits[action] then
+        local now = tick()
+        local minInterval = RemoteRateLimits[action]
+        local lastTime = LastRemoteFire[action] or 0
+        local diff = now - lastTime
+        if diff < minInterval then
+            task.wait(minInterval - diff)
+        end
+        LastRemoteFire[action] = tick()
+    end
+
+    -- 5. ควบคุมปริมาณทราฟฟิกรวมทั่วทั้งสคริปต์ (Global Token Bucket Rate Limiter)
+    -- ป้องกันกรณีที่เปิด 10+ ฟังก์ชั่นพร้อมกันแล้วส่งคำสั่งซ้อนกันในเสี้ยววินาทีเดียว
+    local now = tick()
+    local elapsed = now - GlobalTokenBucket.LastRefill
+    GlobalTokenBucket.Tokens = math.min(GlobalTokenBucket.MaxTokens, GlobalTokenBucket.Tokens + (elapsed * GlobalTokenBucket.RefillRate))
+    GlobalTokenBucket.LastRefill = now
+
+    local cost = GlobalTokenBucket.Costs[action] or 1.0
+    if GlobalTokenBucket.Tokens < cost then
+        local waitSec = (cost - GlobalTokenBucket.Tokens) / GlobalTokenBucket.RefillRate
+        if waitSec > 0 then
+            task.wait(waitSec)
+        end
+        GlobalTokenBucket.Tokens = 0
+        GlobalTokenBucket.LastRefill = tick()
+    else
+        GlobalTokenBucket.Tokens = GlobalTokenBucket.Tokens - cost
+    end
+
     Action:FireServer(unpack(args)) 
 end
 
@@ -2783,10 +2887,7 @@ Tabs.Tower:AddToggle("TogAutoBuyDice", {
     Callback = function(V)
         UpdateCFG("AutoBuyDice", V)
         if V then
-            task.spawn(function()
-                Fire("BuyDice")
-                Notify("🎲 ซื้อลูกเต๋า", "เปิดระบบซื้อลูกเต๋าอัตโนมัติเรียบร้อย!", 2)
-            end)
+            Notify("🎲 ซื้อลูกเต๋า", "เปิดระบบซื้อลูกเต๋าอัตโนมัติเรียบร้อย!", 2)
         else
             Notify("🎲 ซื้อลูกเต๋า", "ปิดระบบซื้อลูกเต๋าอัตโนมัติแล้ว", 2)
         end
