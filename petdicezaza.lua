@@ -179,6 +179,12 @@ pcall(function()
                 -- หน่วงเวลาสุ่ม 20-30 วินาที เพื่อรอให้เซิร์ฟเวอร์เคลียร์สถานะตัวละครอย่างปลอดภัย
                 task.wait(math.random(20, 30))
                 pcall(function()
+                    local queue = syn and syn.queue_on_teleport or queue_on_teleport or (Fluxus and Fluxus.queue_on_teleport)
+                    if queue then
+                        queue([[loadstring(game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua"))()]])
+                    end
+                end)
+                pcall(function()
                     TeleportService:Teleport(game.PlaceId, LocalPlayer)
                 end)
             end)
