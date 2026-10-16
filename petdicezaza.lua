@@ -425,8 +425,12 @@ local RemoteRateLimits = {
     UsePotion = 0.40,
     OpenLootBag = 0.80,
     QuestClaim = 0.40,
+    GoalClaim = 0.40,
     ClaimDaily = 1.00,
     ClaimPlaytime = 1.00,
+    ClaimSocial = 1.00,
+    SendExpedition = 1.00,
+    ClaimExpedition = 0.80,
     TradeRequest = 2.00,
     TradeRespond = 1.50,
     TradeReady = 1.50,
@@ -630,11 +634,25 @@ local function Fire(...)
         if not data or (data.Gems or 0) <= 0 or not data.Pets or not data.Pets[uid] then
             return -- ไม่มีตั๋วหมุนเกรด (Gems) หรือสัตว์เลี้ยงไม่มีอยู่จริง ไม่ส่ง ป้องกัน Error 267
         end
+        if data.Expeditions and data.Expeditions.Active then
+            for _, exp in ipairs(data.Expeditions.Active) do
+                for _, eUid in ipairs(exp.Pets or {}) do
+                    if tostring(eUid) == tostring(uid) then return end -- สัตว์เลี้ยงอยู่ระหว่างผจญภัย
+                end
+            end
+        end
     end
     if action == "RollTrait" then
         local uid = args[2]
         if not data or (data.Shards or 0) <= 0 or not data.Pets or not data.Pets[uid] then
             return -- ไม่มีชาร์ดหมุน Trait (Shards) หรือสัตว์เลี้ยงไม่มีอยู่จริง ไม่ส่ง ป้องกัน Error 267
+        end
+        if data.Expeditions and data.Expeditions.Active then
+            for _, exp in ipairs(data.Expeditions.Active) do
+                for _, eUid in ipairs(exp.Pets or {}) do
+                    if tostring(eUid) == tostring(uid) then return end -- สัตว์เลี้ยงอยู่ระหว่างผจญภัย
+                end
+            end
         end
     end
     if action == "BuyAllUpgrades" then
@@ -646,6 +664,13 @@ local function Fire(...)
         local uid = args[2]
         if not data or not data.Pets or not data.Pets[uid] then
             return -- สัตว์เลี้ยงไม่มีอยู่จริง ไม่ส่ง
+        end
+        if data.Expeditions and data.Expeditions.Active then
+            for _, exp in ipairs(data.Expeditions.Active) do
+                for _, eUid in ipairs(exp.Pets or {}) do
+                    if tostring(eUid) == tostring(uid) then return end -- สัตว์เลี้ยงอยู่ระหว่างผจญภัย
+                end
+            end
         end
     end
     if action == "OpenLootBag" then
@@ -736,6 +761,108 @@ local function Fire(...)
         if dest == "Home" and mag >= 150 and not (IsTowerRunning and IsTowerRunning()) then
             return -- อยู่ในพื้นที่บ้าน (Plot Yard) อยู่แล้ว (ระยะ >= 150 studs) ห้ามส่ง Teleport Home ซ้ำ ป้องกัน Error 267
         end
+    end
+    if action == "SendExpedition" then
+        if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
+        if not IsFeatureUnlocked or not IsFeatureUnlocked("Expeditions", "expeditions") then return end
+        local diffId = args[2]
+        local pets = args[3]
+        if not diffId or not pets or type(pets) ~= "table" or #pets == 0 then return end
+        if not data or not data.Pets or not data.Expeditions then return end
+        local maxSlots = Expeditions and Expeditions.Slots and Expeditions.Slots(data) or 3
+        local activeCount = #(data.Expeditions.Active or {})
+        if activeCount >= maxSlots then return end
+        
+        local foundDiff = nil
+        if ExpeditionConfig and ExpeditionConfig.Difficulties then
+            for _, d in ipairs(ExpeditionConfig.Difficulties) do
+                if d.Id == diffId then
+                    foundDiff = d
+                    break
+                end
+            end
+        end
+        if not foundDiff then return end
+        if Expeditions and Expeditions.Unlocked and not Expeditions.Unlocked(data, foundDiff) then
+            return -- ระดับนี้ยังไม่ได้ปลดล็อกในผังอัปเกรด
+        end
+        if #pets > foundDiff.Pets then
+            return -- จำนวนสัตว์เลี้ยงเกินขีดจำกัดของระดับนี้
+        end
+        
+        local onExp = {}
+        for _, exp in ipairs(data.Expeditions.Active or {}) do
+            for _, u in ipairs(exp.Pets or {}) do onExp[tostring(u)] = true end
+        end
+        local equipped = {}
+        for _, u in ipairs(data.Equipped or {}) do equipped[tostring(u)] = true end
+        
+        for _, pUid in ipairs(pets) do
+            local sUid = tostring(pUid)
+            local p = data.Pets[sUid]
+            if not p then return end
+            if onExp[sUid] or equipped[sUid] then return end
+            local def = PetData and PetData.ById and PetData.ById[p.Id]
+            if def and (def.Limited == true or def.Rarity == "Limited") then return end
+            local pwr = 0
+            pcall(function()
+                pwr = Expeditions.PetPower(data, p, State.Mods and State.Mods() or {}, State.Now and State.Now() or os.time())
+            end)
+            if pwr < foundDiff.Requirement then return end
+        end
+    end
+    if action == "ClaimExpedition" then
+        if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
+        local expId = args[2]
+        if not expId or not data or not data.Expeditions or not data.Expeditions.Active then return end
+        local foundExp = nil
+        for _, exp in ipairs(data.Expeditions.Active) do
+            if exp.Id == expId then
+                foundExp = exp
+                break
+            end
+        end
+        if not foundExp then return end
+        local now = State.Now and State.Now() or os.time()
+        local left = Expeditions and Expeditions.Left and Expeditions.Left(foundExp, now) or math.max(0, (foundExp.Ends or 0) - now)
+        if left > 0 then
+            return -- ยังไม่หมดเวลาสำรวจ ป้องกัน NOT DONE YET! และ Error 267
+        end
+    end
+    if action == "QuestClaim" then
+        local qType = args[2]
+        local qIndex = args[3]
+        if not data or not data.Quests or not data.Quests[qType] then return end
+        local q = data.Quests[qType][qIndex]
+        if not q or q.Claimed or (q.Progress or 0) < (q.Goal or math.huge) then
+            return -- เควสยังไม่เสร็จหรือรับไปแล้ว ไม่ยิงซ้ำ ป้องกัน NOT DONE YET!
+        end
+    end
+    if action == "GoalClaim" then
+        local gId = args[2]
+        if not data or not data.Quests or not data.Quests.Goals then return end
+        local gData = data.Quests.Goals[gId]
+        if gData and gData.Claimed then return end
+        local gDef = nil
+        if QuestsLogic and QuestsLogic.Goals then
+            for _, gd in ipairs(QuestsLogic.Goals) do
+                if gd.Id == gId then gDef = gd break end
+            end
+        end
+        if not gDef then return end
+        if Upgrades and Upgrades.IsOpen and not Upgrades.IsOpen(data.Upgrades, gDef.Needs) then
+            return -- เงื่อนไขต้นไม้อัปเกรดยังไม่เปิด
+        end
+        local prog = gData and gData.Progress or 0
+        if prog < (gDef.Goal or math.huge) then
+            return -- ยังไม่บรรลุเป้าหมาย
+        end
+    end
+    if action == "ClaimSocial" then
+        local sType = args[2]
+        if not data or not data.Social then return end
+        if sType == "Group" and data.Social.Group then return end
+        if sType == "Like" and data.Social.Like then return end
     end
 
     -- ป้องกันคิวยาวเกินไปเมื่อหลาย Loop เรียกคำสั่งพร้อมกัน
@@ -1094,9 +1221,18 @@ local function GetTopBestPets(count)
     local teamSize = count or 4
     local candidates = {}
     
+    local onExp = {}
+    if data.Expeditions and data.Expeditions.Active then
+        for _, exp in ipairs(data.Expeditions.Active) do
+            for _, uid in ipairs(exp.Pets or {}) do
+                onExp[tostring(uid)] = true
+            end
+        end
+    end
+    
     for uid, pet in pairs(data.Pets) do
-        if IsPetEligibleForEnhance(pet) then
-            local sUid = tostring(uid)
+        local sUid = tostring(uid)
+        if not onExp[sUid] and IsPetEligibleForEnhance(pet) then
             local baseIncome = 0
             pcall(function() baseIncome = Stats.PetBaseIncome(pet) end)
             table.insert(candidates, { uid = sUid, base = baseIncome })
@@ -1450,6 +1586,15 @@ local function ExecuteAutoSellPets(targetCountOverride)
     getgenv().PetOperationMutex = true
     getgenv().LastPetOperationStartTime = tick()
     local success, totalSoldOrErr, keptCount = pcall(function()
+        local onExpUids = {}
+        if data.Expeditions and data.Expeditions.Active then
+            for _, exp in ipairs(data.Expeditions.Active) do
+                for _, uid in ipairs(exp.Pets or {}) do
+                    onExpUids[tostring(uid)] = true
+                end
+            end
+        end
+
         local stackInfos = {}
         for _, s in ipairs(stacks) do
             local base = 0
@@ -1457,8 +1602,9 @@ local function ExecuteAutoSellPets(targetCountOverride)
             local def = PetData and PetData.ById and PetData.ById[s.Id]
             local isLimited = (def and def.Limited) or false
             
-            -- ตรวจสอบตัวที่ล็อคไว้ (Locked Pets)
+            -- ตรวจสอบตัวที่ล็อคไว้ (Locked Pets) และตัวที่กำลังผจญภัย (On Active Expedition)
             local lockedCount = 0
+            local onExpCount = 0
             if data.Locked then
                 if data.Locked[s.Key] then
                     lockedCount = s.Count
@@ -1470,6 +1616,11 @@ local function ExecuteAutoSellPets(targetCountOverride)
                     end
                 end
             end
+            for _, uid in ipairs(s.Uids or {}) do
+                if onExpUids[tostring(uid)] then
+                    onExpCount = onExpCount + 1
+                end
+            end
             
             table.insert(stackInfos, {
                 stack = s,
@@ -1478,6 +1629,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
                 count = s.Count,
                 equipped = s.Equipped or 0,
                 locked = lockedCount,
+                onExp = onExpCount,
                 base = base,
                 isLimited = isLimited,
                 level = (s.Item and s.Item.L) or 1
@@ -1505,7 +1657,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
         for _, info in ipairs(stackInfos) do
             local s = info.stack
             local totalInStack = info.count
-            local protectedCount = math.max(info.equipped, info.locked)
+            local protectedCount = math.min(totalInStack, math.max(info.equipped, info.locked) + (info.onExp or 0))
             if info.isLimited then
                 protectedCount = totalInStack -- สัตว์เลี้ยง Limited ปลอดภัยเสมอ ไม่ขายเด็ดขาด
             end
@@ -1515,7 +1667,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
             keepFromStack = math.max(keepFromStack, protectedCount)
             
             local sellFromStack = totalInStack - keepFromStack
-            local unequippedAndUnlocked = totalInStack - info.equipped - info.locked
+            local unequippedAndUnlocked = totalInStack - info.equipped - info.locked - (info.onExp or 0)
             sellFromStack = math.clamp(sellFromStack, 0, math.max(0, unequippedAndUnlocked))
             
             kept = kept + (totalInStack - sellFromStack)
@@ -3632,52 +3784,178 @@ Tabs.Items:AddToggle("TogAutoBuyMarket", {
 -- ------------------------------------------------------------------------------
 -- 🌙 TAB 6: EXPEDITIONS & QUESTS
 -- ------------------------------------------------------------------------------
-Tabs.Expedition:AddSection("🌙 ผจญภัยระดับฝันร้าย (Nightmare Expedition)")
+Tabs.Expedition:AddSection("🌙 สถานะผจญภัย & เควสแบบเรียลไทม์")
 
-local function GetBestExpeditionPets(maxCount)
+local ExpeditionStatusPara = Tabs.Expedition:AddParagraph({
+    Title = "⏳ กำลังโหลดสถานะผจญภัย & เควส...",
+    Content = "กำลังตรวจสอบเรือสำรวจและเควสคงเหลือ..."
+})
+
+local function UpdateExpeditionStatus()
+    pcall(function()
+        local data = State.Data
+        if not data then return end
+        local now = State.Now and State.Now() or os.time()
+        
+        local maxSlots = Expeditions and Expeditions.Slots and Expeditions.Slots(data) or 3
+        local activeExps = data.Expeditions and data.Expeditions.Active or {}
+        local activeCount = #activeExps
+        
+        local lines = {}
+        table.insert(lines, string.format("⛵ เรือผจญภัยที่ออกสำรวจ: %d / %d ช่อง", activeCount, maxSlots))
+        
+        if activeCount == 0 then
+            table.insert(lines, "• ยังไม่มีเรือออกสำรวจ (พร้อมส่งสัตว์เลี้ยงทันที)")
+        else
+            for idx, exp in ipairs(activeExps) do
+                local left = Expeditions and Expeditions.Left and Expeditions.Left(exp, now) or math.max(0, (exp.Ends or 0) - now)
+                local diffName = exp.Diff or "Unknown"
+                local petCount = exp.Pets and #exp.Pets or 0
+                if left <= 0 then
+                    table.insert(lines, string.format("• ช่อง #%d [%s]: ✅ สำเร็จแล้ว! พร้อมกดรับรางวัล (สัตว์เลี้ยง %d ตัว)", idx, diffName, petCount))
+                else
+                    local m = math.floor(left / 60)
+                    local s = math.floor(left % 60)
+                    local timeStr = m >= 60 and string.format("%d ชม. %d นาที", math.floor(m / 60), m % 60) or string.format("%d นาที %02d วินาที", m, s)
+                    table.insert(lines, string.format("• ช่อง #%d [%s]: ⏳ เหลือเวลาอีก %s (สัตว์เลี้ยง %d ตัว)", idx, diffName, timeStr, petCount))
+                end
+            end
+        end
+        
+        table.insert(lines, "")
+        table.insert(lines, "📜 ความคืบหน้าเควส & รางวัล:")
+        local readyQuests = 0
+        local totalDaily = 0
+        local doneDaily = 0
+        local totalWeekly = 0
+        local doneWeekly = 0
+        local readyGoals = 0
+        
+        if data.Quests then
+            for _, q in ipairs(data.Quests.Daily or {}) do
+                totalDaily = totalDaily + 1
+                if q.Claimed then
+                    doneDaily = doneDaily + 1
+                elseif (q.Progress or 0) >= (q.Goal or math.huge) then
+                    readyQuests = readyQuests + 1
+                end
+            end
+            for _, q in ipairs(data.Quests.Weekly or {}) do
+                totalWeekly = totalWeekly + 1
+                if q.Claimed then
+                    doneWeekly = doneWeekly + 1
+                elseif (q.Progress or 0) >= (q.Goal or math.huge) then
+                    readyQuests = readyQuests + 1
+                end
+            end
+            if QuestsLogic and QuestsLogic.Goals and data.Quests.Goals then
+                for _, gDef in ipairs(QuestsLogic.Goals) do
+                    local gData = data.Quests.Goals[gDef.Id]
+                    local isUnlocked = true
+                    if Upgrades and Upgrades.IsOpen and gDef.Needs then
+                        isUnlocked = Upgrades.IsOpen(data.Upgrades, gDef.Needs)
+                    end
+                    if isUnlocked and gData and not gData.Claimed and (gData.Progress or 0) >= (gDef.Goal or math.huge) then
+                        readyGoals = readyGoals + 1
+                    end
+                end
+            end
+        end
+        
+        table.insert(lines, string.format("• เควสประจำวัน (Daily): สำเร็จแล้ว %d/%d (พร้อมรับ: %d)", doneDaily, totalDaily, readyQuests))
+        table.insert(lines, string.format("• เควสประจำสัปดาห์ (Weekly): สำเร็จแล้ว %d/%d", doneWeekly, totalWeekly))
+        if readyGoals > 0 then
+            table.insert(lines, string.format("• รางวัลเป้าหมาย (Goals): พร้อมรับทันที %d รายการ! 🎉", readyGoals))
+        end
+        
+        local title = string.format("⛵ ผจญภัย: %d/%d ลำ | เควสพร้อมรับ: %d", activeCount, maxSlots, readyQuests + readyGoals)
+        SafeUpdatePara(ExpeditionStatusPara, title, table.concat(lines, "\n"))
+    end)
+end
+
+task.spawn(function()
+    task.wait(1.0)
+    pcall(UpdateExpeditionStatus)
+    while true do
+        task.wait(3.0)
+        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        pcall(UpdateExpeditionStatus)
+    end
+end)
+
+Tabs.Expedition:AddSection("🌙 ควบคุมการผจญภัย (Expedition Commands)")
+
+local function GetBestExpeditionPets(maxCount, excludeUids)
     local data = State.Data
-    if not data or not data.Pets then return nil, {} end
+    if not data or not data.Pets or not data.Expeditions then return nil, {} end
     
     local equipped = {}
     for _, uid in ipairs(data.Equipped or {}) do equipped[tostring(uid)] = true end
     
+    local towerTeam = {}
+    pcall(function()
+        local fallbackDef = (Towers and Towers.List and Towers.List[1]) or { Id = "Meadow", Element = "Nature" }
+        local tPets = (TeamPairs and TeamPairs.Best and TeamPairs.Best(data, fallbackDef, 4)) or {}
+        for _, uid in ipairs(tPets) do towerTeam[tostring(uid)] = true end
+    end)
+    
     local onExp = {}
-    for _, exp in ipairs(data.Expeditions and data.Expeditions.Active or {}) do
+    for _, exp in ipairs(data.Expeditions.Active or {}) do
         for _, uid in ipairs(exp.Pets or {}) do onExp[tostring(uid)] = true end
     end
     
     local availablePets = {}
+    local now = State.Now and State.Now() or os.time()
+    local mods = State.Mods and State.Mods() or {}
+    
     for uid, pet in pairs(data.Pets) do
         local sUid = tostring(uid)
-        if not equipped[sUid] and not onExp[sUid] and not pet.Locked then
+        local def = PetData and PetData.ById and PetData.ById[pet.Id]
+        local isLimited = def and (def.Limited == true or def.Rarity == "Limited")
+        local isLocked = (data.Locked and data.Locked[sUid]) or pet.Locked
+        local isExcluded = excludeUids and excludeUids[sUid]
+        
+        if not equipped[sUid] and not towerTeam[sUid] and not onExp[sUid] and not isExcluded and not isLocked and not isLimited then
             local power = 0
             pcall(function()
-                power = Expeditions.PetPower(data, pet, State.Mods and State.Mods() or {}, State.Now and State.Now() or os.time())
+                power = Expeditions.PetPower(data, pet, mods, now)
             end)
-            table.insert(availablePets, { Uid = sUid, Power = power })
+            if power > 0 then
+                table.insert(availablePets, { Uid = sUid, Power = power })
+            end
         end
     end
     
     if #availablePets == 0 then return nil, {} end
-    table.sort(availablePets, function(a, b) return a.Power < b.Power end)
+    -- เรียงจากพลังสูงสุดไปต่ำสุด เพื่อให้โอกาสสำเร็จสูงสุด (Max Success Chance)
+    table.sort(availablePets, function(a, b) return a.Power > b.Power end)
     
     -- ลำดับความยากจากสูงสุดไปต่ำสุด: Nightmare (5) -> Extreme (4) -> Hard (3) -> Normal (2) -> Easy (1)
-    local diffsToCheck = { "5", "4", "3", "2", "1" }
-    for _, dKey in ipairs(diffsToCheck) do
-        local diff = ExpeditionConfig.Difficulties and ExpeditionConfig.Difficulties[dKey]
-        if diff and diff.Requirement then
-            local qualified = {}
-            for _, p in ipairs(availablePets) do
-                if p.Power >= diff.Requirement then
-                    table.insert(qualified, p.Uid)
+    if ExpeditionConfig and ExpeditionConfig.Difficulties then
+        for i = #ExpeditionConfig.Difficulties, 1, -1 do
+            local diff = ExpeditionConfig.Difficulties[i]
+            if diff and diff.Requirement then
+                local isUnlocked = false
+                pcall(function()
+                    isUnlocked = Expeditions.Unlocked(data, diff)
+                end)
+                
+                if isUnlocked then
+                    local qualified = {}
+                    for _, p in ipairs(availablePets) do
+                        if p.Power >= diff.Requirement then
+                            table.insert(qualified, p.Uid)
+                        end
+                    end
+                    if #qualified > 0 then
+                        local selected = {}
+                        local targetCount = math.min(maxCount or diff.Pets, diff.Pets, #qualified)
+                        for k = 1, targetCount do
+                            table.insert(selected, qualified[k])
+                        end
+                        return diff.Id, selected
+                    end
                 end
-            end
-            if #qualified > 0 then
-                local selected = {}
-                for i = 1, math.min(maxCount or 1, #qualified) do
-                    table.insert(selected, qualified[i])
-                end
-                return diff.Id, selected
             end
         end
     end
@@ -3685,8 +3963,8 @@ local function GetBestExpeditionPets(maxCount)
     return nil, {}
 end
 
-local function GetNightmarePets(maxCount)
-    local _, pets = GetBestExpeditionPets(maxCount)
+local function GetNightmarePets(maxCount, excludeUids)
+    local _, pets = GetBestExpeditionPets(maxCount, excludeUids)
     return pets or {}
 end
 
@@ -3694,13 +3972,17 @@ local function ClaimAllDoneExpeditions()
     local data = State.Data
     if not data or not data.Expeditions then return 0 end
     local claimed = 0
-    local now = State.Now()
+    local now = State.Now and State.Now() or os.time()
     for _, exp in ipairs(data.Expeditions.Active or {}) do
-        if Expeditions.Left(exp, now) <= 0 or (exp.Ends and exp.Ends <= now) then
+        local left = Expeditions and Expeditions.Left and Expeditions.Left(exp, now) or math.max(0, (exp.Ends or 0) - now)
+        if left <= 0 then
             Fire("ClaimExpedition", exp.Id)
             claimed = claimed + 1
             Humanizer.Wait(0.8, 1.4)
         end
+    end
+    if claimed > 0 then
+        task.delay(1.0, function() pcall(UpdateExpeditionStatus) end)
     end
     return claimed
 end
@@ -3716,9 +3998,49 @@ Tabs.Expedition:AddButton({
         if diffId and #pets > 0 then
             Fire("SendExpedition", diffId, pets)
             Notify("🌙 ผจญภัย", string.format("ส่งสัตว์เลี้ยง %d ตัวไปผจญภัย [%s] เรียบร้อย!", #pets, tostring(diffId)), 3)
+            task.delay(1.5, function() pcall(UpdateExpeditionStatus) end)
         else
-            Notify("⚠️ สัตว์เลี้ยงไม่พร้อม", "ไม่มีสัตว์เลี้ยงที่มีพลังพอส่งสำรวจในระดับใดๆ", 3)
+            Notify("⚠️ สัตว์เลี้ยงไม่พร้อม", "ไม่มีสัตว์เลี้ยงที่มีพลังพอส่งสำรวจในระดับใดๆ หรือสัตว์เลี้ยงกำลังติดภารกิจอื่น", 3)
         end
+    end
+})
+
+Tabs.Expedition:AddButton({
+    Title = "🚀 ส่งผจญภัยให้เต็มทุกช่องว่างทันที (Fill All Slots)",
+    Callback = function()
+        if not IsFeatureUnlocked("Expeditions", "expeditions") then
+            Notify("🔒 ยังไม่ปลดล็อค", "ระบบสำรวจ (Expeditions) ยังไม่ปลดล็อคในผังอัปเกรด/หอคอย", 3)
+            return
+        end
+        task.spawn(function()
+            local data = State.Data
+            local maxSlots = Expeditions and Expeditions.Slots and Expeditions.Slots(data) or 3
+            local activeCount = #(data.Expeditions and data.Expeditions.Active or {})
+            local slotsToFill = maxSlots - activeCount
+            if slotsToFill <= 0 then
+                Notify("⛵ ผจญภัย", "เรือผจญภัยเต็มทุกช่องแล้ว (" .. activeCount .. "/" .. maxSlots .. ")", 3)
+                return
+            end
+            local sentCount = 0
+            local recentlySent = {}
+            for s = 1, slotsToFill do
+                local diffId, pets = GetBestExpeditionPets(CFG.ExpeditionPetCount or 1, recentlySent)
+                if diffId and #pets > 0 then
+                    for _, uid in ipairs(pets) do recentlySent[tostring(uid)] = true end
+                    Fire("SendExpedition", diffId, pets)
+                    sentCount = sentCount + 1
+                    Humanizer.Wait(1.2, 1.8)
+                else
+                    break
+                end
+            end
+            if sentCount > 0 then
+                Notify("🌙 ผจญภัย", string.format("ส่งเรือผจญภัยออกเดินทางแล้ว %d ช่อง!", sentCount), 3)
+                task.delay(1.5, function() pcall(UpdateExpeditionStatus) end)
+            else
+                Notify("⚠️ สัตว์เลี้ยงไม่พร้อม", "ไม่มีสัตว์เลี้ยงที่พลังเพียงพอจะส่งช่องเพิ่มเติม", 3)
+            end
+        end)
     end
 })
 
@@ -3851,13 +4173,21 @@ local function ClaimAllRewardsManual()
             if QuestsLogic and QuestsLogic.Goals and data.Quests.Goals then
                 for _, gDef in ipairs(QuestsLogic.Goals) do
                     local gData = data.Quests.Goals[gDef.Id]
-                    if gData and not gData.Claimed and (gData.Progress or 0) >= (gDef.Goal or math.huge) then
+                    local isUnlocked = true
+                    if Upgrades and Upgrades.IsOpen and gDef.Needs then
+                        isUnlocked = Upgrades.IsOpen(data.Upgrades, gDef.Needs)
+                    end
+                    if isUnlocked and gData and not gData.Claimed and (gData.Progress or 0) >= (gDef.Goal or math.huge) then
                         Fire("GoalClaim", gDef.Id)
                         claimedCount = claimedCount + 1
                         Humanizer.Wait(0.3, 0.6)
                     end
                 end
             end
+        end
+        
+        if claimedCount > 0 then
+            task.delay(1.0, function() pcall(UpdateExpeditionStatus) end)
         end
         
         Notify("🎁 รับรางวัล", 
@@ -4843,11 +5173,20 @@ task.spawn(function()
                 data = State.Data
                 local maxSlots = Expeditions and Expeditions.Slots and Expeditions.Slots(data) or 3
                 local activeCount = #(data.Expeditions and data.Expeditions.Active or {})
-                if activeCount < maxSlots then
-                    local diffId, pets = GetBestExpeditionPets(CFG.ExpeditionPetCount or 1)
-                    if diffId and #pets > 0 then
-                        Fire("SendExpedition", diffId, pets)
-                        Humanizer.Wait(1.5, 2.5)
+                local slotsToFill = maxSlots - activeCount
+                if slotsToFill > 0 then
+                    local recentlySent = {}
+                    for s = 1, slotsToFill do
+                        local diffId, pets = GetBestExpeditionPets(CFG.ExpeditionPetCount or 1, recentlySent)
+                        if diffId and #pets > 0 then
+                            for _, uid in ipairs(pets) do
+                                recentlySent[tostring(uid)] = true
+                            end
+                            Fire("SendExpedition", diffId, pets)
+                            Humanizer.Wait(1.2, 1.8)
+                        else
+                            break
+                        end
                     end
                 end
             end)
@@ -5482,7 +5821,11 @@ task.spawn(function()
                 if QuestsLogic and QuestsLogic.Goals and data.Quests.Goals then
                     for _, gDef in ipairs(QuestsLogic.Goals) do
                         local gData = data.Quests.Goals[gDef.Id]
-                        if gData and not gData.Claimed and (gData.Progress or 0) >= (gDef.Goal or math.huge) then
+                        local isUnlocked = true
+                        if Upgrades and Upgrades.IsOpen and gDef.Needs then
+                            isUnlocked = Upgrades.IsOpen(data.Upgrades, gDef.Needs)
+                        end
+                        if isUnlocked and gData and not gData.Claimed and (gData.Progress or 0) >= (gDef.Goal or math.huge) then
                             Fire("GoalClaim", gDef.Id)
                             Humanizer.Wait(0.3, 0.6)
                         end
