@@ -309,6 +309,8 @@ local RemoteRateLimits = {
     BuyDice = 1.50,
     EquipDice = 0.50,
     EquipBest = 1.00,
+    SellKeys = 0.50,
+    ClaimLootPets = 0.80,
 }
 
 -- Global Zone Transition Serialization & Anti-Conflict State Machine
@@ -323,6 +325,12 @@ local ZoneTransitionActions = {
     Teleport = true,
 }
 
+-- Forward Declarations & Cross-System Mutex Locks
+local GetHalloweenEntry
+local CanTrickOrTreat
+local isPetEnhanceRolling = false
+getgenv().LastPetUpgradedTime = 0
+
 -- Global Token Bucket Rate Limiter (ป้องกันการยิงพร้อมกันจากทุกฟังก์ชันเกินขีดจำกัดเซิร์ฟเวอร์)
 -- ขีดจำกัดเซิร์ฟเวอร์ของตัวเกมแท้: PerSecond = 12, Burst = 24
 -- ขีดจำกัดความปลอดภัยขั้นสูงสุดของสคริปต์: PerSecond = 4.0 (ปลอดภัยกว่าขีดจำกัดเซิร์ฟเวอร์ 67%), MaxBurst = 10 (ปลอดภัย 58%)
@@ -336,6 +344,8 @@ local GlobalTokenBucket = {
         RollGrade = 0.5,
         MarketBuyAll = 1.0,
         MarketBuy = 0.5,
+        SellKeys = 1.0,
+        ClaimLootPets = 0.5,
         Menu = 0,
         -- รายการอื่นๆ มี Cost เริ่มต้นเป็น 1.0 ตามระบบเกม
     }
@@ -478,8 +488,10 @@ local function Fire(...)
     end
     if action == "OpenLootBag" then
         local bagKind = args[3]
-        if bagKind == "Halloween" then
-            if not data or not data.SeasonBags or (data.SeasonBags.Halloween or 0) <= 0 then return end
+        if bagKind then
+            local haveSeason = data and data.SeasonBags and (data.SeasonBags[bagKind] or 0) > 0
+            local haveElement = data and data.ElementBags and (data.ElementBags[bagKind] or 0) > 0
+            if not haveSeason and not haveElement then return end
         else
             if not data or (data.LootBags or 0) <= 0 then return end
         end
@@ -494,7 +506,7 @@ local function Fire(...)
         if waiting <= 0 then return end
     end
     if action == "TrickOrTreat" then
-        if not data or not data.Season or (data.Season.TotCooldown and (workspace:GetServerTimeNow() < data.Season.TotCooldown)) then
+        if not CanTrickOrTreat or not CanTrickOrTreat() then
             return -- ยังติดคูลดาวน์ Trick or Treat ไม่ส่ง
         end
     end
@@ -502,7 +514,8 @@ local function Fire(...)
         local itemKey = args[2]
         local itemDef = HalloweenShopConfig and HalloweenShopConfig.Items and HalloweenShopConfig.Items[itemKey]
         local candyCost = itemDef and itemDef.Price or 0
-        local candyHave = (data and (data.Candy or data.Candies or (data.Halloween and data.Halloween.Candy))) or 0
+        local entry = GetHalloweenEntry and GetHalloweenEntry()
+        local candyHave = (entry and entry.Candy) or (data and (data.Candy or data.Candies or (data.Halloween and data.Halloween.Candy))) or 0
         if candyHave < candyCost or candyCost <= 0 then return end
     end
     if action == "MarketBuyAll" then
@@ -519,10 +532,13 @@ local function Fire(...)
         return -- ป้องกันการยิง BuyDice แบบไม่มี ID
     end
     if action == "EquipBest" or action == "EquipDice" then
-        if IsTowerInArena and IsTowerInArena() then return end
+        if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
         if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return end
+        if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
+    end
+    if action == "SellKeys" then
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
     end
     if action == "UsePotion" then
@@ -533,6 +549,9 @@ local function Fire(...)
     end
     if action == "Rebirth" then
         if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then return end
+        if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
+        local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if isBoss or IsEnteringBossPortal == true then return end
         local cost = Stats and Stats.RebirthCost and Stats.RebirthCost(data)
         if not cost or not data or (data.Money or 0) < cost then
             return -- เงินไม่พอเกิดใหม่ ยกเลิกทันที
@@ -1371,9 +1390,9 @@ local function ExecuteAutoSellPets(targetCountOverride)
         -- ส่งคำสั่งขายแบบ Humanized Batch (ป้องกัน Anti-Cheat / Rate Limit 100%)
         for bIndex, batch in ipairs(sellBatches) do
             if getgenv().PetDiceScriptToken ~= scriptToken then break end
-            State.Send("SellKeys", batch.keys, batch.amounts)
+            Fire("SellKeys", batch.keys, batch.amounts)
             if bIndex < #sellBatches then
-                Humanizer.Wait(0.18, 0.28)
+                Humanizer.Wait(0.40, 0.65)
             end
         end
         
@@ -3597,12 +3616,9 @@ Tabs.Items:AddToggle("TogAutoBuyMarket", {
 -- ------------------------------------------------------------------------------
 Tabs.Expedition:AddSection("🌙 ผจญภัยระดับฝันร้าย (Nightmare Expedition)")
 
-local function GetNightmarePets(maxCount)
+local function GetBestExpeditionPets(maxCount)
     local data = State.Data
-    if not data or not data.Pets then return {} end
-    
-    local nightmare = ExpeditionConfig.ById and ExpeditionConfig.ById.Nightmare or ExpeditionConfig.Difficulties["5"]
-    local req = nightmare and nightmare.Requirement or 1e14
+    if not data or not data.Pets then return nil, {} end
     
     local equipped = {}
     for _, uid in ipairs(data.Equipped or {}) do equipped[tostring(uid)] = true end
@@ -3612,23 +3628,48 @@ local function GetNightmarePets(maxCount)
         for _, uid in ipairs(exp.Pets or {}) do onExp[tostring(uid)] = true end
     end
     
-    local candidates = {}
+    local availablePets = {}
     for uid, pet in pairs(data.Pets) do
         local sUid = tostring(uid)
         if not equipped[sUid] and not onExp[sUid] and not pet.Locked then
-            local power = Expeditions.PetPower(data, pet, State.Mods(), State.Now())
-            if power >= req then
-                table.insert(candidates, { Uid = sUid, Power = power })
+            local power = 0
+            pcall(function()
+                power = Expeditions.PetPower(data, pet, State.Mods and State.Mods() or {}, State.Now and State.Now() or os.time())
+            end)
+            table.insert(availablePets, { Uid = sUid, Power = power })
+        end
+    end
+    
+    if #availablePets == 0 then return nil, {} end
+    table.sort(availablePets, function(a, b) return a.Power < b.Power end)
+    
+    -- ลำดับความยากจากสูงสุดไปต่ำสุด: Nightmare (5) -> Extreme (4) -> Hard (3) -> Normal (2) -> Easy (1)
+    local diffsToCheck = { "5", "4", "3", "2", "1" }
+    for _, dKey in ipairs(diffsToCheck) do
+        local diff = ExpeditionConfig.Difficulties and ExpeditionConfig.Difficulties[dKey]
+        if diff and diff.Requirement then
+            local qualified = {}
+            for _, p in ipairs(availablePets) do
+                if p.Power >= diff.Requirement then
+                    table.insert(qualified, p.Uid)
+                end
+            end
+            if #qualified > 0 then
+                local selected = {}
+                for i = 1, math.min(maxCount or 1, #qualified) do
+                    table.insert(selected, qualified[i])
+                end
+                return diff.Id, selected
             end
         end
     end
     
-    table.sort(candidates, function(a, b) return a.Power < b.Power end)
-    local selected = {}
-    for i = 1, math.min(maxCount or 1, #candidates) do
-        table.insert(selected, candidates[i].Uid)
-    end
-    return selected
+    return nil, {}
+end
+
+local function GetNightmarePets(maxCount)
+    local _, pets = GetBestExpeditionPets(maxCount)
+    return pets or {}
 end
 
 local function ClaimAllDoneExpeditions()
@@ -3647,18 +3688,18 @@ local function ClaimAllDoneExpeditions()
 end
 
 Tabs.Expedition:AddButton({
-    Title = "⚡ ส่งผจญภัยฝันร้ายทันที (1 ช่อง)",
+    Title = "⚡ ส่งผจญภัยระดับสูงสุดทันที (1 ช่อง)",
     Callback = function()
         if not IsFeatureUnlocked("Expeditions", "expeditions") then
             Notify("🔒 ยังไม่ปลดล็อค", "ระบบสำรวจ (Expeditions) ยังไม่ปลดล็อคในผังอัปเกรด/หอคอย", 3)
             return
         end
-        local pets = GetNightmarePets(CFG.ExpeditionPetCount or 1)
-        if #pets > 0 then
-            Fire("SendExpedition", "Nightmare", pets)
-            Notify("🌙 ผจญภัยฝันร้าย", "ส่งสัตว์เลี้ยง " .. #pets .. " ตัวเรียบร้อย!", 3)
+        local diffId, pets = GetBestExpeditionPets(CFG.ExpeditionPetCount or 1)
+        if diffId and #pets > 0 then
+            Fire("SendExpedition", diffId, pets)
+            Notify("🌙 ผจญภัย", string.format("ส่งสัตว์เลี้ยง %d ตัวไปผจญภัย [%s] เรียบร้อย!", #pets, tostring(diffId)), 3)
         else
-            Notify("⚠️ สัตว์เลี้ยงไม่พร้อม", "ไม่มีสัตว์เลี้ยงที่มีพลังพอส่งช่องฝันร้าย", 3)
+            Notify("⚠️ สัตว์เลี้ยงไม่พร้อม", "ไม่มีสัตว์เลี้ยงที่มีพลังพอส่งสำรวจในระดับใดๆ", 3)
         end
     end
 })
@@ -3723,7 +3764,6 @@ Tabs.Expedition:AddSection("🎁 เควส & รางวัลประจ�
 
 local function ClaimAllRewardsManual()
     task.spawn(function()
-        Fire("Funnel", "Daily", 1)
         local data = State.Data
         local now = State.Now and State.Now() or os.time()
         local claimedCount = 0
@@ -3732,10 +3772,9 @@ local function ClaimAllRewardsManual()
         local canDaily = false
         pcall(function() canDaily = Stats.DailyState(data, now) end)
         if canDaily then
-            Fire("Funnel", "Daily", 1)
             Fire("ClaimDaily")
             claimedCount = claimedCount + 1
-            Humanizer.Wait(0.4, 0.8)
+            Humanizer.Wait(0.5, 1.0)
         end
         
         -- Playtime
@@ -5159,7 +5198,14 @@ task.spawn(function()
                         local char = LocalPlayer.Character or Character
                         local hrp = char and char:FindFirstChild("HumanoidRootPart")
                         if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150 then
-                            task.wait(2.0)
+                            -- หากตัวละครอยู่ในลานพลาซ่า และไม่มีพายุลูกกวาดหรือศึกบอส ให้พากลับบ้านอย่างปลอดภัยเพื่อเริ่มหอคอย
+                            if (now - LastZoneTransitionTime >= 4.0) then
+                                Fire("Teleport", "Home")
+                                Humanizer.Wait(3.5, 4.5)
+                                LastZoneTransitionTime = tick()
+                            else
+                                task.wait(2.0)
+                            end
                             continue
                         end
                         
@@ -5372,14 +5418,14 @@ task.spawn(function()
                 if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then
                     return
                 end
-                if IsTowerInArena and IsTowerInArena() then
+                if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then
                     return
                 end
                 
                 -- สแกนเรียลไทม์:
                 -- 1. มีสัตว์เลี้ยงใหม่เข้ามา (currentTotal ~= lastTotalPets)
                 -- 2. สัตว์เลี้ยงที่ใส่อยู่ยังไม่เต็มช่อง (equippedCount < maxEquipped)
-                -- 3. ตรวจสอบเป็นระยะทุกๆ 8 วินาที เพื่ออัปเดตทีมที่ดีที่สุดเสมอเมื่อสัตว์เลี้ยงเลเวลอัป
+                -- 3. สัตว์เลี้ยงเพิ่งถูกอัปเกรดเลเวลล่าสุด (และเว้นระยะอย่างน้อย 8 วิ)
                 local now = tick()
                 local shouldEquip = false
                 if currentTotal ~= lastTotalPets then
@@ -5387,7 +5433,7 @@ task.spawn(function()
                     lastTotalPets = currentTotal
                 elseif equippedCount < maxEquipped then
                     shouldEquip = true
-                elseif (now - lastPeriodicEquipTime) >= 8.0 then
+                elseif getgenv().LastPetUpgradedTime and (now - getgenv().LastPetUpgradedTime < 10.0) and (now - lastPeriodicEquipTime >= 8.0) then
                     shouldEquip = true
                 end
                 
@@ -5423,9 +5469,9 @@ task.spawn(function()
                 local maxSlots = Expeditions and Expeditions.Slots and Expeditions.Slots(data) or 3
                 local activeCount = #(data.Expeditions and data.Expeditions.Active or {})
                 if activeCount < maxSlots then
-                    local pets = GetNightmarePets(CFG.ExpeditionPetCount or 1)
-                    if #pets > 0 then
-                        Fire("SendExpedition", "Nightmare", pets)
+                    local diffId, pets = GetBestExpeditionPets(CFG.ExpeditionPetCount or 1)
+                    if diffId and #pets > 0 then
+                        Fire("SendExpedition", diffId, pets)
                         Humanizer.Wait(1.5, 2.5)
                     end
                 end
@@ -5550,7 +5596,22 @@ task.spawn(function()
             
             -- 5. Auto Trick or Treat: ตรวจสอบสิทธิ์ประจำวัน และเดินด้วยระบบฟิสิกส์ปกติ ปลอดภัย 100%
             if CFG.HalloweenAutoTrickOrTreat and CanTrickOrTreat() then
-                if not IsTowerInArena() and not IsInTrade() and not (LocalPlayer:GetAttribute("WorldBossJoined") == true) and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex then
+                local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+                if not IsInTrade() and not getgenv().TradeActiveSession and not isBoss and not IsEnteringBossPortal and not getgenv().IsCandyStormActiveRunning and not isCollectingCandyMutex then
+                    if CFG.Tower and IsTowerRunning() then
+                        Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อไปขอขนมฮาโลวีน...", 2)
+                        Fire("TowerLeave")
+                        LiveTower.Active = false
+                        LiveTower.Starting = false
+                        LiveTower.LastEventTime = 0
+                        LiveTower.TowerId = nil
+                        local leaveWait = tick()
+                        while IsTowerRunning() and (tick() - leaveWait < 4.0) do
+                            task.wait(0.2)
+                        end
+                        Humanizer.Wait(2.0, 3.0)
+                        LastZoneTransitionTime = tick()
+                    end
                     Notify("🍬 ขอขนมฮาโลวีน", "กำลังเดินไปหาเคานต์พาวคูลาเพื่อขอขนมประจำวัน...", 2)
                     local arrived = WalkToPawcula()
                     if arrived and CanTrickOrTreat() then
@@ -5861,6 +5922,7 @@ task.spawn(function()
                     -- สัตว์เลี้ยงทั้งหมดถึงเป้าหมายแล้ว หรือเงินไม่พออัปเกรด พัก 3.5 วินาที
                     task.wait(3.5)
                 else
+                    getgenv().LastPetUpgradedTime = tick()
                     task.wait(1.5) -- หน่วงรอเซิร์ฟเวอร์อัปเดตข้อมูลสเตตัส
                 end
             end)
@@ -5880,56 +5942,64 @@ task.spawn(function()
         if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(1.5) continue end
         
         if CFG.AutoRollGrade then
-            CircuitBreaker.Execute("AutoRollGrade", function()
-                local data = State.Data
-                if not data or not data.Pets or not data.Gems or data.Gems < 1 then
-                    task.wait(3.0)
-                    return
-                end
-                
-                -- ตรวจสอบว่าปลดล็อคระบบเกรดในต้นไม้ทักษะแล้วหรือไม่ ("Grades" / "grades")
-                if not IsFeatureUnlocked("Grades", "grades") then
-                    task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
-                    return
-                end
-                
-                local targetRank = CFG.TargetGradeRank or 8
-                local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
-                local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.2)
-                local virtualGems = data.Gems
-                local anyRolled = false
-                
-                for _, uid in ipairs(targetUids) do
-                    if IsInTrade() or getgenv().TradeActiveSession then break end
-                    if virtualGems < 1 then break end
+            if isPetEnhanceRolling then
+                task.wait(0.25)
+                continue
+            end
+            isPetEnhanceRolling = true
+            pcall(function()
+                CircuitBreaker.Execute("AutoRollGrade", function()
+                    local data = State.Data
+                    if not data or not data.Pets or not data.Gems or data.Gems < 1 then
+                        task.wait(3.0)
+                        return
+                    end
                     
-                    local pet = data.Pets[uid]
-                    if pet and IsPetEligibleForEnhance(pet) then
-                        if not IsPetGradeLocked(pet, targetRank) then
-                            virtualGems = virtualGems - 1
-                            Fire("RollGrade", uid)
-                            anyRolled = true
-                            consecutiveRolls = consecutiveRolls + 1
-                            
-                            -- Humanizer หน่วงเวลาแบบเป็นธรรมชาติ ปลอดภัยจากการตรวจจับของ Roblox
-                            Humanizer.Wait(math.max(0.25, rollDelay - 0.05), rollDelay + 0.08)
-                            
-                            -- พักสั้นๆ ทุก 10 ครั้งเพื่อจำลองพฤติกรรมมนุษย์ ป้องกัน Remote Burst
-                            if consecutiveRolls >= 10 then
-                                consecutiveRolls = 0
-                                task.wait(math.random(120, 180) / 100)
+                    -- ตรวจสอบว่าปลดล็อคระบบเกรดในต้นไม้ทักษะแล้วหรือไม่ ("Grades" / "grades")
+                    if not IsFeatureUnlocked("Grades", "grades") then
+                        task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
+                        return
+                    end
+                    
+                    local targetRank = CFG.TargetGradeRank or 8
+                    local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
+                    local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.2)
+                    local virtualGems = data.Gems
+                    local anyRolled = false
+                    
+                    for _, uid in ipairs(targetUids) do
+                        if IsInTrade() or getgenv().TradeActiveSession then break end
+                        if virtualGems < 1 then break end
+                        
+                        local pet = data.Pets[uid]
+                        if pet and IsPetEligibleForEnhance(pet) then
+                            if not IsPetGradeLocked(pet, targetRank) then
+                                virtualGems = virtualGems - 1
+                                Fire("RollGrade", uid)
+                                anyRolled = true
+                                consecutiveRolls = consecutiveRolls + 1
+                                
+                                -- Humanizer หน่วงเวลาแบบเป็นธรรมชาติ ปลอดภัยจากการตรวจจับของ Roblox
+                                Humanizer.Wait(math.max(0.25, rollDelay - 0.05), rollDelay + 0.08)
+                                
+                                -- พักสั้นๆ ทุก 10 ครั้งเพื่อจำลองพฤติกรรมมนุษย์ ป้องกัน Remote Burst
+                                if consecutiveRolls >= 10 then
+                                    consecutiveRolls = 0
+                                    task.wait(math.random(120, 180) / 100)
+                                end
                             end
                         end
                     end
-                end
-                
-                if not anyRolled then
-                    consecutiveRolls = 0
-                    task.wait(3.0) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือเพชรหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
-                else
-                    task.wait(math.max(0.4, rollDelay)) -- เว้นระยะระหว่างรอบสุ่ม
-                end
+                    
+                    if not anyRolled then
+                        consecutiveRolls = 0
+                        task.wait(3.0) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือเพชรหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
+                    else
+                        task.wait(math.max(0.4, rollDelay)) -- เว้นระยะระหว่างรอบสุ่ม
+                    end
+                end)
             end)
+            isPetEnhanceRolling = false
         else
             consecutiveRolls = 0
             task.wait(2.0)
@@ -5947,56 +6017,64 @@ task.spawn(function()
         if getgenv().IsCandyStormActiveRunning or isCollectingCandyMutex then task.wait(1.5) continue end
         
         if CFG.AutoRollTrait then
-            CircuitBreaker.Execute("AutoRollTrait", function()
-                local data = State.Data
-                if not data or not data.Pets or not data.Shards or data.Shards < 1 then
-                    task.wait(3.0)
-                    return
-                end
-                
-                -- ตรวจสอบว่าปลดล็อคระบบ Trait (บัฟ) ในต้นไม้ทักษะแล้วหรือไม่ ("Traits" / "traits")
-                if not IsFeatureUnlocked("Traits", "traits") then
-                    task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
-                    return
-                end
-                
-                local targetRank = CFG.TargetTraitRank or 6
-                local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
-                local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.2)
-                local virtualShards = data.Shards
-                local anyRolled = false
-                
-                for _, uid in ipairs(targetUids) do
-                    if IsInTrade() or getgenv().TradeActiveSession then break end
-                    if virtualShards < 1 then break end
+            if isPetEnhanceRolling then
+                task.wait(0.25)
+                continue
+            end
+            isPetEnhanceRolling = true
+            pcall(function()
+                CircuitBreaker.Execute("AutoRollTrait", function()
+                    local data = State.Data
+                    if not data or not data.Pets or not data.Shards or data.Shards < 1 then
+                        task.wait(3.0)
+                        return
+                    end
                     
-                    local pet = data.Pets[uid]
-                    if pet and IsPetEligibleForEnhance(pet) then
-                        if not IsPetTraitLocked(pet, targetRank) then
-                            virtualShards = virtualShards - 1
-                            Fire("RollTrait", uid)
-                            anyRolled = true
-                            consecutiveRolls = consecutiveRolls + 1
-                            
-                            -- Humanizer หน่วงเวลาแบบเป็นธรรมชาติ ปลอดภัยจากการตรวจจับของ Roblox
-                            Humanizer.Wait(math.max(0.25, rollDelay - 0.05), rollDelay + 0.08)
-                            
-                            -- พักสั้นๆ ทุก 10 ครั้งเพื่อจำลองพฤติกรรมมนุษย์ ป้องกัน Remote Burst
-                            if consecutiveRolls >= 10 then
-                                consecutiveRolls = 0
-                                task.wait(math.random(120, 180) / 100)
+                    -- ตรวจสอบว่าปลดล็อคระบบ Trait (บัฟ) ในต้นไม้ทักษะแล้วหรือไม่ ("Traits" / "traits")
+                    if not IsFeatureUnlocked("Traits", "traits") then
+                        task.wait(6.0) -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
+                        return
+                    end
+                    
+                    local targetRank = CFG.TargetTraitRank or 6
+                    local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
+                    local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.2)
+                    local virtualShards = data.Shards
+                    local anyRolled = false
+                    
+                    for _, uid in ipairs(targetUids) do
+                        if IsInTrade() or getgenv().TradeActiveSession then break end
+                        if virtualShards < 1 then break end
+                        
+                        local pet = data.Pets[uid]
+                        if pet and IsPetEligibleForEnhance(pet) then
+                            if not IsPetTraitLocked(pet, targetRank) then
+                                virtualShards = virtualShards - 1
+                                Fire("RollTrait", uid)
+                                anyRolled = true
+                                consecutiveRolls = consecutiveRolls + 1
+                                
+                                -- Humanizer หน่วงเวลาแบบเป็นธรรมชาติ ปลอดภัยจากการตรวจจับของ Roblox
+                                Humanizer.Wait(math.max(0.25, rollDelay - 0.05), rollDelay + 0.08)
+                                
+                                -- พักสั้นๆ ทุก 10 ครั้งเพื่อจำลองพฤติกรรมมนุษย์ ป้องกัน Remote Burst
+                                if consecutiveRolls >= 10 then
+                                    consecutiveRolls = 0
+                                    task.wait(math.random(120, 180) / 100)
+                                end
                             end
                         end
                     end
-                end
-                
-                if not anyRolled then
-                    consecutiveRolls = 0
-                    task.wait(3.0) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือชาร์ดหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
-                else
-                    task.wait(math.max(0.4, rollDelay)) -- เว้นระยะระหว่างรอบสุ่ม
-                end
+                    
+                    if not anyRolled then
+                        consecutiveRolls = 0
+                        task.wait(3.0) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือชาร์ดหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
+                    else
+                        task.wait(math.max(0.4, rollDelay)) -- เว้นระยะระหว่างรอบสุ่ม
+                    end
+                end)
             end)
+            isPetEnhanceRolling = false
         else
             consecutiveRolls = 0
             task.wait(2.0)
@@ -6034,9 +6112,9 @@ task.spawn(function()
                 Humanizer.Wait(0.5, 1.0)
             end
             
-            -- ปลอดภัย 100%: เปิดถุงสมบัติทั่วไปแบบหน่วงเวลา 15s ซิงค์คัตซีน และเคลมเฉพาะเมื่อมีสัตว์เลี้ยงค้างจริงเท่านั้น
+            -- ปลอดภัย 100%: เปิดถุงสมบัติทั่วไปและถุงธาตุ/ถุงโลก แบบหน่วงเวลา 15s ซิงค์คัตซีน และเคลมเฉพาะเมื่อมีสัตว์เลี้ยงค้างจริงเท่านั้น
             local infinityBagNow = tick()
-            if CFG.AutoOpenLootBags and (data.LootBags or 0) > 0 and (infinityBagNow - lastInfinityBagOpenTick > 15) then
+            if CFG.AutoOpenLootBags and (infinityBagNow - lastInfinityBagOpenTick > 15) then
                 local isBusy = false
                 pcall(function()
                     if LootBagController and LootBagController.Api and LootBagController.Api.Busy then
@@ -6045,23 +6123,53 @@ task.spawn(function()
                 end)
                 
                 if not isBusy then
-                    lastInfinityBagOpenTick = infinityBagNow
-                    Fire("OpenLootBag", "all")
-                    Notify("🎒 ถุงสมบัติ", "กำลังเปิดถุงสมบัติทั่วไป (" .. (data.LootBags or 0) .. " ใบ)...", 3)
-                    Humanizer.Wait(4.5, 6.0)
-                    
-                    local waitingInfinity = 0
-                    pcall(function()
-                        if PetData and PetData.WaitingCount then
-                            waitingInfinity = PetData.WaitingCount(data, "Infinity")
+                    -- 1. ถุงสมบัติทั่วไป (LootBags)
+                    if (data.LootBags or 0) > 0 then
+                        lastInfinityBagOpenTick = infinityBagNow
+                        Fire("OpenLootBag", "all")
+                        Notify("🎒 ถุงสมบัติ", "กำลังเปิดถุงสมบัติทั่วไป (" .. (data.LootBags or 0) .. " ใบ)...", 3)
+                        Humanizer.Wait(4.5, 6.0)
+                        
+                        local waitingInfinity = 0
+                        pcall(function()
+                            if PetData and PetData.WaitingCount then
+                                waitingInfinity = PetData.WaitingCount(data, "Infinity")
+                            end
+                        end)
+                        
+                        if waitingInfinity > 0 then
+                            Humanizer.Wait(1.0, 1.8)
+                            Fire("ClaimLootPets", "Infinity")
+                            Notify("🐾 สัตว์เลี้ยง", "กดรับสัตว์เลี้ยงจากถุงสมบัติ " .. waitingInfinity .. " ตัวเรียบร้อย!", 3)
+                            Humanizer.Wait(1.5, 2.5)
                         end
-                    end)
+                    end
                     
-                    if waitingInfinity > 0 then
-                        Humanizer.Wait(1.0, 1.8)
-                        Fire("ClaimLootPets", "Infinity")
-                        Notify("🐾 สัตว์เลี้ยง", "กดรับสัตว์เลี้ยงจากถุงสมบัติ " .. waitingInfinity .. " ตัวเรียบร้อย!", 3)
-                        Humanizer.Wait(1.5, 2.5)
+                    -- 2. ถุงธาตุและถุงโลก (ElementBags เช่น World)
+                    if data.ElementBags then
+                        for elemKey, elemCount in pairs(data.ElementBags) do
+                            if (elemCount or 0) > 0 then
+                                lastInfinityBagOpenTick = infinityBagNow
+                                Fire("OpenLootBag", "all", elemKey)
+                                Notify("🎒 ถุงสมบัติ", string.format("กำลังเปิดถุงธาตุ/โลก [%s] (%d ใบ)...", tostring(elemKey), elemCount), 3)
+                                Humanizer.Wait(4.5, 6.0)
+                                
+                                local waitingElem = 0
+                                pcall(function()
+                                    if PetData and PetData.WaitingCount then
+                                        waitingElem = PetData.WaitingCount(data, elemKey)
+                                    end
+                                end)
+                                
+                                if waitingElem > 0 then
+                                    Humanizer.Wait(1.0, 1.8)
+                                    Fire("ClaimLootPets", elemKey)
+                                    Notify("🐾 สัตว์เลี้ยง", string.format("กดรับสัตว์เลี้ยงจากถุง [%s] %d ตัวเรียบร้อย!", tostring(elemKey), waitingElem), 3)
+                                    Humanizer.Wait(1.5, 2.5)
+                                end
+                                break -- เปิดทีละ 1 ประเภทต่อรอบ ป้องกัน Remote Burst
+                            end
+                        end
                     end
                 end
             end
@@ -6085,9 +6193,8 @@ task.spawn(function()
                 local canDaily = false
                 pcall(function() canDaily = Stats.DailyState(data, now) end)
                 if canDaily then
-                    Fire("Funnel", "Daily", 1)
                     Fire("ClaimDaily")
-                    Humanizer.Wait(0.4, 0.8)
+                    Humanizer.Wait(0.5, 1.0)
                 end
                 
                 local canPlaytime = false
