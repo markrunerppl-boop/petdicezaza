@@ -91,6 +91,7 @@ pcall(function()
             VirtualUser:ClickButton2(Vector2.new())
         end)
     end)
+end)
 -- ==============================================================================
 -- [0] AIRTIGHT ANTI-BAN & PATCH SENTINEL SYSTEM (100% FAIL-SAFE PROTECTION)
 -- ==============================================================================
