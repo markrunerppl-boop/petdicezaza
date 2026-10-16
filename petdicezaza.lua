@@ -257,9 +257,9 @@ local function Fire(...)
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if hrp then
-            local inHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 165
+            local inHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150
             if inHub then
-                return -- ห้ามเริ่มหอคอยเด็ดขาดขณะอยู่ในพลาซ่า (ระยะ Park < 165) ต้องวาร์ปกลับบ้านก่อน
+                return -- ห้ามเริ่มหอคอยเด็ดขาดขณะอยู่ในพลาซ่า (ระยะ Park < 150) ต้องวาร์ปกลับบ้านก่อน
             end
         end
         if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.5) then
@@ -403,11 +403,11 @@ local function Fire(...)
         
         local dest = args[2]
         local mag = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude
-        if dest == "Hub" and mag < 165 then
-            return -- อยู่ในลานพลาซ่า/ฮับอยู่แล้ว (ระยะศูนย์กลาง < 165 studs) ห้ามส่ง Teleport Hub ซ้ำ ป้องกัน Error 267
+        if dest == "Hub" and mag < 150 then
+            return -- อยู่ในลานพลาซ่า/ฮับอยู่แล้ว (ระยะศูนย์กลาง < 150 studs) ห้ามส่ง Teleport Hub ซ้ำ ป้องกัน Error 267
         end
-        if dest == "Home" and mag >= 165 and not (IsTowerRunning and IsTowerRunning()) then
-            return -- อยู่ในพื้นที่บ้าน (Plot Yard) อยู่แล้ว ห้ามส่ง Teleport Home ซ้ำ ป้องกัน Error 267
+        if dest == "Home" and mag >= 150 and not (IsTowerRunning and IsTowerRunning()) then
+            return -- อยู่ในพื้นที่บ้าน (Plot Yard) อยู่แล้ว (ระยะ >= 150 studs) ห้ามส่ง Teleport Home ซ้ำ ป้องกัน Error 267
         end
     end
 
@@ -581,7 +581,7 @@ local function WalkToPawcula()
     local targetStand = Vector3.new(36.5, 2.25, -36.0)
     
     -- หากตัวละครไม่ได้อยู่ในพลาซ่า ให้ใช้วาร์ปทางการของเกมไปที่ Hub (พลาซ่า) ก่อน ปลอดภัย 100%
-    local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 165
+    local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150
     if not isAlreadyInHub then
         Fire("Teleport", "Hub")
         Humanizer.Wait(2.0, 2.8)
@@ -2466,7 +2466,7 @@ SwitchOrStartTower = function(targetTowerId, force)
     
     local char = LocalPlayer.Character or Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 165 then
+    if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150 then
         return false, "In Hub/Plaza"
     end
     
@@ -4043,8 +4043,8 @@ local function SafeCollectPlazaCandies(isManual)
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not char or not hum or not hrp or hum.Health <= 0 then return end
         
-        -- ตรวจสอบว่าผู้เล่นอยู่ใน Hub หรือยัง (ระยะห่างจากแกนศูนย์กลาง Hub (0,0,0) น้อยกว่า 165 studs คืออยู่ในพลาซ่าแล้ว)
-        local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 165
+        -- ตรวจสอบว่าผู้เล่นอยู่ใน Hub หรือยัง (ระยะห่างจากแกนศูนย์กลาง Hub (0,0,0) น้อยกว่า 150 studs คืออยู่ในพลาซ่าแล้ว)
+        local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150
         if not isAlreadyInHub then
             Notify("🌪️ พายุลูกกวาด", "กำลังเดินทางไปพลาซ่าเพื่อเก็บแคนดี้...", 2)
             Fire("Teleport", "Hub")
@@ -4229,7 +4229,7 @@ local function SafeCollectPlazaCandies(isManual)
         -- เมื่อเสร็จสิ้นรอบการเก็บ ให้ตรวจสอบตำแหน่ง หากยังอยู่ในพลาซ่า ให้วาร์ปกลับบ้าน (Home) อย่างปลอดภัย
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local isStillInHub = hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 165)
+        local isStillInHub = hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150)
         if isStillInHub then
             Fire("Teleport", "Home")
             Notify("🌪️ พายุลูกกวาด", string.format("เสร็จสิ้นรอบการเก็บแคนดี้ (%d ชิ้น)! เดินทางกลับบ้านเรียบร้อย", collectedThisRound), 3)
@@ -4973,7 +4973,7 @@ task.spawn(function()
                         
                         local char = LocalPlayer.Character or Character
                         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                        if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 165 then
+                        if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150 then
                             task.wait(2.0)
                             continue
                         end
