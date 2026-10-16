@@ -1349,17 +1349,29 @@ task.spawn(function()
                         task.delay(3.6, function() isZoneTransitionLocked = false end)
                     end
                     
-                    local targetMenu = ActionMenuMap[action]
-                    if targetMenu then
-                        pcall(function() Action:FireServer("Menu", targetMenu, true) end)
-                        task.wait(0.18)
+                    if action == "TowerStart" then
+                        pcall(function() Action:FireServer("Menu", "Towers", true) end)
+                        task.wait(0.15)
+                        pcall(function() Action:FireServer("Menu", "Team", true) end)
+                        task.wait(0.20)
                         pcall(function() Action:FireServer(unpack(args)) end)
-                        task.wait(0.25)
-                        pcall(function() Action:FireServer("Menu", targetMenu, false) end)
+                        task.wait(0.30)
+                        pcall(function() Action:FireServer("Menu", "Team", false) end)
+                        task.wait(0.10)
+                        pcall(function() Action:FireServer("Menu", "Towers", false) end)
                     else
-                        pcall(function()
-                            Action:FireServer(unpack(args))
-                        end)
+                        local targetMenu = ActionMenuMap[action]
+                        if targetMenu then
+                            pcall(function() Action:FireServer("Menu", targetMenu, true) end)
+                            task.wait(0.18)
+                            pcall(function() Action:FireServer(unpack(args)) end)
+                            task.wait(0.25)
+                            pcall(function() Action:FireServer("Menu", targetMenu, false) end)
+                        else
+                            pcall(function()
+                                Action:FireServer(unpack(args))
+                            end)
+                        end
                     end
                 end
             end
@@ -3065,6 +3077,12 @@ pcall(function()
         if getgenv().PetDiceScriptToken ~= scriptToken then return end
         local now = tick()
         if (action == "Floor" or action == "Start" or action == "Enter" or action == "Init") and typeof(payload) == "table" then
+            if not LiveTower.Active or LiveTower.Starting then
+                local tName = payload.Tower or LiveTower.TowerId or "หอคอย"
+                local tDef = Towers and Towers.ById and Towers.ById[tName]
+                local displayName = tDef and tDef.Name or tName
+                Notify("🏰 หอคอย", "เริ่มลง [" .. tostring(displayName) .. "] ชั้น " .. tostring(payload.Floor or 1) .. " สำเร็จ!", 3)
+            end
             LiveTower.Active = true
             LiveTower.Starting = false
             LiveTower.JustEnded = false
@@ -3374,15 +3392,15 @@ local function GetTowerTeam(towerDef, teamSize)
     
     local team = {}
     
-    -- 1. คัดเลือกสัตว์เลี้ยงที่ดีที่สุดตามธาตุหอคอยผ่าน TeamPairs.Best
-    if towerDef and towerDef.Element and TeamPairs and TeamPairs.Best then
+    -- 1. คัดเลือกสัตว์เลี้ยงที่ดีที่สุดตามธาตุหอคอย หรือตามพลังสูงสุดผ่าน TeamPairs.Best (ครอบคลุมทั้ง 6 ธาตุ และ Infinity)
+    if towerDef and TeamPairs and TeamPairs.Best then
         pcall(function()
             local res = TeamPairs.Best(data, towerDef, targetSize)
             if res and #res > 0 then team = res end
         end)
     end
     
-    -- 2. กรณีไม่มีธาตุหรือเป็นหอ Infinity ให้ใช้ธาตุเริ่มต้นเพื่อป้องกันข้อผิดพลาด
+    -- 2. กรณีฉุกเฉินหาก TeamPairs.Best ไม่ได้ผล ให้ใช้ Meadow เป็น fallback
     if #team == 0 and TeamPairs and TeamPairs.Best then
         pcall(function()
             local fallbackDef = (Towers and Towers.List and Towers.List[1]) or { Id = "Meadow", Element = "Nature" }
@@ -3553,7 +3571,9 @@ SwitchOrStartTower = function(targetTowerId, force)
         
         local success = StartTowerDirect(resolvedId)
         if success then
-            Notify("🏰 หอคอย", "เริ่มลง " .. tostring(towerDef.Name or resolvedId) .. " เรียบร้อย!", 3)
+            if force then
+                Notify("🏰 หอคอย", "กำลังเริ่มลง [" .. tostring(towerDef.Name or resolvedId) .. "]...", 3)
+            end
             if CFG.AutoExitArena then
                 task.delay(4.0, function() 
                     if getgenv().PetDiceScriptToken == scriptToken and IsTowerInArena() then
@@ -6658,6 +6678,7 @@ task.spawn(function()
                 local isBossJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
                 if not (CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isBossJoined or IsEnteringBossPortal == true)) then
                     if isRunning then
+                        consecutiveFailCount = 0
                         -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย
                         if activeId and activeId ~= targetId and not isSwitchingTower then
                             SwitchOrStartTower(targetId, true)
@@ -6704,10 +6725,21 @@ task.spawn(function()
                             continue
                         end
                         
-                        local delaySec = math.max(4.0, tonumber(CFG.TowerRestartDelay) or 5.0)
-                        if not isSwitchingTower and (now - lastLoopStartAttempt >= delaySec) then
+                        local baseDelay = math.max(6.0, tonumber(CFG.TowerRestartDelay) or 6.0)
+                        local backoffDelay = baseDelay + math.min(30, consecutiveFailCount * 5.0)
+                        if not isSwitchingTower and (now - lastLoopStartAttempt >= backoffDelay) then
                             lastLoopStartAttempt = now
                             SwitchOrStartTower(targetId, false)
+                            task.delay(4.0, function()
+                                if not IsTowerRunning() then
+                                    consecutiveFailCount = consecutiveFailCount + 1
+                                    if consecutiveFailCount >= 3 and (consecutiveFailCount % 3 == 0) then
+                                        Notify("⏳ หอคอย", "กำลังเว้นระยะห่างก่อนเริ่มหอคอยใหม่ (ป้องกันการส่งคำสั่งซ้ำ)...", 4)
+                                    end
+                                else
+                                    consecutiveFailCount = 0
+                                end
+                            end)
                         end
                     end
                 end
