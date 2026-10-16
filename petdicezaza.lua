@@ -431,9 +431,13 @@ local RemoteRateLimits = {
     ClaimSocial = 1.00,
     SendExpedition = 1.00,
     ClaimExpedition = 0.80,
-    TradeRequest = 2.00,
-    TradeRespond = 1.50,
-    TradeReady = 1.50,
+    TradeRequest = 3.00,     -- เว้นระยะอย่างน้อย 3.00s ต่อการส่งคำขอเทรด ป้องกันการสแปม
+    TradeRespond = 2.00,     -- เว้นระยะ 2.00s ต่อการตอบรับคำขอเทรด
+    TradeReady = 2.00,       -- เว้นระยะ 2.00s ต่อการกด Ready/Unready
+    TradeItem = 0.50,        -- เว้นระยะ 0.50s ต่อการวางไอเทมลงในช่องเทรด
+    TradeAddPets = 0.60,     -- เว้นระยะ 0.60s ต่อการใส่สัตว์เลี้ยงลงในช่องเทรด
+    TradeRemovePets = 0.60,  -- เว้นระยะ 0.60s ต่อการดึงสัตว์เลี้ยงออกจากช่องเทรด
+    TradeCancel = 1.50,      -- เว้นระยะ 1.50s ต่อการกดยกเลิกการเทรด
     BuyDice = 1.50,
     EquipDice = 0.50,
     EquipBest = 1.00,
@@ -469,6 +473,12 @@ getgenv().LastPetOperationStartTime = 0
 getgenv().LastEconomyActionStartTime = 0
 getgenv().LastZoneTransitionTime = 0
 getgenv().LastPetUpgradedTime = 0
+getgenv().LastTradeRequestTime = 0
+
+-- Trade Deferred Action Queue (จัดคิวคำสั่งอื่นที่เข้ามาขณะกำลังเทรด ให้รอทำตามลำดับหลังจากเทรดเสร็จ)
+local TradeDeferredQueue = {}
+local MAX_TRADE_DEFERRED_QUEUE = 40
+local isFlushingTradeQueue = false
 
 -- Centralized Remote Dispatcher Queue (100% Single-Threaded Anti-Collision & Anti-Kick Dispatcher)
 -- ป้องกันการยิงคำสั่งพร้อมกันในเฟรมเดียวกัน (Single-Threaded FIFO Serializer)
@@ -494,6 +504,13 @@ local GlobalTokenBucket = {
         MarketBuy = 0.5,
         SellKeys = 1.0,
         ClaimLootPets = 0.5,
+        TradeRequest = 2.0,
+        TradeRespond = 1.5,
+        TradeReady = 1.5,
+        TradeItem = 0.5,
+        TradeAddPets = 0.8,
+        TradeRemovePets = 0.8,
+        TradeCancel = 1.0,
         Menu = 0,
         -- รายการอื่นๆ มี Cost เริ่มต้นเป็น 1.0 ตามระบบเกม
     }
@@ -506,6 +523,25 @@ local function IsFeatureUnlocked(featureName, idName)
     local openByFunc = Upgrades.IsOpen and Upgrades.IsOpen(u, featureName)
     local openById = (u[idName] or 0) > 0
     return openByFunc == true and openById == true
+end
+
+local function FlushTradeDeferredQueue()
+    if isFlushingTradeQueue or #TradeDeferredQueue == 0 then return end
+    isFlushingTradeQueue = true
+    task.spawn(function()
+        Humanizer.Wait(1.5, 2.5)
+        while #TradeDeferredQueue > 0 do
+            if getgenv().PetDiceScriptToken ~= scriptToken then break end
+            if (IsInTrade and IsInTrade()) or getgenv().TradeActiveSession then break end
+            
+            local item = table.remove(TradeDeferredQueue, 1)
+            if item and (tick() - item.timestamp <= 60.0) then
+                Fire(unpack(item.args))
+                Humanizer.Wait(0.35, 0.65)
+            end
+        end
+        isFlushingTradeQueue = false
+    end)
 end
 
 local function Fire(...) 
@@ -521,18 +557,33 @@ local function Fire(...)
         return -- ตัดการส่งคำสั่ง 100% เมื่อตรวจพบความเสี่ยงหรือเกมอัปเดตแพทช์ใหม่ ป้องกัน Error 267 / 600
     end
 
-    -- 0.1 Blanket Trade Isolation Guard (ป้องกันคำสั่งอื่นแทรกแซงระหว่างเทรด 100%)
+    -- 0.1 Blanket Trade Isolation & Conflict Queueing (ป้องกันคำสั่งอื่นแทรกแซงระหว่างเทรด 100% พร้อมจัดคิวรอทำตามลำดับ)
     local TradeAllowedActions = {
         TradeRequest = true,
         TradeRespond = true,
         TradeReady = true,
         TradeItem = true,
+        TradeAddPets = true,
+        TradeRemovePets = true,
         TradeCancel = true,
         SetSetting = true,
     }
     if (IsInTrade and IsInTrade()) or getgenv().TradeActiveSession then
         if not TradeAllowedActions[action] then
-            return -- ระงับคำสั่งทุกชนิดระหว่างเซสชันเทรด ป้องกัน Error 267/600 100%
+            -- จัดคิวรอทำตามลำดับหลังจากจบเซสชันเทรด ป้องกันการสูญหายของคำสั่งและไม่ให้เกิดข้อผิดพลาด
+            local EphemeralActions = {
+                Roll = true,
+                SetAuto = true,
+                EquipBest = true,
+            }
+            if not EphemeralActions[action] and #TradeDeferredQueue < MAX_TRADE_DEFERRED_QUEUE then
+                table.insert(TradeDeferredQueue, {
+                    action = action,
+                    args = args,
+                    timestamp = tick()
+                })
+            end
+            return -- ระงับการยิงไปเซิร์ฟเวอร์ระหว่างเซสชันเทรด ป้องกัน Error 267/600 100%
         end
     end
 
@@ -863,6 +914,102 @@ local function Fire(...)
         if not data or not data.Social then return end
         if sType == "Group" and data.Social.Group then return end
         if sType == "Like" and data.Social.Like then return end
+    end
+    if action == "TradeRequest" then
+        local targetUserId = tonumber(args[2])
+        if not targetUserId then return end
+        if targetUserId == LocalPlayer.UserId then return end
+        
+        local targetPlayer = Players:GetPlayerByUserId(targetUserId)
+        if not targetPlayer or targetPlayer.Parent ~= Players then return end
+        
+        if not data or not Config.TradeUnlocked or not Config.TradeUnlocked(data) then return end
+        if (IsInTrade and IsInTrade()) or getgenv().CurrentTradeSession ~= nil then return end
+        if (IsTowerInArena and IsTowerInArena()) or (IsTowerRunning and IsTowerRunning()) then return end
+        local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if isBoss or IsEnteringBossPortal == true then return end
+        if isZoneTransitionLocked then return end
+        
+        local lastComplete = getgenv().LastTradeCompleteTime or 0
+        local elapsed = tick() - lastComplete
+        local cd = (getgenv().CFG and getgenv().CFG.TradeCooldown) or 90
+        if elapsed < math.min(10, cd) then return end
+    end
+    if action == "TradeRespond" then
+        local senderUserId = tonumber(args[2])
+        local accept = args[3]
+        if not senderUserId then return end
+        if accept == true then
+            if not data or not Config.TradeUnlocked or not Config.TradeUnlocked(data) then return end
+            if getgenv().CurrentTradeSession ~= nil or (GetTradeWindow and GetTradeWindow() ~= nil) then return end
+            if (IsTowerInArena and IsTowerInArena()) or (IsTowerRunning and IsTowerRunning()) then return end
+            local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+            if isBoss or IsEnteringBossPortal == true then return end
+            if isZoneTransitionLocked then return end
+        end
+    end
+    if action == "TradeReady" then
+        local readyState = args[2]
+        local session = getgenv().CurrentTradeSession
+        if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
+        if session and session.You then
+            if readyState == true and session.You.Ready == true then return end
+            if session.You.LockedFor and session.You.LockedFor > 0 then return end
+        end
+    end
+    if action == "TradeItem" then
+        local itemKey = args[2]
+        local count = tonumber(args[3]) or 0
+        local session = getgenv().CurrentTradeSession
+        if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
+        if not itemKey or count < 0 then return end
+        if not Config.TradeItemByKey or not Config.TradeItemByKey[itemKey] then return end
+        if count > 0 then
+            local realCount = GetRealItemCount and GetRealItemCount(itemKey) or 0
+            if realCount < count then return end
+        end
+    end
+    if action == "TradeAddPets" then
+        local petUids = args[2]
+        local session = getgenv().CurrentTradeSession
+        if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
+        if not petUids or type(petUids) ~= "table" or #petUids == 0 then return end
+        if not data or not data.Pets then return end
+        
+        local currentPetsCount = 0
+        if session and session.You and session.You.Pets then
+            for _ in pairs(session.You.Pets) do currentPetsCount = currentPetsCount + 1 end
+        end
+        if currentPetsCount + #petUids > 12 then return end
+        
+        local equipped = {}
+        for _, u in ipairs(data.Equipped or {}) do equipped[tostring(u)] = true end
+        local onExp = {}
+        for _, exp in ipairs(data.Expeditions and data.Expeditions.Active or {}) do
+            for _, u in ipairs(exp.Pets or {}) do onExp[tostring(u)] = true end
+        end
+        
+        for _, uid in ipairs(petUids) do
+            local sUid = tostring(uid)
+            local p = data.Pets[sUid]
+            if not p then return end
+            if equipped[sUid] or onExp[sUid] then return end
+            if (data.Locked and data.Locked[sUid]) or p.Locked then return end
+            local def = PetData and PetData.ById and PetData.ById[p.Id]
+            if def and (def.Limited == true or def.Rarity == "Limited") then return end
+        end
+    end
+    if action == "TradeRemovePets" then
+        local petUids = args[2]
+        local session = getgenv().CurrentTradeSession
+        if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
+        if not petUids or type(petUids) ~= "table" or #petUids == 0 then return end
+    end
+    if action == "TradeCancel" then
+        local session = getgenv().CurrentTradeSession
+        if not session and (not GetTradeWindow or not GetTradeWindow()) and not getgenv().TradeActiveSession then
+            return
+        end
     end
 
     -- ป้องกันคิวยาวเกินไปเมื่อหลาย Loop เรียกคำสั่งพร้อมกัน
@@ -4359,6 +4506,64 @@ local SliderTradeReadyDelay = Tabs.Trade:AddSlider("SlideTradeReadyDelay", {
     end
 })
 
+Tabs.Trade:AddButton({
+    Title = "⚡ ส่งคำขอเทรดทันที (1 คลิก - ปลอดภัย)",
+    Description = "ส่งคำขอเทรดไปยังผู้เล่นเป้าหมายทันที โดยผ่านระบบเช็คความพร้อมและจัดคิว",
+    Callback = function()
+        if not CFG.TradeTargetId then
+            Notify("⚠️ เลือกผู้เล่นก่อน", "กรุณาเลือกผู้เล่นที่จะเทรดด้วยจากเมนูด้านบนก่อน", 3)
+            return
+        end
+        if IsInTrade() or getgenv().TradeActiveSession then
+            Notify("⚠️ กำลังอยู่ในเซสชันเทรด", "มีเซสชันเทรดทำงานอยู่แล้วในขณะนี้", 3)
+            return
+        end
+        local targetPlayer = Players:GetPlayerByUserId(CFG.TradeTargetId)
+        if not targetPlayer then
+            Notify("⚠️ ไม่พบผู้เล่น", "ผู้เล่นเป้าหมายไม่อยู่ในเซิร์ฟเวอร์แล้ว", 3)
+            return
+        end
+        if IsTowerInArena and IsTowerInArena() then
+            Fire("TowerExit")
+            Humanizer.Wait(0.8, 1.2)
+        end
+        if IsTowerRunning and IsTowerRunning() then
+            Fire("TowerLeave")
+            LiveTower.Active = false
+            LiveTower.Starting = false
+            LiveTower.LastEventTime = 0
+            LiveTower.TowerId = nil
+            Humanizer.Wait(0.8, 1.2)
+        end
+        getgenv().TradeActiveSession = true
+        getgenv().LastTradeRequestTime = tick()
+        Fire("TradeRequest", CFG.TradeTargetId)
+        Notify("📨 ส่งคำขอเทรด", "ส่งคำขอเทรดไปยัง " .. tostring(targetPlayer.DisplayName or targetPlayer.Name) .. " แล้ว", 3)
+        task.delay(10, function()
+            if not getgenv().CurrentTradeSession and not GetTradeWindow() then
+                getgenv().TradeActiveSession = false
+                if FlushTradeDeferredQueue then FlushTradeDeferredQueue() end
+            end
+        end)
+    end
+})
+
+Tabs.Trade:AddButton({
+    Title = "❌ ยกเลิกการเทรดปัจจุบันทันที (Cancel Trade)",
+    Description = "ยกเลิกเซสชันเทรดทันที ปลดล็อคระบบ และรันคำสั่งอื่นที่เข้าคิวไว้ต่อ",
+    Callback = function()
+        pcall(function() Fire("TradeCancel") end)
+        getgenv().TradeActiveSession = false
+        getgenv().CurrentTradeSession = nil
+        getgenv().TradeItemsDropped = false
+        getgenv().ReceiverItemPut = false
+        if FlushTradeDeferredQueue then
+            FlushTradeDeferredQueue()
+        end
+        Notify("❌ ยกเลิกการเทรด", "ยกเลิกเซสชันเทรดและปลดคิวคำสั่งเรียบร้อย", 3)
+    end
+})
+
 local TradeStatusPara = Tabs.Trade:AddParagraph({
     Title = "⏳ สถานะระบบเทรดความปลอดภัย...",
     Content = "กำลังตรวจสอบสถานะการเทรด..."
@@ -4385,18 +4590,23 @@ local function UpdateTradeStatus()
             cdStatus = "🟢 พร้อมเทรดรอบถัดไป"
         end
         
+        local queueLen = (#TradeDeferredQueue)
+        local queueStatus = queueLen > 0 and string.format("📦 คิวคำสั่งรอทำหลังเทรด: %d รายการ", queueLen) or "📦 คิวคำสั่งรอทำ: ว่าง (ไม่มีคำสั่งค้าง)"
+        
+        local session = getgenv().CurrentTradeSession
+        local partnerName = session and session.Them and tostring(session.Them.Name or session.Them.UserId or "คู่เทรด") or "ไม่มี"
+        local inTradeStatus = IsInTrade() and ("🤝 กำลังเทรดกับ: " .. partnerName) or "💤 ไม่ได้อยู่ในหน้าต่างเทรด"
         local twoWayStatus = (CFG.TwoWayTrade ~= false) and "🟢 เปิดใช้งาน (Safe Two-Way)" or "🔴 ปิด (One-Way)"
-        local inTradeStatus = IsInTrade() and "🤝 กำลังอยู่ในหน้าต่างเทรด" or "💤 ไม่ได้อยู่ในหน้าต่างเทรด"
         
         SafeUpdatePara(TradeStatusPara, "🛡️ ระบบเทรดปลอดภัย: " .. cdStatus,
-            string.format("โหมด: %s\nสถานะ: %s\nระบบแลกเปลี่ยนสองทาง: %s | หน่วงเวลา Ready: %d วิ",
-            modeStr, inTradeStatus, twoWayStatus, CFG.TradeReadyDelay or 4))
+            string.format("โหมด: %s\nสถานะ: %s\n%s\nระบบแลกเปลี่ยนสองทาง: %s | หน่วงเวลา Ready: %d วิ",
+            modeStr, inTradeStatus, queueStatus, twoWayStatus, CFG.TradeReadyDelay or 4))
     end)
 end
 
 task.spawn(function()
     while true do
-        task.wait(4.0)
+        task.wait(3.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         UpdateTradeStatus()
     end
@@ -4419,14 +4629,38 @@ local function PutSafeTwoWayTradeItem()
         end
     end
     
-    -- 2. หากไม่มีน้ำยา ตรวจสอบสัตว์เลี้ยงระดับล่าง (Rank >= 7 หรือเกรด F/E/D/C) ที่ไม่ได้ล็อค
+    -- 2. หากไม่มีน้ำยา ตรวจสอบสัตว์เลี้ยงระดับล่าง (Rank >= 7 หรือเกรด F/E/D/C) ที่ไม่ได้ล็อค ปลอดภัย 100%
     if data.Pets then
+        local equipped = {}
+        for _, uid in ipairs(data.Equipped or {}) do equipped[tostring(uid)] = true end
+        
+        local towerTeam = {}
+        pcall(function()
+            local fallbackDef = (Towers and Towers.List and Towers.List[1]) or { Id = "Meadow", Element = "Nature" }
+            local tPets = (TeamPairs and TeamPairs.Best and TeamPairs.Best(data, fallbackDef, 4)) or {}
+            for _, uid in ipairs(tPets) do towerTeam[tostring(uid)] = true end
+        end)
+        
+        local onExp = {}
+        for _, exp in ipairs(data.Expeditions and data.Expeditions.Active or {}) do
+            for _, uid in ipairs(exp.Pets or {}) do onExp[tostring(uid)] = true end
+        end
+
         for uid, pet in pairs(data.Pets) do
             local sUid = tostring(uid)
-            local rank = GetPetGradeRank(pet)
-            if rank >= 7 and not IsPetGradeLocked(pet, 5) then
-                Fire("TradeAddPets", { sUid })
-                return true, "Pet_" .. tostring(pet.Id)
+            if not equipped[sUid] and not towerTeam[sUid] and not onExp[sUid] then
+                local isLocked = (data.Locked and data.Locked[sUid]) or pet.Locked
+                local def = PetData and PetData.ById and PetData.ById[pet.Id]
+                local isLimited = def and (def.Limited == true or def.Rarity == "Limited")
+                local isLowLevel = (pet.Level == nil or pet.Level <= 1) and (pet.Xp == nil or pet.Xp <= 0)
+                
+                if not isLocked and not isLimited and isLowLevel then
+                    local rank = GetPetGradeRank(pet)
+                    if rank >= 7 and not IsPetGradeLocked(pet, 5) then
+                        Fire("TradeAddPets", { sUid })
+                        return true, "Pet_" .. tostring(pet.Id)
+                    end
+                end
             end
         end
     end
@@ -4460,8 +4694,32 @@ local function RespondAcceptTrade(senderId, senderName)
     
     -- ล็อคสถานะเซสชันเทรดทันที เพื่อป้องกันหอคอยหรือลูปอื่นแทรกแซงระหว่างเริ่มเทรด
     getgenv().TradeActiveSession = true
+    getgenv().LastTradeRequestTime = now
     
     task.spawn(function()
+        -- ถ้าอยู่ใน World Boss ให้ปฏิเสธทันที
+        local inWBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if inWBoss then
+            Notify("⚠️ ปฏิเสธการเทรด", "อยู่ใน World Boss ยังไม่สามารถตอบรับคำขอเทรดได้ในขณะนี้", 3)
+            Fire("TradeRespond", senderId, false)
+            getgenv().TradeActiveSession = false
+            return
+        end
+
+        -- เคลียร์การลงหอคอย/อารีน่าอย่างปลอดภัยก่อนรับเทรด
+        if IsTowerInArena and IsTowerInArena() then
+            Fire("TowerExit")
+            Humanizer.Wait(0.8, 1.2)
+        end
+        if IsTowerRunning and IsTowerRunning() then
+            Fire("TowerLeave")
+            LiveTower.Active = false
+            LiveTower.Starting = false
+            LiveTower.LastEventTime = 0
+            LiveTower.TowerId = nil
+            Humanizer.Wait(0.8, 1.2)
+        end
+
         -- ตรวจสอบคูลดาวน์ความปลอดภัย หากเพิ่งจบการเทรดไปไม่นาน ให้รออย่างน้อย 5-10 วินาทีก่อนรับคำขอใหม่
         local lastComplete = getgenv().LastTradeCompleteTime or 0
         local elapsed = now - lastComplete
@@ -4490,10 +4748,13 @@ local function RespondAcceptTrade(senderId, senderName)
         
         Notify("🤝 ยอมรับคำขอเทรด", "ตอบรับคำขอเทรดจาก " .. tostring(senderName or "ผู้เล่น") .. " เรียบร้อย!", 3)
         
-        -- Safety timeout: หากไม่มีเซสชันเทรดเปิดขึ้นภายใน 10 วินาที ให้ปลดล็อคสถานะ
+        -- Safety timeout: หากไม่มีเซสชันเทรดเปิดขึ้นภายใน 10 วินาที ให้ปลดล็อคสถานะและระบายคิว
         task.delay(10, function()
             if not getgenv().CurrentTradeSession and not GetTradeWindow() then
                 getgenv().TradeActiveSession = false
+                if FlushTradeDeferredQueue then
+                    FlushTradeDeferredQueue()
+                end
             end
         end)
     end)
@@ -4673,6 +4934,9 @@ TradeRemote.OnClientEvent:Connect(function(event, payload)
         task.spawn(function()
             Humanizer.Wait(2.0, 3.5)
             getgenv().TradeActiveSession = false
+            if FlushTradeDeferredQueue then
+                FlushTradeDeferredQueue()
+            end
         end)
         local statusMsg = (payload == "TRADE COMPLETE!" or payload == true) and "เทรดสำเร็จเรียบร้อย!" or ("เซสชันเทรดสิ้นสุด (" .. tostring(payload or "Closed") .. ")")
         Notify("🤝 ระบบเทรด", statusMsg .. string.format(" | เริ่มพักคูลดาวน์ความปลอดภัย %d วินาที (ป้องกัน Mule Flag)", CFG.TradeCooldown or 90), 4)
@@ -5228,6 +5492,22 @@ task.spawn(function()
         if isZoneTransitionLocked and (nowTick - LastZoneTransitionTime > 8.0) then
             isZoneTransitionLocked = false
         end
+
+        -- 4. Trade Session Watchdog (15s timeout if TradeActiveSession is stuck without window or session)
+        if getgenv().TradeActiveSession then
+            local hasSession = (getgenv().CurrentTradeSession ~= nil)
+            local hasWindow = (GetTradeWindow and GetTradeWindow() ~= nil)
+            if not hasSession and not hasWindow then
+                local reqTime = getgenv().LastTradeRequestTime or 0
+                if reqTime > 0 and (nowTick - reqTime > 15.0) then
+                    getgenv().TradeActiveSession = false
+                    getgenv().LastTradeRequestTime = 0
+                    if FlushTradeDeferredQueue then
+                        FlushTradeDeferredQueue()
+                    end
+                end
+            end
+        end
     end
 end)
 
@@ -5262,10 +5542,28 @@ task.spawn(function()
                 
                 if elapsed >= cd then
                     CircuitBreaker.Execute("TradeSender", function()
+                        local inWBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+                        if inWBoss then return end
+                        
                         local targetPlayer = Players:GetPlayerByUserId(CFG.TradeTargetId)
                         if targetPlayer and targetPlayer.Parent == Players then
+                            -- เคลียร์การลงหอคอย/อารีน่าอย่างปลอดภัยก่อนส่งคำขอเทรด
+                            if IsTowerInArena and IsTowerInArena() then
+                                Fire("TowerExit")
+                                Humanizer.Wait(0.8, 1.2)
+                            end
+                            if IsTowerRunning and IsTowerRunning() then
+                                Fire("TowerLeave")
+                                LiveTower.Active = false
+                                LiveTower.Starting = false
+                                LiveTower.LastEventTime = 0
+                                LiveTower.TowerId = nil
+                                Humanizer.Wait(0.8, 1.2)
+                            end
+                            
                             -- ล็อค TradeActiveSession ทันที เพื่อป้องกันหอคอยหรือลูปอื่นแทรกแซงระหว่างส่งคำขอ
                             getgenv().TradeActiveSession = true
+                            getgenv().LastTradeRequestTime = tick()
                             Fire("TradeRequest", CFG.TradeTargetId)
                             Notify("📨 ส่งคำขอเทรด", "ส่งคำขอเทรดไปยัง " .. tostring(targetPlayer.DisplayName or targetPlayer.Name) .. " แล้ว", 3)
                             Humanizer.Wait(3.5, 5.0)
@@ -5273,6 +5571,7 @@ task.spawn(function()
                             task.delay(10, function()
                                 if not getgenv().CurrentTradeSession and not GetTradeWindow() then
                                     getgenv().TradeActiveSession = false
+                                    if FlushTradeDeferredQueue then FlushTradeDeferredQueue() end
                                 end
                             end)
                         end
@@ -5336,10 +5635,13 @@ task.spawn(function()
                     for _, itemKey in ipairs(itemsToDrop) do
                         if not IsInTrade() then break end
                         local realCount = GetRealItemCount(itemKey)
-                        if realCount > 0 then
+                        local curSession = getgenv().CurrentTradeSession
+                        local curYou = curSession and curSession.You
+                        local alreadyInTrade = (curYou and curYou.Items and curYou.Items[itemKey]) or 0
+                        if realCount > 0 and alreadyInTrade < realCount then
                             Fire("TradeItem", itemKey, realCount)
                             droppedCount = droppedCount + 1
-                            Humanizer.Wait(0.35, 0.65)
+                            Humanizer.Wait(0.40, 0.70)
                         end
                     end
                     getgenv().TradeItemsDropped = true
