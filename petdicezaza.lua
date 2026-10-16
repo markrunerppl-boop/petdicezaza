@@ -145,9 +145,14 @@ pcall(function()
         pcall(function() getgenv().PetDiceErrorConn:Disconnect() end)
         getgenv().PetDiceErrorConn = nil
     end
+    if getgenv().PetDiceOverlayConn then
+        pcall(function() getgenv().PetDiceOverlayConn:Disconnect() end)
+        getgenv().PetDiceOverlayConn = nil
+    end
     
+    local isReconnecting = false
     local function HandleReconnect(errorMsg)
-        if not errorMsg or errorMsg == "" then return end
+        if not errorMsg or errorMsg == "" or isReconnecting then return end
         
         -- ตรวจสอบความปลอดภัยสูงสุด: หากกำลังติดคำสั่งแบน Error 600 หรือ Cloud Halt ห้าม Rejoin เด็ดขาด
         if getgenv().EmergencyKickLockout or getgenv().EmergencyCloudHalt then
@@ -156,19 +161,17 @@ pcall(function()
         
         local msgLower = tostring(errorMsg):lower()
         -- กรองเฉพาะข้อผิดพลาดประเภทเน็ตหลุด / เซิร์ฟเวอร์ปิดปรับปรุง / การตัดการเชื่อมต่อทั่วไป
-        local isSafeToReconnect = msgLower:find("shut down") 
-            or msgLower:find("reconnect") 
-            or msgLower:find("connection lost") 
+        local isSafeToReconnect = msgLower:find("server shut down") 
+            or msgLower:find("please reconnect") 
             or msgLower:find("lost connection") 
-            or msgLower:find("disconnected") 
-            or msgLower:find("timed out") 
+            or msgLower:find("connection timed out") 
             or msgLower:find("277") 
             or msgLower:find("279") 
             or msgLower:find("260") 
             or msgLower:find("284")
-            or msgLower:find("teleport failed")
             
         if isSafeToReconnect then
+            isReconnecting = true
             task.spawn(function()
                 -- หน่วงเวลาสุ่ม 15-25 วินาที เพื่อรอให้เซิร์ฟเวอร์ใหม่เปิดพร้อมใช้งาน
                 task.wait(math.random(15, 25))
@@ -189,7 +192,7 @@ pcall(function()
     local promptGui = CoreGui:FindFirstChild("RobloxPromptGui")
     local promptOverlay = promptGui and promptGui:FindFirstChild("promptOverlay")
     if promptOverlay then
-        promptOverlay.ChildAdded:Connect(function(child)
+        getgenv().PetDiceOverlayConn = promptOverlay.ChildAdded:Connect(function(child)
             task.wait(2.0)
             local title = child:FindFirstChild("TitleFrame") and child.TitleFrame:FindFirstChild("ErrorTitle")
             local text = child:FindFirstChild("MessageArea") and child.MessageArea:FindFirstChild("ErrorText")
@@ -1722,6 +1725,24 @@ Tabs.Overview:AddButton({
     end
 })
 
+local ParagraphCache = {}
+local function SafeUpdatePara(para, title, desc)
+    if not para then return end
+    local cache = ParagraphCache[para]
+    if not cache then
+        cache = { title = "", desc = "" }
+        ParagraphCache[para] = cache
+    end
+    if cache.title ~= title then
+        cache.title = title
+        pcall(function() para:SetTitle(title) end)
+    end
+    if cache.desc ~= desc then
+        cache.desc = desc
+        pcall(function() para:SetDesc(desc) end)
+    end
+end
+
 local function UpdateOverviewTab()
     pcall(function()
         local data = State.Data
@@ -1736,22 +1757,32 @@ local function UpdateOverviewTab()
         local totalPets = 0
         if data.Pets then for _ in pairs(data.Pets) do totalPets = totalPets + 1 end end
         
-        OverviewStats:SetTitle(string.format("💰 เงิน: %s | 💎 เพชร: %s | 🔮 ชาร์ด: %s", moneyStr, gemsStr, shardsStr))
-        OverviewStats:SetDesc(string.format("🏰 หอคอยชั้น: %d | 🐾 สัตว์เลี้ยงทั้งหมด: %d ตัว | 🍬 ลูกอม: %s", towerFloor, totalPets, candyStr))
+        SafeUpdatePara(OverviewStats, 
+            string.format("💰 เงิน: %s | 💎 เพชร: %s | 🔮 ชาร์ด: %s", moneyStr, gemsStr, shardsStr),
+            string.format("🏰 หอคอยชั้น: %d | 🐾 สัตว์เลี้ยงทั้งหมด: %d ตัว | 🍬 ลูกอม: %s", towerFloor, totalPets, candyStr)
+        )
         
         if SecurityStatusPara then
             if getgenv().EmergencyPatchHalt then
-                SecurityStatusPara:SetTitle("🚨 ตรวจพบเกมอัปเดตแพทช์ใหม่! (หยุดทำงานอัตโนมัติ)")
-                SecurityStatusPara:SetDesc(string.format("Game Version: v%d (เกณฑ์ทดสอบ v%d)\nระบบสั่งหยุดทำงาน 100%% เพื่อความปลอดภัยจากการแบน Error 600", game.PlaceVersion, VERIFIED_GAME_PLACE_VERSION))
+                SafeUpdatePara(SecurityStatusPara,
+                    "🚨 ตรวจพบเกมอัปเดตแพทช์ใหม่! (หยุดทำงานอัตโนมัติ)",
+                    string.format("Game Version: v%d (เกณฑ์ทดสอบ v%d)\nระบบสั่งหยุดทำงาน 100%% เพื่อความปลอดภัยจากการแบน Error 600", game.PlaceVersion, VERIFIED_GAME_PLACE_VERSION)
+                )
             elseif getgenv().EmergencyCloudHalt then
-                SecurityStatusPara:SetTitle("🛑 ผู้พัฒนาสั่งระงับสคริปต์ฉุกเฉิน (Cloud Kill-Switch)")
-                SecurityStatusPara:SetDesc(getgenv().SecurityStatusMessage or "ระบบหยุดทำงานชั่วคราวเพื่อความปลอดภัย")
+                SafeUpdatePara(SecurityStatusPara,
+                    "🛑 ผู้พัฒนาสั่งระงับสคริปต์ฉุกเฉิน (Cloud Kill-Switch)",
+                    getgenv().SecurityStatusMessage or "ระบบหยุดทำงานชั่วคราวเพื่อความปลอดภัย"
+                )
             elseif getgenv().EmergencyKickLockout then
-                SecurityStatusPara:SetTitle("🔒 ล็อกดาวน์ความปลอดภัยฉุกเฉิน (Anti-Ban Lockout)")
-                SecurityStatusPara:SetDesc("ถูกเตะติดต่อกันเกิน 2 ครั้ง ระบบสั่งพัก 30 นาทีเพื่อป้องกันแบนถาวร")
+                SafeUpdatePara(SecurityStatusPara,
+                    "🔒 ล็อกดาวน์ความปลอดภัยฉุกเฉิน (Anti-Ban Lockout)",
+                    "ถูกเตะติดต่อกันเกิน 2 ครั้ง ระบบสั่งพัก 30 นาทีเพื่อป้องกันแบนถาวร"
+                )
             else
-                SecurityStatusPara:SetTitle(string.format("🛡️ ความปลอดภัย: ปลอดภัย 100%% (Game Patch v%d)", game.PlaceVersion))
-                SecurityStatusPara:SetDesc(string.format("🎮 Game Version: v%d (ตรงตามเกณฑ์ทดสอบ) | ปลอดภัย\n🌐 Cloud Kill-Switch: ปกติ (Operational)\n🔒 Anti-Ban Protection: พร้อมทำงาน (ป้องกัน Error 267 / 600)", game.PlaceVersion))
+                SafeUpdatePara(SecurityStatusPara,
+                    string.format("🛡️ ความปลอดภัย: ปลอดภัย 100%% (Game Patch v%d)", game.PlaceVersion),
+                    string.format("🎮 Game Version: v%d (ตรงตามเกณฑ์ทดสอบ) | ปลอดภัย\n🌐 Cloud Kill-Switch: ปกติ (Operational)\n🔒 Anti-Ban Protection: พร้อมทำงาน (ป้องกัน Error 267 / 600)", game.PlaceVersion)
+                )
             end
         end
         
@@ -1763,8 +1794,10 @@ local function UpdateOverviewTab()
             if isAutoSellingActive then
                 statusText = "🟡 กำลังดำเนินการขาย..."
             end
-            AutoSellStatusPara:SetTitle(string.format("📊 สถานะ: %s | มีทั้งหมด: %s ตัว | เป้าหมายเก็บไว้: %s ตัว", statusText, Format.Commas(totalPets), Format.Commas(targetK)))
-            AutoSellStatusPara:SetDesc(string.format("ส่วนเกินที่จะขาย: %s ตัว (เรียงจากค่าพลัง Base สูงสุดลงไป | สัตว์เลี้ยงที่สวมใส่และล็อคจะได้รับการปกป้อง 100%%)", Format.Commas(excess)))
+            SafeUpdatePara(AutoSellStatusPara,
+                string.format("📊 สถานะ: %s | มีทั้งหมด: %s ตัว | เป้าหมายเก็บไว้: %s ตัว", statusText, Format.Commas(totalPets), Format.Commas(targetK)),
+                string.format("ส่วนเกินที่จะขาย: %s ตัว (เรียงจากค่าพลัง Base สูงสุดลงไป | สัตว์เลี้ยงที่สวมใส่และล็อคจะได้รับการปกป้อง 100%%)", Format.Commas(excess))
+            )
         end
         
         -- Update Best Pets
@@ -1802,15 +1835,21 @@ local function UpdateOverviewTab()
                     end
                     local tagStr = #statusTags > 0 and (" [" .. table.concat(statusTags, ", ") .. "]") or ""
                     
-                    PetCardParagraphs[i]:SetTitle(string.format("⭐ #%d: %s %s", i, pet.Id, tagStr))
-                    PetCardParagraphs[i]:SetDesc(string.format("รายได้ฐาน: %s/s | เลเวล: %d/%d | เกรด: %s | บัฟ: %s", baseStr, lvl, targetLvl, gName, tName))
+                    SafeUpdatePara(PetCardParagraphs[i],
+                        string.format("⭐ #%d: %s %s", i, pet.Id, tagStr),
+                        string.format("รายได้ฐาน: %s/s | เลเวล: %d/%d | เกรด: %s | บัฟ: %s", baseStr, lvl, targetLvl, gName, tName)
+                    )
                 else
-                    PetCardParagraphs[i]:SetTitle(string.format("💤 #%d: ไม่มีข้อมูลสัตว์เลี้ยง", i))
-                    PetCardParagraphs[i]:SetDesc("ยังไม่มีสัตว์เลี้ยงในตำแหน่งนี้")
+                    SafeUpdatePara(PetCardParagraphs[i],
+                        string.format("💤 #%d: ไม่มีข้อมูลสัตว์เลี้ยง", i),
+                        "ยังไม่มีสัตว์เลี้ยงในตำแหน่งนี้"
+                    )
                 end
             else
-                PetCardParagraphs[i]:SetTitle(string.format("➖ #%d: ปิดการทำงาน", i))
-                PetCardParagraphs[i]:SetDesc(string.format("เลือกทำ %d ตัวแรก (ปรับเพิ่มได้ในแท็บอัปเกรด)", count))
+                SafeUpdatePara(PetCardParagraphs[i],
+                    string.format("➖ #%d: ปิดการทำงาน", i),
+                    string.format("เลือกทำ %d ตัวแรก (ปรับเพิ่มได้ในแท็บอัปเกรด)", count)
+                )
             end
         end
     end)
@@ -1819,7 +1858,7 @@ end
 task.spawn(UpdateOverviewTab)
 task.spawn(function()
     while true do
-        task.wait(2.0)
+        task.wait(5.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         UpdateOverviewTab()
     end
@@ -3044,8 +3083,7 @@ local function UpdateTowerStatus()
         local desc = string.format("🏰 หอคอยเป้าหมาย: [%s]\n🏆 สถิติสูงสุด (%s): ชั้น %d\n⚙️ ออโต้หอคอย: %s | 🚪 ออกอารีน่า: %s | 🎲 ทอยเต๋า: %s",
             tName, tName, bestFloor, autoTower, autoExit, autoDice)
             
-        TowerStatusPara:SetTitle(statusText)
-        TowerStatusPara:SetDesc(desc)
+        SafeUpdatePara(TowerStatusPara, statusText, desc)
         
         -- อัปเดตสถานะบอสโลก (World Boss Status)
         local wbState = RS:GetAttribute("WorldBossState") or "Idle"
@@ -3096,15 +3134,14 @@ local function UpdateTowerStatus()
             pauseStatus
         )
         
-        BossStatusPara:SetTitle(bossTitle)
-        BossStatusPara:SetDesc(bossDesc)
+        SafeUpdatePara(BossStatusPara, bossTitle, bossDesc)
     end)
 end
 
 task.spawn(UpdateTowerStatus)
 task.spawn(function()
     while true do
-        task.wait(1.0)
+        task.wait(4.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         UpdateTowerStatus()
     end
@@ -3637,15 +3674,7 @@ local function UpdatePotionStatus()
             lootBags, halloweenBags
         )
         
-        local title = "🧪 สถานะน้ำยา & ไอเทมปัจจุบัน (นับถอยหลังวินาที)"
-        local okT = pcall(function() PotionStatusPara:SetTitle(title) end)
-        if not okT and PotionStatusPara and PotionStatusPara.TitleLabel then
-            pcall(function() PotionStatusPara.TitleLabel.Text = title end)
-        end
-        local okD = pcall(function() PotionStatusPara:SetDesc(desc) end)
-        if not okD and PotionStatusPara and PotionStatusPara.DescLabel then
-            pcall(function() PotionStatusPara.DescLabel.Text = desc end)
-        end
+        SafeUpdatePara(PotionStatusPara, "🧪 สถานะน้ำยา & ไอเทมปัจจุบัน (นับถอยหลังวินาที)", desc)
     end)
 end
 
@@ -3678,15 +3707,7 @@ local function UpdateMarketStatus()
             unlockStr, restockStr, canBuyCount or 0, totalLeft or 0, costStr, moneyStr
         )
         
-        local title = "🛒 ข้อมูลตลาดสดและเวลารีสต็อก (Market Realtime)"
-        local okT = pcall(function() MarketStatusPara:SetTitle(title) end)
-        if not okT and MarketStatusPara and MarketStatusPara.TitleLabel then
-            pcall(function() MarketStatusPara.TitleLabel.Text = title end)
-        end
-        local okD = pcall(function() MarketStatusPara:SetDesc(desc) end)
-        if not okD and MarketStatusPara and MarketStatusPara.DescLabel then
-            pcall(function() MarketStatusPara.DescLabel.Text = desc end)
-        end
+        SafeUpdatePara(MarketStatusPara, "🛒 ข้อมูลตลาดสดและเวลารีสต็อก (Market Realtime)", desc)
     end)
 end
 
@@ -3694,7 +3715,7 @@ task.spawn(UpdatePotionStatus)
 task.spawn(UpdateMarketStatus)
 task.spawn(function()
     while true do
-        task.wait(1.0)
+        task.wait(5.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         pcall(UpdatePotionStatus)
         pcall(UpdateMarketStatus)
@@ -4247,21 +4268,14 @@ local function UpdateHalloweenStatus()
             coordStatusStr
         )
         
-        local okTitle = pcall(function() HalloweenStatusPara:SetTitle(title) end)
-        if not okTitle and HalloweenStatusPara and HalloweenStatusPara.TitleLabel then
-            pcall(function() HalloweenStatusPara.TitleLabel.Text = title end)
-        end
-        local okDesc = pcall(function() HalloweenStatusPara:SetDesc(desc) end)
-        if not okDesc and HalloweenStatusPara and HalloweenStatusPara.DescLabel then
-            pcall(function() HalloweenStatusPara.DescLabel.Text = desc end)
-        end
+        SafeUpdatePara(HalloweenStatusPara, title, desc)
     end)
 end
 
 task.spawn(UpdateHalloweenStatus)
 task.spawn(function()
     while true do
-        task.wait(1.0)
+        task.wait(5.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         pcall(UpdateHalloweenStatus)
     end
@@ -4946,15 +4960,15 @@ local function UpdateTradeStatus()
         local twoWayStatus = (CFG.TwoWayTrade ~= false) and "🟢 เปิดใช้งาน (Safe Two-Way)" or "🔴 ปิด (One-Way)"
         local inTradeStatus = IsInTrade() and "🤝 กำลังอยู่ในหน้าต่างเทรด" or "💤 ไม่ได้อยู่ในหน้าต่างเทรด"
         
-        TradeStatusPara:SetTitle("🛡️ ระบบเทรดปลอดภัย: " .. cdStatus)
-        TradeStatusPara:SetDesc(string.format("โหมด: %s\nสถานะ: %s\nระบบแลกเปลี่ยนสองทาง: %s | หน่วงเวลา Ready: %d วิ",
+        SafeUpdatePara(TradeStatusPara, "🛡️ ระบบเทรดปลอดภัย: " .. cdStatus,
+            string.format("โหมด: %s\nสถานะ: %s\nระบบแลกเปลี่ยนสองทาง: %s | หน่วงเวลา Ready: %d วิ",
             modeStr, inTradeStatus, twoWayStatus, CFG.TradeReadyDelay or 4))
     end)
 end
 
 task.spawn(function()
     while true do
-        task.wait(1.0)
+        task.wait(4.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         UpdateTradeStatus()
     end
