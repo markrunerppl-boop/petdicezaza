@@ -1889,7 +1889,10 @@ local defaultCFG = {
     AutoOpenLootBags = false,
     AutoSellPets = false,
     KeepTopPetsCount = 100,
-    AutoBuyMarket = false
+    AutoBuyMarket = false,
+    DiscordWebhookUrl = "",
+    DiscordAutoNotify = false,
+    DiscordNotifyInterval = 30
 }
 
 getgenv().CFG = getgenv().CFG or {}
@@ -2084,7 +2087,8 @@ local Tabs = {
     Expedition = Window:AddTab({ Title = "ผจญภัย & เควส", Icon = "compass" }),
     Halloween  = Window:AddTab({ Title = "อีเวนต์ฮาโลวีน", Icon = "ghost" }),
     Trade      = Window:AddTab({ Title = "ระบบเทรดปลอดภัย", Icon = "arrow-left-right" }),
-    Settings   = Window:AddTab({ Title = "ความปลอดภัย & ตั้งค่า", Icon = "shield" })
+    Settings   = Window:AddTab({ Title = "ความปลอดภัย & ตั้งค่า", Icon = "shield" }),
+    Discord    = Window:AddTab({ Title = "แจ้งเตือน Discord", Icon = "bell" })
 }
 
 -- ------------------------------------------------------------------------------
@@ -6021,6 +6025,272 @@ Tabs.Settings:AddButton({
     end
 })
 
+-- ==============================================================================
+-- 🔔 TAB 10: DISCORD WEBHOOK INVENTORY & STATS NOTIFICATION
+-- ==============================================================================
+local lastDiscordNotifyTick = 0
+
+local function SendDiscordInventoryReport(isManual)
+    local webhookUrl = tostring(CFG.DiscordWebhookUrl or ""):gsub("^%s*(.-)%s*$", "%1")
+    if webhookUrl == "" or not (webhookUrl:find("^https://discord%.com/api/webhooks/") or webhookUrl:find("^https://discordapp%.com/api/webhooks/")) then
+        if isManual then
+            Notify("⚠️ Discord Webhook", "กรุณากรอก Discord Webhook URL ให้ถูกต้องก่อนส่งข้อมูล!\n(ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/...)", 5)
+        end
+        return false, "Invalid Webhook URL"
+    end
+    
+    local now = tick()
+    if isManual and (now - lastDiscordNotifyTick < 10) then
+        Notify("⏳ กรุณารอสักครู่", string.format("ระบบจำกัดความถี่เพื่อป้องกัน Discord Rate Limit (รออีก %.0f วินาที)", 10 - (now - lastDiscordNotifyTick)), 3)
+        return false, "Cooldown"
+    end
+    
+    local req = (syn and syn.request) or request or http_request or (http and http.request)
+    if not req then
+        if isManual then
+            Notify("❌ ไม่รองรับ HTTP", "Executor ของคุณไม่รองรับฟังก์ชันส่ง HTTP Request ภายนอก", 4)
+        end
+        return false, "No HTTP Support"
+    end
+    
+    local data = State.Data
+    if not data then
+        if isManual then
+            Notify("⚠️ ข้อผิดพลาด", "ไม่พบข้อมูลตัวละคร กำลังรอการเชื่อมต่อข้อมูล...", 3)
+        end
+        return false, "No Data"
+    end
+    
+    local lp = LocalPlayer
+    local headshotUrl = string.format("https://www.roblox.com/headshot-thumbnail/image?userId=%d&width=420&height=420&format=png", lp.UserId)
+    local avatarUrl = string.format("https://www.roblox.com/avatar-thumbnail/image?userId=%d&width=420&height=420&format=png", lp.UserId)
+    
+    local function fmtNum(n)
+        if not n then return "0" end
+        n = tonumber(n) or 0
+        if n >= 1e12 then return string.format("%.2fT", n / 1e12)
+        elseif n >= 1e9 then return string.format("%.2fB", n / 1e9)
+        elseif n >= 1e6 then return string.format("%.2fM", n / 1e6)
+        elseif n >= 1e3 then return string.format("%.2fK", n / 1e3)
+        else return tostring(math.floor(n)) end
+    end
+
+    local function fmtComma(n)
+        local s = tostring(math.floor(tonumber(n) or 0))
+        return s:reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", "")
+    end
+    
+    local playHours = math.floor((data.PlaySeconds or 0) / 3600)
+    local playMins = math.floor(((data.PlaySeconds or 0) % 3600) / 60)
+    
+    local fields = {}
+    
+    -- 1. ผู้เล่น & บัญชี
+    table.insert(fields, {
+        name = "👤 ข้อมูลผู้เล่น & บัญชี (Account Info)",
+        value = string.format("• **ชื่อ:** `%s` (`%s`)\n• **เกิดใหม่ (Rebirth):** `%s`\n• **สุ่มไปแล้ว:** `%s ครั้ง`\n• **เวลาเล่นทั้งหมด:** `%d ชม. %d นาที`",
+            lp.DisplayName, lp.Name, tostring(data.Rebirth or data.Rebirths or 0), fmtComma(data.Rolls or 0), playHours, playMins),
+        inline = false
+    })
+    
+    -- 2. สถานะการเงิน & ความคืบหน้า
+    local towerFloor = (data.TowerResume and data.TowerResume.Floor) or (data.TowerBest and data.TowerBest.Infinity) or 0
+    table.insert(fields, {
+        name = "💰 สถานะการเงิน & ความคืบหน้า (Currencies)",
+        value = string.format("• **เงิน (Money):** `$%s`\n• **เพชร (Gems):** `%s`\n• **ชาร์ด (Shards):** `%s`\n• **หอคอยสูงสุด:** `ชั้น %d (Infinity)`",
+            fmtNum(data.Money), fmtComma(data.Gems), fmtComma(data.Shards or data.ShardsU), towerFloor),
+        inline = true
+    })
+    
+    -- 3. อีเวนต์ฮาโลวีน
+    local halEntry = data.Seasons and (data.Seasons.Halloween2026 or data.Seasons.Halloween)
+    local candyCount = halEntry and (halEntry.Candy or 0) or 0
+    local stormCandyCount = halEntry and (halEntry.StormCandy or (halEntry.Stats and halEntry.Stats.StormCandy) or 0) or 0
+    local halBags = (data.SeasonBags and data.SeasonBags.Halloween) or 0
+    table.insert(fields, {
+        name = "🎃 อีเวนต์ฮาโลวีน (Halloween Event)",
+        value = string.format("• **ลูกอม (Candy):** `%s ลูก`\n• **ลูกอมพายุสะสม:** `%s ลูก`\n• **ถุงสุ่มฮาโลวีน:** `%s ถุง`\n• **ซื้อถุงสุ่มไปแล้ว:** `%d ครั้ง`",
+            fmtComma(candyCount), fmtComma(stormCandyCount), fmtComma(halBags), (halEntry and halEntry.Bought and halEntry.Bought.HalloweenBag10 or 0)),
+        inline = true
+    })
+    
+    -- 4. ขวดยาบัฟ & ถุงสุ่ม
+    local pots = data.Potions or {}
+    local geods = data.Geodes or {}
+    local totalGeodes = 0
+    for _, c in pairs(geods) do totalGeodes = totalGeodes + (tonumber(c) or 0) end
+    table.insert(fields, {
+        name = "🧪 ขวดยาบัฟ & ถุงสุ่ม (Items & Potions)",
+        value = string.format("• **Luck Potion:** `%s ขวด`\n• **Speed Potion:** `%s ขวด`\n• **Cash Potion:** `%s ขวด`\n• **Geodes ทั้งหมด:** `%s ก้อน`",
+            fmtComma(pots.Luck or 0), fmtComma(pots.Speed or 0), fmtComma(pots.Cash or 0), fmtComma(totalGeodes)),
+        inline = true
+    })
+    
+    -- 5. ลูกเต๋าที่ครอบครอง
+    local diceList = {}
+    if data.OwnedDice then
+        for diceName, owned in pairs(data.OwnedDice) do
+            if owned then table.insert(diceList, "`" .. tostring(diceName) .. "`") end
+        end
+    end
+    table.insert(fields, {
+        name = string.format("🎲 ลูกเต๋าที่ครอบครอง (%d แบบ)", #diceList),
+        value = string.format("• **กำลังใช้งาน:** `%s`\n• **คอลเลกชัน:** %s",
+            tostring(data.Dice or "Basic"), table.concat(diceList, ", ")),
+        inline = false
+    })
+    
+    -- 6. สัตว์เลี้ยงที่สวมใส่
+    local totalPets = 0
+    if data.Pets then for _ in pairs(data.Pets) do totalPets = totalPets + 1 end end
+    
+    local eqList = {}
+    if data.EquippedPets and data.Pets then
+        for idx, uid in ipairs(data.EquippedPets) do
+            local p = data.Pets[tostring(uid)] or data.Pets[uid]
+            if p then
+                local info = string.format("**#%d %s**", idx, tostring(p.Id or "Pet"))
+                if p.G then info = info .. string.format(" | เกรด: `%s`", tostring(p.G)) end
+                if p.T then info = info .. string.format(" | ทักษะ: `%s`", tostring(p.T)) end
+                if p.M then info = info .. string.format(" | มิวเทชั่น: `%s`", tostring(p.M)) end
+                table.insert(eqList, info)
+            end
+        end
+    end
+    
+    table.insert(fields, {
+        name = string.format("🐾 สัตว์เลี้ยงที่สวมใส่ (Equipped - ในคลังทั้งหมด %s ตัว)", fmtComma(totalPets)),
+        value = #eqList > 0 and table.concat(eqList, "\n") or "ไม่มีสัตว์เลี้ยงที่สวมใส่",
+        inline = false
+    })
+    
+    local payload = {
+        username = "Pet Dice Pro Master Tracker",
+        avatar_url = headshotUrl,
+        embeds = {
+            {
+                title = "🎒 สรุปคลังไอเทมและข้อมูลตัวละคร (Inventory & Character Report)",
+                description = string.format("รายงานสถานะไอเทมในตัวละครของ **%s** ประจำเวลา `%s`", lp.DisplayName, os.date("!%Y-%m-%d %H:%M:%S UTC")),
+                color = 16744216,
+                author = {
+                    name = string.format("Pet Dice Tracker • %s", lp.Name),
+                    icon_url = headshotUrl
+                },
+                thumbnail = {
+                    url = headshotUrl
+                },
+                image = {
+                    url = avatarUrl
+                },
+                fields = fields,
+                footer = {
+                    text = "Pet Dice Pro Farm Master Safe Edition • Real-Time Inventory Notifier",
+                    icon_url = headshotUrl
+                },
+                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+            }
+        }
+    }
+    
+    lastDiscordNotifyTick = tick()
+    if isManual then
+        Notify("📨 กำลังส่งข้อมูล...", "กำลังเชื่อมต่อไปยัง Discord Webhook...", 2)
+    end
+    
+    task.spawn(function()
+        local ok, res = pcall(function()
+            return req({
+                Url = webhookUrl,
+                Method = "POST",
+                Headers = {
+                    ["Content-Type"] = "application/json"
+                },
+                Body = HS:JSONEncode(payload)
+            })
+        end)
+        
+        if ok and res and (res.StatusCode == 200 or res.StatusCode == 204) then
+            if isManual then
+                Notify("✅ ส่งสำเร็จ!", "ส่งสรุปคลังไอเทมและของในตัวเข้า Discord เรียบร้อยแล้ว 📨", 4)
+            end
+        elseif ok and res and res.StatusCode == 429 then
+            if isManual then
+                Notify("⏳ ติด Rate Limit", "Discord ขอให้ชะลอการส่ง กรุณารอ 1-2 นาที", 4)
+            end
+        else
+            local errCode = (res and res.StatusCode) or "Error"
+            if isManual then
+                Notify("❌ ส่งไม่สำเร็จ", "เกิดข้อผิดพลาดในการส่งเข้า Discord (HTTP " .. tostring(errCode) .. ")", 4)
+            end
+        end
+    end)
+    return true
+end
+
+-- UI Controls for Tabs.Discord
+Tabs.Discord:AddSection("🔔 ตั้งค่าระบบแจ้งเตือน Discord Webhook")
+
+Tabs.Discord:AddParagraph({
+    Title = "ℹ️ คำแนะนำการใช้งาน",
+    Content = "นำลิงก์ Webhook จากห้องแชทใน Discord ของคุณมาใส่ในช่องด้านล่าง เพื่อรับการแจ้งเตือนสรุปไอเทม เงิน สัตว์เลี้ยง และลูกอมฮาโลวีนทั้งหมดแบบเป็นหมวดหมู่ พร้อมรูปภาพประกอบตัวละครของคุณอย่างสวยงาม"
+})
+
+Tabs.Discord:AddInput("InputDiscordWebhook", {
+    Title = "🔗 Discord Webhook URL",
+    Default = CFG.DiscordWebhookUrl or "",
+    Placeholder = "https://discord.com/api/webhooks/...",
+    Finished = true,
+    Callback = function(val)
+        local trimmed = tostring(val or ""):gsub("^%s*(.-)%s*$", "%1")
+        UpdateCFG("DiscordWebhookUrl", trimmed)
+        if trimmed ~= "" then
+            if trimmed:find("^https://discord%.com/api/webhooks/") or trimmed:find("^https://discordapp%.com/api/webhooks/") then
+                Notify("✅ บันทึก Webhook", "บันทึก Discord Webhook URL สำเร็จ!", 3)
+            else
+                Notify("⚠️ ลิงก์ไม่ถูกต้อง", "ลิงก์ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/...", 4)
+            end
+        end
+    end
+})
+
+Tabs.Discord:AddToggle("TogDiscordAutoNotify", {
+    Title = "⏰ เปิดแจ้งเตือนอัตโนมัติตามรอบเวลา (Auto Notify)",
+    Description = "ส่งรายงานสถานะคลังไอเทมและของในตัวเข้า Discord อัตโนมัติในพื้นหลังโดยไม่รบกวนการเล่นหรือการฟาร์ม",
+    Default = CFG.DiscordAutoNotify,
+    Callback = function(val)
+        UpdateCFG("DiscordAutoNotify", val)
+    end
+})
+
+Tabs.Discord:AddSlider("SlideDiscordInterval", {
+    Title = "⏱️ ความถี่ในการแจ้งเตือนอัตโนมัติ (นาที)",
+    Description = "ระยะเวลาระหว่างการส่งรายงานแต่ละรอบ (แนะนำ 30-60 นาที เพื่อความปลอดภัย)",
+    Default = CFG.DiscordNotifyInterval or 30,
+    Min = 5,
+    Max = 180,
+    Rounding = 0,
+    Callback = function(val)
+        UpdateCFG("DiscordNotifyInterval", val)
+    end
+})
+
+Tabs.Discord:AddSection("🚀 ส่งข้อมูลทันที (Manual Trigger)")
+
+Tabs.Discord:AddButton({
+    Title = "📤 ส่งสรุปกระเป๋าและของในตัวเข้า Discord เดี๋ยวนี้ (Send Now)",
+    Description = "ดึงข้อมูลเงิน, เพชร, สัตว์เลี้ยง, ขวดยา, ลูกเต๋า และอีเวนต์ฮาโลวีน พร้อมรูปภาพส่งเข้าห้อง Discord ทันที",
+    Callback = function()
+        SendDiscordInventoryReport(true)
+    end
+})
+
+Tabs.Discord:AddSection("📋 รายละเอียดหัวข้อที่จะได้รับใน Discord")
+
+Tabs.Discord:AddParagraph({
+    Title = "🖼️ ข้อมูลใน Embed ที่จัดหมวดหมู่อย่างเป็นระเบียบ",
+    Content = "• 👤 ข้อมูลผู้เล่น & บัญชี (ชื่อ, Rebirth, ยอดสุ่ม, เวลาเล่น)\n• 💰 สถานะการเงิน & ค่าเงิน (เงิน, เพชร, ชาร์ด, หอคอยสูงสุด)\n• 🎃 อีเวนต์ฮาโลวีน (ลูกอม, ลูกอมพายุสะสม, ถุงสุ่มในตัว, ประวัติซื้อ)\n• 🧪 ขวดยาบัฟ & ถุงสุ่ม (Luck, Speed, Cash Potions, Geodes)\n• 🎲 ลูกเต๋าที่ครอบครอง (กำลังใช้งาน & คอลเลกชันทั้งหมด)\n• 🐾 สัตว์เลี้ยงที่สวมใส่ (Equipped Pets พร้อมเกรด, ทักษะ, มิวเทชั่น)\n• 🖼️ รูปภาพประกอบ: Headshot Avatar ของผู้เล่น และ 3D Full-Body Render"
+})
+
 Window:SelectTab(1)
 
 -- ==============================================================================
@@ -7552,6 +7822,22 @@ task.spawn(function()
                 end
             end)
         end
+    end
+end)
+
+-- 17. Discord Auto-Notify Background Loop
+task.spawn(function()
+    while true do
+        task.wait(15)
+        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        pcall(function()
+            if CFG.DiscordAutoNotify and CFG.DiscordWebhookUrl and CFG.DiscordWebhookUrl ~= "" then
+                local intervalSec = math.max(5, (tonumber(CFG.DiscordNotifyInterval) or 30)) * 60
+                if (tick() - lastDiscordNotifyTick >= intervalSec) then
+                    SendDiscordInventoryReport(false)
+                end
+            end
+        end)
     end
 end)
 
