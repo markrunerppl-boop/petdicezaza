@@ -5,27 +5,6 @@
 -- ==============================================================================
 
 -- ==============================================================================
--- [0] REAL-TIME AUTO-UPDATE & CDN CACHE-BUSTER BOOTSTRAP
--- Ensures loadstring(game:HttpGet("https://raw.githubusercontent.com/.../petdicezaza.lua"))()
--- ALWAYS fetches and runs the latest real-time code, bypassing GitHub Fastly 300s cache.
--- ==============================================================================
-if not getgenv()._PetDiceBypassCDN then
-    getgenv()._PetDiceBypassCDN = true
-    local ts = os.time()
-    local okFetch, freshScript = pcall(function()
-        return game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua?v=" .. tostring(ts))
-    end)
-    if okFetch and freshScript and #freshScript > 5000 and not freshScript:find("404: Not Found") then
-        local chunk, compileErr = loadstring(freshScript)
-        if chunk then
-            getgenv()._PetDiceBypassCDN = nil
-            return chunk()
-        end
-    end
-    getgenv()._PetDiceBypassCDN = nil
-end
-
--- ==============================================================================
 -- [0] CLEAN STARTUP & HOT-RELOAD GATEKEEPER
 -- ==============================================================================
 local executionTime = tick()
@@ -3648,8 +3627,8 @@ local function UpdateTowerStatus()
             local joinSec = WorldBossConfig and WorldBossConfig.JoinSeconds or 45
             local leftStart = math.max(0, math.floor(nextStart - now))
             local leftJoin = math.max(0, math.floor(nextStart - joinSec - now))
-            timeStr = string.format("%d:%02d", leftStart // 60, leftStart % 60)
-            timeToJoinStr = string.format("%d:%02d", leftJoin // 60, leftJoin % 60)
+            timeStr = string.format("%d:%02d", math.floor(leftStart / 60), leftStart % 60)
+            timeToJoinStr = string.format("%d:%02d", math.floor(leftJoin / 60), leftJoin % 60)
         end
         
         local bossTitle
