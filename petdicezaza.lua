@@ -633,6 +633,29 @@ local ZoneTransitionActions = {
 local SwitchOrStartTower
 local IsTowerRunning
 local IsTowerInArena
+local function IsPlayerAtHomePlot()
+    local char = LocalPlayer.Character or Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    local plots = workspace:FindFirstChild("Plots")
+    if plots then
+        local uid = LocalPlayer.UserId
+        for _, p in ipairs(plots:GetChildren()) do
+            local ownerId = p:GetAttribute("OwnerId") or p:GetAttribute("Owner")
+            if ownerId and (tonumber(ownerId) == uid or tostring(ownerId) == tostring(uid)) then
+                local pp = p.PrimaryPart or p:FindFirstChildWhichIsA("BasePart")
+                if pp then
+                    local d = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(pp.Position.X, 0, pp.Position.Z)).Magnitude
+                    return (d <= 85)
+                end
+            end
+        end
+    end
+    
+    local distCenter = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude
+    return (distCenter >= 150)
+end
 local isPetEnhanceRolling = false
 local isPetOperationMutex = false
 local isEconomyActionMutex = false
@@ -832,11 +855,8 @@ local function Fire(...)
         end
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            local inHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150
-            if inHub then
-                return -- ห้ามเริ่มหอคอยเด็ดขาดขณะอยู่ในพลาซ่า (ระยะ Park < 150) ต้องวาร์ปกลับบ้านก่อน
-            end
+        if hrp and not IsPlayerAtHomePlot() then
+            return -- ห้ามเริ่มหอคอยเด็ดขาดหากไม่ได้อยู่ที่ลานบ้าน (Home Plot) ของตัวเอง ป้องกันเซิร์ฟเวอร์เตะ (Error 267)
         end
         if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.5) then
             return -- หน่วง 3.5 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
@@ -1028,11 +1048,11 @@ local function Fire(...)
         end
         
         local mag = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude
-        if dest == "Hub" and mag < 150 then
-            return -- อยู่ในลานพลาซ่า/ฮับอยู่แล้ว (ระยะศูนย์กลาง < 150 studs) ห้ามส่ง Teleport Hub ซ้ำ ป้องกัน Error 267
+        if dest == "Hub" and mag < 120 then
+            return -- อยู่ในลานพลาซ่า/ฮับศูนย์กลางอยู่แล้ว ห้ามส่ง Teleport Hub ซ้ำ ป้องกัน Error 267
         end
-        if dest == "Home" and mag >= 150 and not (IsTowerRunning and IsTowerRunning()) then
-            return -- อยู่ในพื้นที่บ้าน (Plot Yard) อยู่แล้ว (ระยะ >= 150 studs) ห้ามส่ง Teleport Home ซ้ำ ป้องกัน Error 267
+        if dest == "Home" and IsPlayerAtHomePlot() and not (IsTowerRunning and IsTowerRunning()) then
+            return -- อยู่ในพื้นที่บ้าน (Home Plot) ของตัวเองอยู่แล้ว ไม่ต้องส่ง Teleport Home ซ้ำ ป้องกัน Error 267
         end
     end
     if action == "SendExpedition" then
@@ -1464,7 +1484,7 @@ WalkToPawcula = function()
     end
     
     -- หากตัวละครไม่ได้อยู่ในพลาซ่า ให้ใช้วาร์ปทางการของเกมไปที่ Hub (พลาซ่า) ก่อน ปลอดภัย 100%
-    local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150
+    local isAlreadyInHub = not IsPlayerAtHomePlot()
     if not isAlreadyInHub then
         Fire("Teleport", "Hub")
         Humanizer.Wait(2.5, 3.5)
@@ -3405,12 +3425,12 @@ SwitchOrStartTower = function(targetTowerId, force)
     
     local char = LocalPlayer.Character or Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150 then
+    if hrp and not IsPlayerAtHomePlot() then
         if force then
             Fire("Teleport", "Home")
-            Humanizer.Wait(2.0, 3.0)
+            Humanizer.Wait(2.5, 3.5)
         else
-            return false, "In Hub/Plaza"
+            return false, "Not At Home Plot"
         end
     end
     
@@ -5182,8 +5202,8 @@ SafeCollectPlazaCandies = function(isManual)
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not char or not hum or not hrp or hum.Health <= 0 then return end
         
-        -- ตรวจสอบว่าผู้เล่นอยู่ใน Hub หรือยัง (ระยะห่างจากแกนศูนย์กลาง Hub (0,0,0) น้อยกว่า 150 studs คืออยู่ในพลาซ่าแล้ว)
-        local isAlreadyInHub = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150
+        -- ตรวจสอบว่าผู้เล่นอยู่ใน Hub หรือยัง (หากไม่ได้อยู่ที่ลานบ้าน แปลว่าอยู่ในพลาซ่า/ฮับแล้ว)
+        local isAlreadyInHub = not IsPlayerAtHomePlot()
         if not isAlreadyInHub then
             Notify("🌪️ พายุลูกกวาด", "กำลังเดินทางไปพลาซ่าเพื่อเก็บแคนดี้...", 2)
             Fire("Teleport", "Hub")
@@ -6257,8 +6277,8 @@ task.spawn(function()
                     else
                         local char = LocalPlayer.Character or Character
                         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                        if hrp and Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 150 then
-                            -- หากตัวละครอยู่ในลานพลาซ่า ให้พากลับบ้านอย่างปลอดภัยเพื่อเริ่มหอคอย
+                        if hrp and not IsPlayerAtHomePlot() then
+                            -- หากตัวละครไม่ได้อยู่ที่บ้านของตัวเอง ให้พากลับบ้านอย่างปลอดภัยก่อนเริ่มหอคอย
                             if (now - LastZoneTransitionTime >= 4.0) then
                                 Fire("Teleport", "Home")
                                 Humanizer.Wait(3.5, 4.5)
