@@ -1541,6 +1541,11 @@ local AutoSellStatusPara = nil
 
 local function ExecuteAutoSellPets(targetCountOverride)
     if isAutoSellingActive then return false, "กำลังดำเนินการขายสัตว์เลี้ยงอยู่..." end
+    local retryWait = 0
+    while (isPetOperationMutex or isPetEnhanceRolling) and retryWait < 15 do
+        task.wait(0.1)
+        retryWait = retryWait + 1
+    end
     if isPetOperationMutex or isPetEnhanceRolling then
         return false, "กำลังสุ่มหรืออัปเกรดสัตว์เลี้ยงอยู่ ชะลอการขายชั่วคราว..."
     end
@@ -1667,6 +1672,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
     isPetOperationMutex = false
     getgenv().PetOperationMutex = false
     getgenv().LastPetOperationStartTime = 0
+    pcall(function() if UpdateOverviewTab then UpdateOverviewTab() end end)
     
     if not success then
         return false, totalSoldOrErr
@@ -1816,9 +1822,11 @@ local function UpdateOverviewTab()
         if AutoSellStatusPara then
             local targetK = CFG.KeepTopPetsCount or 100
             local excess = math.max(0, totalPets - targetK)
-            local statusText = CFG.AutoSellPets and "🟢 เปิดทำงานอัตโนมัติ" or "⚪ ปิดการทำงาน"
+            local statusText = CFG.AutoSellPets and "🟢 เปิดทำงานปกติ" or "⚪ ปิดการทำงาน"
             if isAutoSellingActive then
                 statusText = "🟡 กำลังดำเนินการขาย..."
+            elseif CFG.AutoSellPets and excess == 0 then
+                statusText = string.format("🟢 ปกติ (เก็บ %s ตัวที่ดีที่สุดครบถ้วน)", Format.Commas(targetK))
             end
             SafeUpdatePara(AutoSellStatusPara,
                 string.format("📊 สถานะ: %s | มีทั้งหมด: %s ตัว | เป้าหมายเก็บไว้: %s ตัว", statusText, Format.Commas(totalPets), Format.Commas(targetK)),
@@ -6372,12 +6380,13 @@ task.spawn(function()
                         end
                     end
                     
+                    local waitAfter = 0
                     if not upgradedAny then
                         -- สัตว์เลี้ยงทั้งหมดถึงเป้าหมายแล้ว หรือเงินไม่พออัปเกรด พัก 3.5 วินาที
-                        task.wait(3.5)
+                        waitAfter = 3.5
                     else
                         getgenv().LastPetUpgradedTime = tick()
-                        task.wait(1.5) -- หน่วงรอเซิร์ฟเวอร์อัปเดตข้อมูลสเตตัส
+                        waitAfter = 1.5 -- หน่วงรอเซิร์ฟเวอร์อัปเดตข้อมูลสเตตัส
                     end
                 end)
             end)
@@ -6385,6 +6394,7 @@ task.spawn(function()
             isPetOperationMutex = false
             getgenv().PetOperationMutex = false
             getgenv().LastPetOperationStartTime = 0
+            if waitAfter > 0 then task.wait(waitAfter) end
         else
             task.wait(2.0)
         end
@@ -6453,11 +6463,12 @@ task.spawn(function()
                         end
                     end
                     
+                    local waitAfter = 0
                     if not anyRolled then
                         consecutiveRolls = 0
-                        task.wait(3.0) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือเพชรหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
+                        waitAfter = 3.0 -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือเพชรหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
                     else
-                        task.wait(math.max(0.4, rollDelay)) -- เว้นระยะระหว่างรอบสุ่ม
+                        waitAfter = math.max(0.4, rollDelay) -- เว้นระยะระหว่างรอบสุ่ม
                     end
                 end)
             end)
@@ -6465,6 +6476,7 @@ task.spawn(function()
             isPetOperationMutex = false
             getgenv().PetOperationMutex = false
             getgenv().LastPetOperationStartTime = 0
+            if waitAfter > 0 then task.wait(waitAfter) end
         else
             consecutiveRolls = 0
             task.wait(2.0)
@@ -6534,11 +6546,12 @@ task.spawn(function()
                         end
                     end
                     
+                    local waitAfter = 0
                     if not anyRolled then
                         consecutiveRolls = 0
-                        task.wait(3.0) -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือชาร์ดหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
+                        waitAfter = 3.0 -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือชาร์ดหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
                     else
-                        task.wait(math.max(0.4, rollDelay)) -- เว้นระยะระหว่างรอบสุ่ม
+                        waitAfter = math.max(0.4, rollDelay) -- เว้นระยะระหว่างรอบสุ่ม
                     end
                 end)
             end)
@@ -6546,6 +6559,7 @@ task.spawn(function()
             isPetOperationMutex = false
             getgenv().PetOperationMutex = false
             getgenv().LastPetOperationStartTime = 0
+            if waitAfter > 0 then task.wait(waitAfter) end
         else
             consecutiveRolls = 0
             task.wait(2.0)
@@ -6769,7 +6783,7 @@ end)
 -- 16. Auto Sell Pets Loop: ตรวจสอบและขายสัตว์เลี้ยงส่วนเกินอัตโนมัติ (เก็บเฉพาะ N ตัวแรกที่ค่าพลัง Base สูงสุด)
 task.spawn(function()
     while true do
-        task.wait(10.0)
+        task.wait(3.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0) continue end
         
