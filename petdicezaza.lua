@@ -426,6 +426,24 @@ function Humanizer.Jitter(val, pct)
     return val + (math.random() * (diff * 2) - diff)
 end
 
+local function GetRealItemCount(itemName)
+    local data = State and State.Data
+    if not data then return 0 end
+    local itemCfg = Config and Config.TradeItemByKey and Config.TradeItemByKey[itemName]
+    if itemCfg and Stats and Stats.TradeItemCount then
+        local count = Stats.TradeItemCount(data, itemCfg)
+        if itemName == "SuperRolls" then count = count - (State.SuperQueued or 0)
+        elseif itemName == "JackpotRolls" then count = count - (State.JackpotQueued or 0) end
+        return math.max(0, count)
+    end
+    if type(data[itemName]) == "number" then return data[itemName] end
+    if data.Inventory and type(data.Inventory[itemName]) == "number" then return data.Inventory[itemName] end
+    if data.Potions and type(data.Potions[itemName]) == "number" then return data.Potions[itemName] end
+    if data.Items and type(data.Items[itemName]) == "number" then return data.Items[itemName] end
+    if data.Currencies and type(data.Currencies[itemName]) == "number" then return data.Currencies[itemName] end
+    return 0
+end
+
 local LastRemoteFire = {}
 local RemoteRateLimits = {
     RollTrait = 0.28,        -- Config.RateLimit Cost=0.5
@@ -454,9 +472,9 @@ local RemoteRateLimits = {
     TradeRequest = 3.00,     -- เว้นระยะอย่างน้อย 3.00s ต่อการส่งคำขอเทรด ป้องกันการสแปม
     TradeRespond = 2.00,     -- เว้นระยะ 2.00s ต่อการตอบรับคำขอเทรด
     TradeReady = 2.00,       -- เว้นระยะ 2.00s ต่อการกด Ready/Unready
-    TradeItem = 0.50,        -- เว้นระยะ 0.50s ต่อการวางไอเทมลงในช่องเทรด
-    TradeAddPets = 0.60,     -- เว้นระยะ 0.60s ต่อการใส่สัตว์เลี้ยงลงในช่องเทรด
-    TradeRemovePets = 0.60,  -- เว้นระยะ 0.60s ต่อการดึงสัตว์เลี้ยงออกจากช่องเทรด
+    TradeItem = 0.30,        -- เว้นระยะ 0.30s ต่อการวางไอเทมลงในช่องเทรด
+    TradeAddPets = 0.40,     -- เว้นระยะ 0.40s ต่อการใส่สัตว์เลี้ยงลงในช่องเทรด
+    TradeRemovePets = 0.40,  -- เว้นระยะ 0.40s ต่อการดึงสัตว์เลี้ยงออกจากช่องเทรด
     TradeCancel = 1.50,      -- เว้นระยะ 1.50s ต่อการกดยกเลิกการเทรด
     BuyDice = 1.50,
     EquipDice = 0.50,
@@ -4436,24 +4454,6 @@ Tabs.Trade:AddButton({
 
 Tabs.Trade:AddSection("⚙️ การส่งไอเทม & โหมดการทำงาน")
 
-local function GetRealItemCount(itemName)
-    local data = State.Data
-    if not data then return 0 end
-    local itemCfg = Config.TradeItemByKey and Config.TradeItemByKey[itemName]
-    if itemCfg and Stats and Stats.TradeItemCount then
-        local count = Stats.TradeItemCount(data, itemCfg)
-        if itemName == "SuperRolls" then count = count - (State.SuperQueued or 0)
-        elseif itemName == "JackpotRolls" then count = count - (State.JackpotQueued or 0) end
-        return math.max(0, count)
-    end
-    if type(data[itemName]) == "number" then return data[itemName] end
-    if data.Inventory and type(data.Inventory[itemName]) == "number" then return data.Inventory[itemName] end
-    if data.Potions and type(data.Potions[itemName]) == "number" then return data.Potions[itemName] end
-    if data.Items and type(data.Items[itemName]) == "number" then return data.Items[itemName] end
-    if data.Currencies and type(data.Currencies[itemName]) == "number" then return data.Currencies[itemName] end
-    return 0
-end
-
 local tradeItemList = {}
 for _, item in ipairs(Config.TradeItems or {}) do table.insert(tradeItemList, item.Key) end
 if #tradeItemList == 0 then
@@ -4947,7 +4947,12 @@ TradeRemote.OnClientEvent:Connect(function(event, payload)
         if IsAllowedTradeSender(senderId, senderName) then
             RespondAcceptTrade(senderId, senderName)
         end
-    elseif event == "Open" or event == "Update" then
+    elseif event == "Open" then
+        getgenv().TradeActiveSession = true
+        getgenv().CurrentTradeSession = payload
+        getgenv().TradeItemsDropped = false
+        getgenv().ReceiverItemPut = false
+    elseif event == "Update" then
         getgenv().TradeActiveSession = true
         getgenv().CurrentTradeSession = payload
     elseif event == "Closed" then
@@ -5633,21 +5638,20 @@ task.spawn(function()
             if (CFG.SenderMode or CFG.AutoDropItems) and not getgenv().TradeItemsDropped then
                 Humanizer.Wait(1.5, 2.2)
                 if IsInTrade() then
-                    local data = State.Data
-                    local itemsToDrop = {
-                        "PotionLuck", "PotionCash", "PotionSpeed",
-                        "Gems", "Shards", "SuperRolls", "JackpotRolls",
-                        "LootBags", "BagWorld", "Speed15", "Speed30", "Speed60"
-                    }
+                    local droppedCount = 0
+                    local itemsToDrop = {}
                     if Config.TradeItems then
                         for _, it in ipairs(Config.TradeItems) do
-                            if it.Rune and not table.find(itemsToDrop, it.Key) then
-                                table.insert(itemsToDrop, it.Key)
-                            end
+                            table.insert(itemsToDrop, it.Key)
                         end
+                    else
+                        itemsToDrop = {
+                            "PotionLuck", "PotionCash", "PotionSpeed",
+                            "Gems", "Shards", "SuperRolls", "JackpotRolls",
+                            "LootBags", "BagWorld", "Speed15", "Speed30", "Speed60"
+                        }
                     end
                     
-                    local droppedCount = 0
                     for _, itemKey in ipairs(itemsToDrop) do
                         if not IsInTrade() then break end
                         local realCount = GetRealItemCount(itemKey)
@@ -5657,7 +5661,7 @@ task.spawn(function()
                         if realCount > 0 and alreadyInTrade < realCount then
                             Fire("TradeItem", itemKey, realCount)
                             droppedCount = droppedCount + 1
-                            Humanizer.Wait(0.40, 0.70)
+                            Humanizer.Wait(0.35, 0.55)
                         end
                     end
                     getgenv().TradeItemsDropped = true
@@ -5671,15 +5675,15 @@ task.spawn(function()
             -- 2. โหมดแลกเปลี่ยนสองทาง (Receiver: Safe Two-Way Trade)
             -- ฝั่งรับใส่ไอเทมพื้นฐาน 1 ชิ้นตอบแทนกลับไป ป้องกันการถูกเซิร์ฟเวอร์ตรวจจับบัญชี Mule
             if CFG.ReceiverMode and (CFG.TwoWayTrade ~= false) and not getgenv().ReceiverItemPut then
-                Humanizer.Wait(1.5, 2.2)
+                Humanizer.Wait(1.0, 1.8)
                 if IsInTrade() then
                     local okPut, putItem = PutSafeTwoWayTradeItem()
                     if okPut then
                         Notify("🛡️ เทรดสองทาง", "ใส่ไอเทมตอบแทนกลับเรียบร้อย (" .. tostring(putItem) .. ") ป้องกัน Mule Flag", 3)
+                        Humanizer.Wait(0.8, 1.4)
+                        getgenv().ReceiverItemPut = true
                     end
-                    getgenv().ReceiverItemPut = true
                 end
-                Humanizer.Wait(1.5, 2.5)
             end
             
             -- 3. โหมดกด Ready อัตโนมัติอย่างปลอดภัย (Safe Auto Ready & Real-Time Sync)
