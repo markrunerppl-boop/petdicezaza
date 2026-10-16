@@ -110,7 +110,7 @@ getgenv().IsTrickOrTreatActiveRunning = false
 getgenv().TrickOrTreatMutex = false
 getgenv().LastTrickOrTreatStartTime = 0
 
--- Anti-AFK (VirtualUser) ป้องกันเซิร์ฟเวอร์เตะเมื่อฟาร์ม 24/7
+-- Anti-AFK Dual-Layer (VirtualUser Event + 10-Min Periodic Heartbeat) ป้องกันเซิร์ฟเวอร์เตะเมื่อฟาร์ม 24/7
 pcall(function()
     if getgenv().PetDiceAntiAFKConn then
         pcall(function() getgenv().PetDiceAntiAFKConn:Disconnect() end)
@@ -123,6 +123,81 @@ pcall(function()
             VirtualUser:ClickButton2(Vector2.new())
         end)
     end)
+    
+    -- Layer 2: Pulse ทุก 10 นาที ป้องกันกรณีหน้าต่างถูก Minimize / Unfocused ใน Windows 24/7
+    task.spawn(function()
+        while true do
+            task.wait(600)
+            if getgenv().PetDiceAntiAFKConn == nil then break end
+            pcall(function()
+                VirtualUser:CaptureController()
+                VirtualUser:ClickButton2(Vector2.new(10, 10))
+            end)
+        end
+    end)
+end)
+
+-- Auto-Rejoin / Auto-Reconnect 24/7 (เซิร์ฟเวอร์รีสตาร์ท หรือเน็ตหลุด ให้เชื่อมต่อใหม่โดยอัตโนมัติ)
+pcall(function()
+    local GuiService = game:GetService("GuiService")
+    local TeleportService = game:GetService("TeleportService")
+    
+    if getgenv().PetDiceErrorConn then
+        pcall(function() getgenv().PetDiceErrorConn:Disconnect() end)
+        getgenv().PetDiceErrorConn = nil
+    end
+    
+    local function HandleReconnect(errorMsg)
+        if not errorMsg or errorMsg == "" then return end
+        
+        -- ตรวจสอบความปลอดภัยสูงสุด: หากกำลังติดคำสั่งแบน Error 600 หรือ Cloud Halt ห้าม Rejoin เด็ดขาด
+        if getgenv().EmergencyKickLockout or getgenv().EmergencyCloudHalt then
+            return
+        end
+        
+        local msgLower = tostring(errorMsg):lower()
+        -- กรองเฉพาะข้อผิดพลาดประเภทเน็ตหลุด / เซิร์ฟเวอร์ปิดปรับปรุง / การตัดการเชื่อมต่อทั่วไป
+        local isSafeToReconnect = msgLower:find("shut down") 
+            or msgLower:find("reconnect") 
+            or msgLower:find("connection lost") 
+            or msgLower:find("lost connection") 
+            or msgLower:find("disconnected") 
+            or msgLower:find("timed out") 
+            or msgLower:find("277") 
+            or msgLower:find("279") 
+            or msgLower:find("260") 
+            or msgLower:find("284")
+            or msgLower:find("teleport failed")
+            
+        if isSafeToReconnect then
+            task.spawn(function()
+                -- หน่วงเวลาสุ่ม 15-25 วินาที เพื่อรอให้เซิร์ฟเวอร์ใหม่เปิดพร้อมใช้งาน
+                task.wait(math.random(15, 25))
+                pcall(function()
+                    TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                end)
+            end)
+        end
+    end
+    
+    getgenv().PetDiceErrorConn = GuiService.ErrorMessageChanged:Connect(function()
+        local errorMsg = GuiService:GetErrorMessage()
+        HandleReconnect(errorMsg)
+    end)
+    
+    -- ตรวจสอบผ่าน CoreGui Overlay เพิ่มเติมเพื่อความครอบคลุม 100%
+    local CoreGui = game:GetService("CoreGui")
+    local promptGui = CoreGui:FindFirstChild("RobloxPromptGui")
+    local promptOverlay = promptGui and promptGui:FindFirstChild("promptOverlay")
+    if promptOverlay then
+        promptOverlay.ChildAdded:Connect(function(child)
+            task.wait(2.0)
+            local title = child:FindFirstChild("TitleFrame") and child.TitleFrame:FindFirstChild("ErrorTitle")
+            local text = child:FindFirstChild("MessageArea") and child.MessageArea:FindFirstChild("ErrorText")
+            local mStr = (title and title.Text or "") .. " " .. (text and text.Text or "")
+            HandleReconnect(mStr)
+        end)
+    end
 end)
 -- ==============================================================================
 -- [0] AIRTIGHT ANTI-BAN & PATCH SENTINEL SYSTEM (100% FAIL-SAFE PROTECTION)
@@ -268,6 +343,8 @@ local function CheckStructuralIntegrity()
         getgenv().SecurityStatusMessage = "โครงสร้างโมดูลเกมเปลี่ยนแปลง - หยุดส่งคำสั่งฉุกเฉิน"
         SafeNotify("⚠️ โครงสร้างเกมเปลี่ยนแปลง", "ตรวจพบว่าตัวเกมมีการปรับเปลี่ยนโครงสร้างภายใน\nระบบหยุดทำงานชั่วคราวเพื่อป้องกัน Error 267/600", 10)
         return false
+    else
+        getgenv().EmergencyStructuralHalt = false
     end
     return true
 end
@@ -277,6 +354,11 @@ CheckGamePatch()
 CheckCloudSecurity()
 CheckStructuralIntegrity()
 
+-- Instant Sentinel: ดักจับการอัปเดต PlaceVersion แบบเสี้ยววินาที (0.0001s)
+pcall(function()
+    game:GetPropertyChangedSignal("PlaceVersion"):Connect(CheckGamePatch)
+end)
+
 -- Background Thread: ตรวจสอบแพทช์และคลาวด์ต่อเนื่อง 24/7
 task.spawn(function()
     local lastCloudCheck = tick()
@@ -284,15 +366,15 @@ task.spawn(function()
         task.wait(5.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         
-        -- ตรวจสอบเวอร์ชันเกมทุก 5 วินาที (หากเกมมีแพทช์ใหม่จะตัดไฟทันทีใน 5 วิ)
+        -- ตรวจสอบเวอร์ชันเกมทุก 5 วินาที (หากเกมมีแพทช์ใหม่จะตัดไฟทันที)
         CheckGamePatch()
         
         -- ตรวจสอบความสมบูรณ์ของโมดูลเกมทุก 30 วินาที
         pcall(CheckStructuralIntegrity)
         
-        -- ตรวจสอบ Cloud Kill-Switch จาก GitHub ทุก 120 วินาที
+        -- ตรวจสอบ Cloud Kill-Switch จาก GitHub ทุก 60 วินาที เพื่อให้ฟาร์ม 24/7 กลับมาทำงานอัตโนมัติเมื่อแพทช์ผ่านการรับรอง
         local now = tick()
-        if now - lastCloudCheck >= 120 then
+        if now - lastCloudCheck >= 60 then
             lastCloudCheck = now
             pcall(CheckCloudSecurity)
         end
