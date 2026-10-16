@@ -7,14 +7,12 @@
 -- ==============================================================================
 -- [0] CLEAN STARTUP & HOT-RELOAD GATEKEEPER
 -- ==============================================================================
-local executionTime = tick()
-
 -- ป้องกันการยิงสคริปต์ 2 เธรดพร้อมกันในเสี้ยววินาทีเดียวกัน (Debounce 1.5 วินาที)
-if getgenv().PetDiceScriptStarting and (executionTime - getgenv().PetDiceScriptStarting < 1.5) then
+if getgenv().PetDiceScriptStarting and (tick() - getgenv().PetDiceScriptStarting < 1.5) then
     warn("[PetDice Safe] Duplicate execution within 1.5s blocked.")
     return
 end
-getgenv().PetDiceScriptStarting = executionTime
+getgenv().PetDiceScriptStarting = tick()
 
 if not game:IsLoaded() then 
     pcall(function() game.Loaded:Wait() end)
@@ -23,10 +21,6 @@ end
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local UIS = game:GetService("UserInputService")
-local VIM = game:GetService("VirtualInputManager")
 local CG = game:GetService("CoreGui")
 local HS = game:GetService("HttpService")
 local GuiService = game:GetService("GuiService")
@@ -39,12 +33,10 @@ end
 
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local Humanoid = Character:WaitForChild("Humanoid", 15)
-local HRP = Character:WaitForChild("HumanoidRootPart", 15)
 
 LocalPlayer.CharacterAdded:Connect(function(c)
     Character = c
     Humanoid = c:WaitForChild("Humanoid", 15)
-    HRP = c:WaitForChild("HumanoidRootPart", 15)
 end)
 
 -- เคลียร์ UI เก่าและเธรดเก่าทั้งหมดก่อนรันใหม่ (Clean Startup & Hot-Reload Support)
@@ -192,6 +184,7 @@ end)
 -- ==============================================================================
 -- [0] AIRTIGHT ANTI-BAN & PATCH SENTINEL SYSTEM (100% FAIL-SAFE PROTECTION)
 -- ==============================================================================
+do
 local VERIFIED_GAME_PLACE_VERSION = 158
 local SECURITY_CONFIG_URL = "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/security.json"
 
@@ -370,6 +363,7 @@ task.spawn(function()
         end
     end
 end)
+end
 
 -- โหลดโมดูลภายในของเกม Pet Dice
 local PetDice = RS:WaitForChild("PetDice")
