@@ -4460,8 +4460,10 @@ if #tradeItemList == 0 then
     tradeItemList = {"PotionLuck", "PotionCash", "PotionSpeed", "Gems", "Shards", "SuperRolls", "JackpotRolls", "LootBags"}
 end
 
-Tabs.Trade:AddToggle("TogAutoDropItems", {
-    Title = "🎁 ส่งไอเทมทั้งหมดอัตโนมัติ (เช็คจำนวนจริงในกระเป๋า)",
+local TogSender, TogReceiver, TogAutoDropItems
+
+TogAutoDropItems = Tabs.Trade:AddToggle("TogAutoDropItems", {
+    Title = "🎁 ส่งไอเทมทั้งหมดอัตโนมัติ (เฉพาะโหมดผู้ส่ง)",
     Default = CFG.AutoDropItems,
     Callback = function(V) UpdateCFG("AutoDropItems", V) end
 })
@@ -4472,21 +4474,44 @@ Tabs.Trade:AddToggle("TogAutoReady", {
     Callback = function(V) UpdateCFG("AutoReady", V) end
 })
 
-Tabs.Trade:AddToggle("TogSender", {
-    Title = "🚀 โหมดไอดีหลัก (ส่งคำขอเทรด)",
+TogSender = Tabs.Trade:AddToggle("TogSender", {
+    Title = "🚀 โหมดผู้ส่ง (Sender - ส่งคำขอเทรด + โอนไอเทมทั้งหมด)",
     Default = CFG.SenderMode,
     Callback = function(V) 
         UpdateCFG("SenderMode", V) 
-        if V and not CFG.AutoDropItems then
+        if V then
             UpdateCFG("AutoDropItems", true)
+            if TogAutoDropItems and TogAutoDropItems.SetValue then
+                pcall(function() TogAutoDropItems:SetValue(true) end)
+            end
+            if CFG.ReceiverMode then
+                UpdateCFG("ReceiverMode", false)
+                if TogReceiver and TogReceiver.SetValue then
+                    pcall(function() TogReceiver:SetValue(false) end)
+                end
+            end
         end
     end
 })
 
-Tabs.Trade:AddToggle("TogReceiver", {
-    Title = "🛒 โหมดไอดีไก่ (รับคำขอเทรด)",
+TogReceiver = Tabs.Trade:AddToggle("TogReceiver", {
+    Title = "🛒 โหมดผู้รับ (Receiver - รับคำขอเทรด + กันแบน Mule)",
     Default = CFG.ReceiverMode,
-    Callback = function(V) UpdateCFG("ReceiverMode", V) end
+    Callback = function(V) 
+        UpdateCFG("ReceiverMode", V) 
+        if V then
+            UpdateCFG("AutoDropItems", false)
+            if TogAutoDropItems and TogAutoDropItems.SetValue then
+                pcall(function() TogAutoDropItems:SetValue(false) end)
+            end
+            if CFG.SenderMode then
+                UpdateCFG("SenderMode", false)
+                if TogSender and TogSender.SetValue then
+                    pcall(function() TogSender:SetValue(false) end)
+                end
+            end
+        end
+    end
 })
 
 Tabs.Trade:AddToggle("TogTwoWayTrade", {
@@ -4638,20 +4663,29 @@ local function PutSafeTwoWayTradeItem()
     local data = State.Data
     if not data then return false end
     
-    -- 1. ค้นหาน้ำยาหรือไอเทมพื้นฐานที่มีในตัวมากกว่า 0
+    -- 1. ค้นหาน้ำยาหรือไอเทมพื้นฐานที่มีในตัวมากกว่า 0 (ใส่เพียง 1 ชิ้นเพื่อความปลอดภัย)
     local safeCandidates = {
         "PotionSpeed", "PotionLuck", "PotionCash", 
-        "Speed15", "Speed30", "Gems", "Shards"
+        "Speed15", "Speed30", "Speed60", "LootBags"
     }
     for _, itemKey in ipairs(safeCandidates) do
         local count = GetRealItemCount(itemKey)
         if count and count >= 1 then
             Fire("TradeItem", itemKey, 1)
-            return true, itemKey
+            return true, itemKey .. " (1 ชิ้น)"
         end
     end
     
-    -- 2. หากไม่มีน้ำยา ตรวจสอบสัตว์เลี้ยงระดับล่าง (Rank >= 7 หรือเกรด F/E/D/C) ที่ไม่ได้ล็อค ปลอดภัย 100%
+    -- 2. หากไม่มีน้ำยาข้างต้น ให้ใส่ Gems หรือ Shards จำนวนน้อย (10 ชิ้น) ป้องกัน Mule Flag
+    for _, itemKey in ipairs({"Gems", "Shards"}) do
+        local count = GetRealItemCount(itemKey)
+        if count and count >= 10 then
+            Fire("TradeItem", itemKey, 10)
+            return true, itemKey .. " (10 ชิ้น)"
+        end
+    end
+    
+    -- 3. หากไม่มีไอเทมใดๆ ตรวจสอบสัตว์เลี้ยงระดับล่าง (Rank >= 7 หรือเกรด F/E/D/C) ที่ไม่ได้ล็อค ปลอดภัย 100%
     if data.Pets then
         local equipped = {}
         for _, uid in ipairs(data.Equipped or {}) do equipped[tostring(uid)] = true end
@@ -4680,7 +4714,7 @@ local function PutSafeTwoWayTradeItem()
                     local rank = GetPetGradeRank(pet)
                     if rank >= 7 and not IsPetGradeLocked(pet, 5) then
                         Fire("TradeAddPets", { sUid })
-                        return true, "Pet_" .. tostring(pet.Id)
+                        return true, "Pet_" .. tostring(pet.Id) .. " (Rank " .. tostring(rank) .. ")"
                     end
                 end
             end
@@ -5634,8 +5668,9 @@ task.spawn(function()
             local them = session and session.Them
             
             -- 1. โหมดดรอปไอเทมอัตโนมัติ (Sender: Auto Drop Items)
-            -- รองรับทั้งเมื่อเปิด SenderMode หรือ AutoDropItems ทำการสแกนไอเทมจริงจาก State.Data แบบเรียลไทม์
-            if (CFG.SenderMode or CFG.AutoDropItems) and not getgenv().TradeItemsDropped then
+            -- ป้องกันฝั่ง Receiver ไม่ให้ดรอปของทั้งหมดเด็ดขาด ทำงานเฉพาะเมื่อเป็นฝั่ง Sender เท่านั้น
+            local isSender = (CFG.SenderMode or CFG.AutoDropItems) and not CFG.ReceiverMode
+            if isSender and not getgenv().TradeItemsDropped then
                 Humanizer.Wait(1.5, 2.2)
                 if IsInTrade() then
                     local droppedCount = 0
@@ -5682,6 +5717,9 @@ task.spawn(function()
                         Notify("🛡️ เทรดสองทาง", "ใส่ไอเทมตอบแทนกลับเรียบร้อย (" .. tostring(putItem) .. ") ป้องกัน Mule Flag", 3)
                         Humanizer.Wait(0.8, 1.4)
                         getgenv().ReceiverItemPut = true
+                    else
+                        Notify("⚠️ เทรดสองทาง", "ไม่มีไอเทมหรือสัตว์เลี้ยงสำหรับตอบแทน (ดำเนินเทรดต่อ)", 3)
+                        getgenv().ReceiverItemPut = true
                     end
                 end
             end
@@ -5700,12 +5738,12 @@ task.spawn(function()
                     task.wait(0.5)
                 elseif readyStatusText == "UNREADY" or (you and you.Ready) then
                     -- ฝั่งเรากดพร้อมเรียบร้อยแล้ว ไม่ต้องกดซ้ำ (ป้องกันการกดยกเลิก)
-                elseif readyStatusText == "READY" and (not you or not you.Ready) then
+                elseif (readyStatusText == "READY" or readyStatusText == "") and (not you or not you.Ready) then
                     -- ฝั่งเรายังไม่ได้กดพร้อม และปุ่มปลดล็อคให้กดได้
                     local canPressReady = true
                     
                     -- ตรวจสอบเงื่อนไขฝั่งส่ง: ต้องใส่ไอเทมเสร็จสิ้นแล้ว
-                    if (CFG.SenderMode or CFG.AutoDropItems) and not getgenv().TradeItemsDropped then
+                    if isSender and not getgenv().TradeItemsDropped then
                         canPressReady = false
                     end
                     
@@ -5731,7 +5769,7 @@ task.spawn(function()
                             local _, textNow = GetTradeReadyButton()
                             local curSession = getgenv().CurrentTradeSession
                             local curYou = curSession and curSession.You
-                            if textNow == "READY" and (not curYou or not curYou.Ready) then
+                            if (textNow == "READY" or textNow == "") and (not curYou or not curYou.Ready) then
                                 Fire("TradeReady", true)
                                 Notify("✅ พร้อมเทรด", "กดยืนยัน Ready เรียบร้อย!", 2)
                                 Humanizer.Wait(2.0, 3.0)
