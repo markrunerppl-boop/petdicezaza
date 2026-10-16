@@ -956,11 +956,11 @@ local function Fire(...)
         local canH, reason = CanRunHalloween()
         if not canH then return end
         local itemKey = args[2]
-        local itemDef = HalloweenShopConfig and HalloweenShopConfig.Items and HalloweenShopConfig.Items[itemKey]
+        local itemDef = HalloweenShopConfig and ((HalloweenShopConfig.ById and HalloweenShopConfig.ById[itemKey]) or (HalloweenShopConfig.Items and HalloweenShopConfig.Items[itemKey]))
         local candyCost = itemDef and itemDef.Price or 0
         local entry = GetHalloweenEntry and GetHalloweenEntry()
         local candyHave = (entry and entry.Candy) or (data and (data.Candy or data.Candies or (data.Halloween and data.Halloween.Candy))) or 0
-        if candyHave < candyCost or candyCost <= 0 then
+        if candyCost > 0 and candyHave < candyCost then
             return -- ลูกอมไม่พอซื้อ ยกเลิกทันที ไม่ยิงไปเซิร์ฟเวอร์
         end
     end
@@ -5403,6 +5403,21 @@ Tabs.Halloween:AddToggle("TogHalBuyBags", {
     Title = "2. ซื้อแพ็ค 10 กระเป๋าอัตโนมัติ (270 ลูกอม)",
     Default = CFG.HalloweenAutoBuyBags,
     Callback = function(V) UpdateCFG("HalloweenAutoBuyBags", V) end
+})
+
+Tabs.Halloween:AddButton({
+    Title = "🛍️ ซื้อแพ็ค 10 กระเป๋าฮาโลวีนทันที (270 ลูกอม)",
+    Description = "ส่งคำสั่งซื้อแพ็ค 10 กระเป๋าฮาโลวีนทันที 1 ครั้ง (คุ้มกว่าซื้อทีละใบ)",
+    Callback = function()
+        local entry = GetHalloweenEntry and GetHalloweenEntry()
+        local candyHave = (entry and entry.Candy) or 0
+        if candyHave < 270 then
+            Notify("⚠️ ลูกอมไม่พอ", string.format("คุณมีลูกอม %d ชิ้น (ต้องใช้ 270 ชิ้น)", candyHave), 3)
+            return
+        end
+        Fire("SpookyBuy", "HalloweenBag10")
+        Notify("🛍️ ซื้อกระเป๋าฮาโลวีน", "ซื้อแพ็ค 10 กระเป๋าเรียบร้อย!", 3)
+    end
 })
 
 Tabs.Halloween:AddToggle("TogHalOpenBags", {
