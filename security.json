@@ -1,0 +1,10 @@
+{
+  "safe": true,
+  "status": "operational",
+  "min_script_version": "v4.8",
+  "verified_game_place_version": 154,
+  "kill_switch_active": false,
+  "notice_title": "ระบบความปลอดภัยปกติ",
+  "notice_message": "สคริปต์ทำงานตามปกติ ปลอดภัย 100%",
+  "updated_at": "2026-10-16T09:58:00+07:00"
+}
