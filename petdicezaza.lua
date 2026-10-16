@@ -155,12 +155,12 @@ pcall(function()
         if not errorMsg or errorMsg == "" or isReconnecting then return end
         
         -- ตรวจสอบความปลอดภัยสูงสุด: หากกำลังติดคำสั่งแบน Error 600 หรือ Cloud Halt ห้าม Rejoin เด็ดขาด
-        if getgenv().EmergencyKickLockout or getgenv().EmergencyCloudHalt then
+        if getgenv().EmergencyKickLockout or getgenv().EmergencyCloudHalt or getgenv().EmergencyPatchHalt then
             return
         end
         
         local msgLower = tostring(errorMsg):lower()
-        -- กรองเฉพาะข้อผิดพลาดประเภทเน็ตหลุด / เซิร์ฟเวอร์ปิดปรับปรุง / การตัดการเชื่อมต่อทั่วไป
+        -- กรองข้อผิดพลาดประเภทเน็ตหลุด / เซิร์ฟเวอร์ปิดปรับปรุง / เตะชั่วคราว Error 267
         local isSafeToReconnect = msgLower:find("server shut down") 
             or msgLower:find("please reconnect") 
             or msgLower:find("lost connection") 
@@ -169,12 +169,15 @@ pcall(function()
             or msgLower:find("279") 
             or msgLower:find("260") 
             or msgLower:find("284")
+            or msgLower:find("267")
+            or msgLower:find("kicked")
+            or msgLower:find("disconnected")
             
         if isSafeToReconnect then
             isReconnecting = true
             task.spawn(function()
-                -- หน่วงเวลาสุ่ม 15-25 วินาที เพื่อรอให้เซิร์ฟเวอร์ใหม่เปิดพร้อมใช้งาน
-                task.wait(math.random(15, 25))
+                -- หน่วงเวลาสุ่ม 20-30 วินาที เพื่อรอให้เซิร์ฟเวอร์เคลียร์สถานะตัวละครอย่างปลอดภัย
+                task.wait(math.random(20, 30))
                 pcall(function()
                     TeleportService:Teleport(game.PlaceId, LocalPlayer)
                 end)
@@ -477,9 +480,10 @@ getgenv().LastEconomyActionStartTime = 0
 getgenv().LastZoneTransitionTime = 0
 getgenv().LastPetUpgradedTime = 0
 
--- Global Inter-Packet Serializer (ป้องกัน Harmonic Collision เมื่อเปิด 10+ ฟังก์ชันพร้อมกัน)
--- รับประกันว่าไม่มีทางที่คำสั่ง 2 คำสั่งใดๆ จากทุก Loop จะยิงชนกันในเฟรมเดียวกัน (เว้นอย่างน้อย 0.12s เสมอ)
-local MIN_GLOBAL_REMOTE_INTERVAL = 0.12
+-- Centralized Remote Dispatcher Queue (100% Single-Threaded Anti-Collision & Anti-Kick Dispatcher)
+-- ป้องกันการยิงคำสั่งพร้อมกันในเฟรมเดียวกัน (Single-Threaded FIFO Serializer)
+local RemoteQueue = {}
+local MIN_GLOBAL_REMOTE_INTERVAL = 0.18
 local LastGlobalRemoteFireTime = 0
 
 -- Global Token Bucket Rate Limiter (ป้องกันการยิงพร้อมกันจากทุกฟังก์ชันเกินขีดจำกัดเซิร์ฟเวอร์)
@@ -798,53 +802,75 @@ local function Fire(...)
         end
     end
 
-    -- 4. ควบคุมความถี่เฉพาะของแต่ละคำสั่ง (Per-Action Rate Limiting)
-    if RemoteRateLimits[action] then
-        local now = tick()
-        local minInterval = RemoteRateLimits[action]
-        local lastTime = LastRemoteFire[action] or 0
-        local diff = now - lastTime
-        if diff < minInterval then
-            task.wait(minInterval - diff)
+    -- ป้องกันคิวยาวเกินไปเมื่อหลาย Loop เรียกคำสั่งพร้อมกัน
+    if #RemoteQueue >= 20 then
+        if action == "Roll" or action == "RollGrade" or action == "RollTrait" or action == "SetAuto" then
+            return -- สลัดคำสั่งความสำคัญต่ำทิ้ง ไม่สะสมในคิว
         end
-        LastRemoteFire[action] = tick()
     end
 
-    -- 4.1 Strict Global Inter-Packet Serializer (ป้องกัน Harmonic Collision เมื่อเปิด 10+ ฟังก์ชั่นพร้อมกัน)
-    -- รับประกันว่าไม่มีทางที่คำสั่ง 2 คำสั่งใดๆ จากทุก Loop จะยิงชนกันในเฟรมเดียวกัน (เว้นระยะอย่างน้อย 0.12s เสมอ)
-    local nowFire = tick()
-    local globalDiff = nowFire - LastGlobalRemoteFireTime
-    if globalDiff < MIN_GLOBAL_REMOTE_INTERVAL then
-        task.wait(MIN_GLOBAL_REMOTE_INTERVAL - globalDiff)
-    end
-    LastGlobalRemoteFireTime = tick()
-
-    -- 5. ควบคุมปริมาณทราฟฟิกรวมทั่วทั้งสคริปต์ (Global Token Bucket Rate Limiter)
-    -- ป้องกันกรณีที่เปิด 10+ ฟังก์ชั่นพร้อมกันแล้วส่งคำสั่งซ้อนกันในเสี้ยววินาทีเดียว
-    local now = tick()
-    local elapsed = now - GlobalTokenBucket.LastRefill
-    GlobalTokenBucket.Tokens = math.min(GlobalTokenBucket.MaxTokens, GlobalTokenBucket.Tokens + (elapsed * GlobalTokenBucket.RefillRate))
-    GlobalTokenBucket.LastRefill = now
-
-    local cost = GlobalTokenBucket.Costs[action] or 1.0
-    if GlobalTokenBucket.Tokens < cost then
-        local waitSec = (cost - GlobalTokenBucket.Tokens) / GlobalTokenBucket.RefillRate
-        if waitSec > 0 then
-            task.wait(waitSec)
-        end
-        GlobalTokenBucket.Tokens = 0
-        GlobalTokenBucket.LastRefill = tick()
-    else
-        GlobalTokenBucket.Tokens = GlobalTokenBucket.Tokens - cost
-    end
-
-    if ZoneTransitionActions[action] then
-        LastZoneTransitionTime = tick()
-        task.delay(3.5, function() isZoneTransitionLocked = false end)
-    end
-
-    Action:FireServer(unpack(args)) 
+    table.insert(RemoteQueue, { action = action, args = args })
 end
+
+-- Dedicated Single-Threaded Remote Dispatcher (รับประกันการส่งคำสั่งทีละ 1 คำสั่ง ปราศจากการยิงชนกัน 100%)
+task.spawn(function()
+    while true do
+        task.wait(0.01)
+        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        
+        if #RemoteQueue > 0 then
+            local item = table.remove(RemoteQueue, 1)
+            if item then
+                local action = item.action
+                local args = item.args
+                
+                if not (getgenv().EmergencyPatchHalt or getgenv().EmergencyCloudHalt or getgenv().EmergencyStructuralHalt or getgenv().EmergencyKickLockout) then
+                    -- 1. ควบคุมความถี่เฉพาะของแต่ละคำสั่ง (Per-Action Rate Limiting)
+                    local minInterval = RemoteRateLimits[action] or 0.15
+                    local now = tick()
+                    local diff = now - (LastRemoteFire[action] or 0)
+                    if diff < minInterval then
+                        task.wait(minInterval - diff)
+                    end
+                    
+                    -- 2. Single-Threaded Global Inter-Packet Serializer (เว้นระยะอย่างน้อย 0.18s เสมอ)
+                    local nowFire = tick()
+                    local globalDiff = nowFire - LastGlobalRemoteFireTime
+                    if globalDiff < MIN_GLOBAL_REMOTE_INTERVAL then
+                        task.wait(MIN_GLOBAL_REMOTE_INTERVAL - globalDiff)
+                    end
+                    
+                    -- 3. Global Token Bucket Rate Limiter
+                    local nowTb = tick()
+                    local elapsed = nowTb - GlobalTokenBucket.LastRefill
+                    GlobalTokenBucket.Tokens = math.min(GlobalTokenBucket.MaxTokens, GlobalTokenBucket.Tokens + (elapsed * GlobalTokenBucket.RefillRate))
+                    GlobalTokenBucket.LastRefill = nowTb
+                    
+                    local cost = GlobalTokenBucket.Costs[action] or 1.0
+                    if GlobalTokenBucket.Tokens < cost then
+                        local waitSec = (cost - GlobalTokenBucket.Tokens) / GlobalTokenBucket.RefillRate
+                        if waitSec > 0 then task.wait(waitSec) end
+                        GlobalTokenBucket.Tokens = 0
+                        GlobalTokenBucket.LastRefill = tick()
+                    else
+                        GlobalTokenBucket.Tokens = GlobalTokenBucket.Tokens - cost
+                    end
+                    
+                    LastRemoteFire[action] = tick()
+                    LastGlobalRemoteFireTime = tick()
+                    if ZoneTransitionActions[action] then
+                        LastZoneTransitionTime = tick()
+                        task.delay(4.5, function() isZoneTransitionLocked = false end)
+                    end
+                    
+                    pcall(function()
+                        Action:FireServer(unpack(args))
+                    end)
+                end
+            end
+        end
+    end
+end)
 
 -- ==============================================================================
 -- [1] ANTI-DETECTION & HUMANIZER UTILITIES
@@ -4501,6 +4527,18 @@ local function SafeCollectPlazaCandies(isManual)
         return false
     end
     
+    local isStormActive, stormSecLeft = IsCandyStormActive()
+    local targets = GetAvailableCandies()
+    if not isStormActive and #targets == 0 then
+        if isManual then
+            local secToNext = GetSecondsUntilNextStorm()
+            local m = math.floor(secToNext / 60)
+            local s = math.floor(secToNext % 60)
+            Notify("⏳ ยังไม่มีพายุลูกกวาด", string.format("ขณะนี้ยังไม่มีแคนดี้ในพลาซ่า (พายุรอบถัดไปในอีก %d นาที %02d วิ)\nระบบจะรอจนกว่าพายุจะเริ่มจริง เพื่อความปลอดภัย 100%%", m, s), 4)
+        end
+        return false
+    end
+    
     -- ล็อค Mutex และ Flag ทันทีตั้งแต่ก้าวแรก ป้องกัน Loop อื่นๆ (เช่น Tower หรือ Boss) แทรกแซง
     isCollectingCandyMutex = true
     getgenv().CandyStormMutex = true
@@ -6049,11 +6087,10 @@ task.spawn(function()
         if isJoined or IsEnteringBossPortal == true then task.wait(2.0) continue end
         
         local isStormActive, stormSecLeft = IsCandyStormActive()
-        local secToNext = GetSecondsUntilNextStorm()
         local targets = GetAvailableCandies()
         
-        -- ตรวจสอบเงื่อนไขเริ่มทำงาน: พายุกำลังตก หรือมีลูกอมในพลาซ่า หรือจะมาใน 5 วิ
-        if (isStormActive or #targets > 0) or (secToNext <= 5) then
+        -- ตรวจสอบเงื่อนไขเริ่มทำงาน: พายุกำลังตกจริง หรือมีลูกอมในพลาซ่าจริงเท่านั้น (ตัด secToNext <= 5 ออก 100% ป้องกันวาร์ปไปมา)
+        if isStormActive or #targets > 0 then
             SafeCollectPlazaCandies(false)
         end
     end
