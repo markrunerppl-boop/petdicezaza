@@ -611,6 +611,7 @@ local ZoneTransitionActions = {
 local SwitchOrStartTower
 local IsTowerRunning
 local IsTowerInArena
+local UpdateTowerStatus
 local function IsPlayerAtHomePlot()
     local char = LocalPlayer.Character or Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -708,10 +709,14 @@ local function IsFeatureUnlocked(featureName, idName)
         end
     end
     local u = data and data.Upgrades
-    if not u or not Upgrades then return false end
-    local openByFunc = Upgrades.IsOpen and Upgrades.IsOpen(u, featureName)
-    local openById = (u[idName] or 0) > 0
-    return openByFunc == true and openById == true
+    if not u then return false end
+    local openByFunc = false
+    if Upgrades and Upgrades.IsOpen then
+        local ok, res = pcall(function() return Upgrades.IsOpen(u, featureName) end)
+        if ok and res == true then openByFunc = true end
+    end
+    local openById = (u[idName] or 0) > 0 or (u[featureName] or 0) > 0
+    return openByFunc == true or openById == true
 end
 
 local function FlushTradeDeferredQueue()
@@ -842,16 +847,8 @@ local function Fire(...)
         if (LiveTower and LiveTower.Active == true and not LiveTower.Starting) then
             return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
         end
-        local char = LocalPlayer.Character or Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp and not IsPlayerAtHomePlot() then
-            return -- ห้ามเริ่มหอคอยเด็ดขาดหากไม่ได้อยู่ที่ลานบ้าน (Home Plot) ของตัวเอง ป้องกันเซิร์ฟเวอร์เตะ (Error 267)
-        end
-        if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 4.5) then
-            return -- หน่วง 4.5 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
-        end
-        if (tick() - LastZoneTransitionTime < 5.0) then
-            return -- หน่วง 5.0 วินาทีหลังวาร์ปกลับบ้าน เพื่อให้ตำแหน่งตัวละครและฟิสิกส์บนเซิร์ฟเวอร์ซิงก์ตรงกัน 100%
+        if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.0) then
+            return -- หน่วง 3.0 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
         end
     end
     if action == "TowerLeave" then
@@ -3466,13 +3463,6 @@ SwitchOrStartTower = function(targetTowerId, force)
         return false, "In World Boss"
     end
     
-    local char = LocalPlayer.Character or Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if hrp and not IsPlayerAtHomePlot() then
-        Fire("Teleport", "Home")
-        Humanizer.Wait(2.0, 3.0)
-    end
-    
     local nowTick = tick()
     if isSwitchingTower then
         if (nowTick - (LiveTower.SwitchingTick or 0) > 4.0) then
@@ -3499,7 +3489,7 @@ SwitchOrStartTower = function(targetTowerId, force)
         if CFG.AutoExitArena and IsTowerInArena() then
             Fire("TowerExit")
         end
-        task.delay(0.2, UpdateTowerStatus)
+        task.delay(0.2, function() if UpdateTowerStatus then UpdateTowerStatus() end end)
         return true
     end
     
@@ -3556,13 +3546,17 @@ SwitchOrStartTower = function(targetTowerId, force)
                     end
                 end)
             end
-            task.delay(0.4, UpdateTowerStatus)
+            task.delay(0.4, function() if UpdateTowerStatus then UpdateTowerStatus() end end)
             return true
         end
         return false
     end)
     isSwitchingTower = false
-    return ok and res
+    if not ok then
+        warn("[SwitchOrStartTower error]:", res)
+        return false, res
+    end
+    return res
 end
 
 local function StartSelectedTower()
@@ -3570,7 +3564,7 @@ local function StartSelectedTower()
     SwitchOrStartTower(targetId, true)
 end
 
-local function UpdateTowerStatus()
+UpdateTowerStatus = function()
     pcall(function()
         local data = State.Data
         if not data then return end
@@ -6680,26 +6674,6 @@ task.spawn(function()
                             SwitchOrStartTower(targetId, true)
                         end
                     else
-                        local char = LocalPlayer.Character or Character
-                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                        if hrp and not IsPlayerAtHomePlot() then
-                            -- หากตัวละครอยู่ในลานพลาซ่า ให้พากลับบ้านก่อนเริ่มหอคอย
-                            if (now - LastZoneTransitionTime >= 4.0) then
-                                Fire("Teleport", "Home")
-                                Humanizer.Wait(2.5, 3.5)
-                                LastZoneTransitionTime = tick()
-                            else
-                                task.wait(1.5)
-                                continue
-                            end
-                        end
-                        
-                        -- รอให้การเปลี่ยนโซนก่อนหน้า โหลดเสร็จอย่างสมบูรณ์ ป้องกัน Error 267
-                        if (now - LastZoneTransitionTime < 3.5) then
-                            task.wait(1.0)
-                            continue
-                        end
-                        
                         local baseDelay = math.max(4.0, tonumber(CFG.TowerRestartDelay) or 5.0)
                         local backoffDelay = baseDelay + math.min(30, consecutiveFailCount * 5.0)
                         if not isSwitchingTower and (now - lastLoopStartAttempt >= backoffDelay) then
@@ -7999,5 +7973,14 @@ end
 getgenv().PetDiceScriptLoaded = true
 getgenv().PetDiceScriptStarting = nil
 getgenv().PetDiceNotify = Notify
-
 Notify("🚀 สคริปต์พร้อมทำงาน", "Pet Dice Master Fluent Edition v4.8 โหลดสำเร็จ!", 4)
+
+-- Auto-start tower immediately upon script load if enabled
+if CFG and CFG.Tower then
+    task.delay(1.0, function()
+        if getgenv().PetDiceScriptToken == scriptToken and CFG.Tower and not IsTowerRunning() then
+            local targetId = ResolveTowerId(CFG.SelectedTower)
+            SwitchOrStartTower(targetId, true)
+        end
+    end)
+end
