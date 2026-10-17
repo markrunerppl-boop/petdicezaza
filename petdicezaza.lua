@@ -507,7 +507,7 @@ end
 
 local function IsHalloweenActive()
     local stormActive = false
-    if IsCandyStormActive then
+    if CFG and CFG.HalloweenAutoCollectCandy and IsCandyStormActive then
         local ok, act = pcall(IsCandyStormActive)
         if ok and act then stormActive = true end
     end
@@ -1879,7 +1879,7 @@ local defaultCFG = {
     HalloweenAutoBuyLimitedPull = false,
     HalloweenAutoOpenBags = false,
     HalloweenAutoTrickOrTreat = false,
-    HalloweenAutoCollectCandy = true,
+    HalloweenAutoCollectCandy = false,
     SelectedTower = "Infinity",
     SelectedTowerOption = "ด่าน 7: INFINITY TOWER (ไร้สิ้นสุด) [Infinity]",
     TowerRestartDelay = 5,
