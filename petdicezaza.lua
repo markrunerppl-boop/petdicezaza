@@ -634,6 +634,11 @@ local RemoteRateLimits = {
     EquipBest = 2.00,
     SellKeys = 0.50,
     ClaimLootPets = 0.80,
+    Roll = 0.50,             -- ทอยเต๋า ตาม Cooldown ของเกม ป้องกัน Server Spam Count
+    SetAuto = 1.00,          -- สลับสถานะ Auto Roll
+    SetSetting = 1.00,       -- บันทึกการตั้งค่า
+    PortalRepair = 3.00,     -- ซ่อมแซมประตูบอสโลก
+    BuyUpgrade = 0.50,       -- ซื้ออัปเกรดเดี่ยว
 }
 
 -- Global Zone Transition Serialization & Anti-Conflict State Machine
@@ -738,6 +743,12 @@ local GlobalTokenBucket = {
         TradeAddPets = 0.8,
         TradeRemovePets = 0.8,
         TradeCancel = 1.0,
+        BuyAllUpgrades = 2.0,
+        Teleport = 2.5,
+        TowerStart = 2.5,
+        WorldBossJoin = 2.5,
+        PortalRepair = 2.0,
+        Rebirth = 2.0,
         Menu = 0,
         -- รายการอื่นๆ มี Cost เริ่มต้นเป็น 1.0 ตามระบบเกม
     }
@@ -874,6 +885,11 @@ local function Fire(...)
         if not IsFeatureUnlocked("Towers", "towers") then
             return
         end
+        local towerId = args[2]
+        local team = args[3]
+        if not towerId or not team or type(team) ~= "table" or #team == 0 then
+            return -- ไม่มีหอคอยหรือไม่มีสัตว์เลี้ยงในทีม ไม่ส่งเด็ดขาด ป้องกัน Error 267
+        end
         if IsHalloweenActive() then
             return -- ห้ามเริ่มหอคอยเด็ดขาดหากกิจกรรมฮาโลวีนหรือพายุลูกกวาดกำลังทำงาน (Priority 3 เหนือกว่า Priority 4)
         end
@@ -900,8 +916,41 @@ local function Fire(...)
             return -- ไม่ได้อยู่ในอารีน่าจริง ไม่ส่ง TowerExit
         end
     end
-    if (action == "WorldBossJoin" or action == "WorldBossLeave" or action == "PortalRepair") and not IsFeatureUnlocked("WorldBoss", "worldboss") then
-        return
+    if action == "WorldBossJoin" then
+        if not IsFeatureUnlocked("WorldBoss", "worldboss") then return end
+        local wbState = RS:GetAttribute("WorldBossState")
+        if wbState ~= "Joining" then
+            return -- บอสโลกยังไม่เปิดให้เข้าร่วม (ไม่ใช่สถานะ Joining) ห้ามส่งเด็ดขาด ป้องกัน Error 267
+        end
+        if LocalPlayer:GetAttribute("WorldBossJoined") == true or LocalPlayer:GetAttribute("InWorldBoss") == true then
+            return -- เข้าร่วมอยู่แล้ว ไม่ส่งซ้ำ
+        end
+        local d = State.Data
+        if not d or not d.PortalRepaired then
+            return -- ประตูยังไม่ได้ซ่อมแซม ห้ามเข้าร่วม
+        end
+        local char = LocalPlayer.Character or Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local bossPortalPos = Vector3.new(0, 20.43, -298)
+        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 28 then
+            return -- ต้องอยู่ใกล้หน้าประตูบอสโลกไม่เกิน 28 studs ป้องกันส่งจากระยะไกลจนโดนเตะ Error 267
+        end
+    end
+    if action == "WorldBossLeave" then
+        if not IsFeatureUnlocked("WorldBoss", "worldboss") then return end
+        local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if not isJoined then return end
+    end
+    if action == "PortalRepair" then
+        if not IsFeatureUnlocked("WorldBoss", "worldboss") then return end
+        local d = State.Data
+        if d and d.PortalRepaired then return end
+        local char = LocalPlayer.Character or Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local bossPortalPos = Vector3.new(0, 20.43, -298)
+        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 25 then
+            return -- ต้องอยู่หน้าประตูบอสโลกจริงขณะซ่อม ป้องกัน Error 267
+        end
     end
     if action == "Teleport" and args[2] == "Portal" and not IsFeatureUnlocked("WorldBoss", "worldboss") then
         return
@@ -960,6 +1009,7 @@ local function Fire(...)
         end
     end
     if action == "OpenLootBag" then
+        if (IsTowerInArena and IsTowerInArena()) or (IsInTrade and IsInTrade()) or getgenv().TradeActiveSession then return end
         local bagKind = args[3]
         if bagKind then
             local haveSeason = data and data.SeasonBags and (data.SeasonBags[bagKind] or 0) > 0
@@ -970,6 +1020,7 @@ local function Fire(...)
         end
     end
     if action == "ClaimLootPets" then
+        if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
         local waiting = 0
         pcall(function()
             if PetData and PetData.WaitingCount and data then
@@ -988,8 +1039,15 @@ local function Fire(...)
             return -- ไม่มีสินค้าให้ซื้อ หรือเงินไม่พอ ปฏิเสธทันที ไม่ยิงไปเซิร์ฟเวอร์
         end
     end
-    if action == "BuyDice" and not args[2] then
-        return -- ป้องกันการยิง BuyDice แบบไม่มี ID
+    if action == "BuyDice" then
+        local diceId = args[2]
+        if not diceId or not data or not data.OwnedDice or not Config.Dice then return end
+        if data.OwnedDice[diceId] == true then return end -- มีอยู่แล้ว ไม่ซื้อซ้ำ
+        local diceDef = nil
+        for _, d in ipairs(Config.Dice) do
+            if d.Id == diceId then diceDef = d break end
+        end
+        if not diceDef or (data.Money or 0) < (diceDef.Cost or 0) then return end
     end
     if action == "TrickOrTreat" then
         if not CanTrickOrTreat or not CanTrickOrTreat() then
@@ -1000,17 +1058,23 @@ local function Fire(...)
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
-        if not hrp or (hrp.Position - pawculaPos).Magnitude > 25 then
-            return -- ต้องอยู่ใกล้เคานต์พาวคูลาไม่เกิน 25 studs ป้องกันเซิร์ฟเวอร์เตะ Error 267
+        if not hrp or (hrp.Position - pawculaPos).Magnitude > 14 then
+            return -- ต้องอยู่ใกล้เคานต์พาวคูลาในระยะ ProximityPrompt (14 studs) ป้องกันเซิร์ฟเวอร์เตะ Error 267
         end
     end
     if action == "SpookyBuy" then
         local canH, reason = CanRunHalloween()
         if not canH then return end
         local itemKey = args[2]
+        if not itemKey then return end
         local itemDef = HalloweenShopConfig and ((HalloweenShopConfig.ById and HalloweenShopConfig.ById[itemKey]) or (HalloweenShopConfig.Items and HalloweenShopConfig.Items[itemKey]))
-        local candyCost = itemDef and itemDef.Price or 0
+        if not itemDef then return end -- ไอเทมไม่มีอยู่จริงในร้าน ไม่ส่ง
         local entry = GetHalloweenEntry and GetHalloweenEntry()
+        if itemKey == "LimitedPull" then
+            local boughtPulls = entry and entry.Bought and (entry.Bought.LimitedPull or entry.Bought.HalloweenPull or entry.Bought.SinglePull) or 0
+            if boughtPulls >= 5 then return end -- ซื้อครบ 5 ครั้งแล้ว ไม่ส่งซ้ำ
+        end
+        local candyCost = itemDef.Price or 0
         local candyHave = (entry and entry.Candy) or (data and (data.Candy or data.Candies or (data.Halloween and data.Halloween.Candy))) or 0
         if candyCost > 0 and candyHave < candyCost then
             return -- ลูกอมไม่พอซื้อ ยกเลิกทันที ไม่ยิงไปเซิร์ฟเวอร์
@@ -1023,15 +1087,28 @@ local function Fire(...)
         local entry = GetHalloweenEntry and GetHalloweenEntry()
         if not goalId or not entry then return end
     end
-    if action == "EquipBest" or action == "EquipDice" then
+    if action == "EquipBest" then
         if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
         if IsHalloweenActive() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
     end
+    if action == "EquipDice" then
+        if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
+        if IsHalloweenActive() then return end
+        local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if isBoss or IsEnteringBossPortal == true then return end
+        if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
+        local diceId = args[2]
+        if not diceId or not data or not data.OwnedDice then return end
+        if not data.OwnedDice[diceId] then return end -- ยังไม่ได้เป็นเจ้าของ ห้ามส่งคำสั่ง
+        if data.Dice == diceId then return end -- สวมใส่อยู่แล้ว ไม่ส่งซ้ำ
+    end
     if action == "SellKeys" then
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
+        local keys = args[2]
+        if not keys or type(keys) ~= "table" or #keys == 0 then return end
     end
     if action == "UsePotion" then
         local potKey = args[2]
@@ -1048,8 +1125,23 @@ local function Fire(...)
             return -- เงินไม่พอเกิดใหม่ ยกเลิกทันที
         end
     end
-    if action == "Roll" and State.Rolling then
-        return -- กำลังทอยเต๋าอยู่ ไม่ยิงซ้อน
+    if action == "Roll" then
+        if State.Rolling then return end
+        if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
+        local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        if isBoss or IsEnteringBossPortal == true then return end
+        if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
+    end
+    if action == "SetAuto" then
+        local val = args[2]
+        if type(val) ~= "boolean" then return end
+        if State.Auto == val then return end
+    end
+    if action == "SetSetting" then
+        local sKey = args[2]
+        local sVal = args[3]
+        if not sKey or type(sKey) ~= "string" then return end
+        if data and data.Settings and data.Settings[sKey] == sVal then return end
     end
     if action == "Teleport" then
         if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then
@@ -1190,6 +1282,8 @@ local function Fire(...)
         
         local targetPlayer = Players:GetPlayerByUserId(targetUserId)
         if not targetPlayer or targetPlayer.Parent ~= Players then return end
+        if targetPlayer:GetAttribute("PetDiceTradeOff") == true then return end
+        if targetPlayer:GetAttribute("PetDiceTradeLocked") == true then return end
         
         if not data or not Config.TradeUnlocked or not Config.TradeUnlocked(data) then return end
         -- ต้องไม่เคยอยู่ในเซสชันเทรดที่เปิดอยู่แล้ว หรือหน้าต่างเทรดเปิดอยู่แล้ว
@@ -1253,6 +1347,14 @@ local function Fire(...)
         end
         if currentPetsCount + #petUids > 12 then return end
         
+        if session and session.You and session.You.Pets then
+            for _, uid in ipairs(petUids) do
+                if session.You.Pets[tostring(uid)] or session.You.Pets[tonumber(uid)] then
+                    return -- มีสัตว์เลี้ยงตัวนี้ในช่องเทรดอยู่แล้ว ไม่ใส่ซ้ำ
+                end
+            end
+        end
+        
         local equipped = {}
         for _, u in ipairs(data.Equipped or {}) do equipped[tostring(u)] = true end
         local onExp = {}
@@ -1275,6 +1377,16 @@ local function Fire(...)
         local session = getgenv().CurrentTradeSession
         if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
         if not petUids or type(petUids) ~= "table" or #petUids == 0 then return end
+        if session and session.You and session.You.Pets then
+            local validRemove = false
+            for _, uid in ipairs(petUids) do
+                if session.You.Pets[tostring(uid)] or session.You.Pets[tonumber(uid)] then
+                    validRemove = true
+                    break
+                end
+            end
+            if not validRemove then return end
+        end
     end
     if action == "TradeCancel" then
         local session = getgenv().CurrentTradeSession
@@ -1534,11 +1646,11 @@ WalkToPawcula = function()
     Humanizer.Wait(0.4, 0.8)
     char = LocalPlayer.Character or Character
     hrp = char and char:FindFirstChild("HumanoidRootPart")
-    -- ตรวจสอบระยะห่างจากเคานต์พาวคูลาจริง ต้องไม่เกิน 18 studs (ตามระยะ ProximityPrompt สูงสุดของเกม)
-    if hrp and (hrp.Position - pawculaPos).Magnitude <= 18 then
+    -- ตรวจสอบระยะห่างจากเคานต์พาวคูลาจริง ต้องไม่เกิน 14 studs (ตามระยะ ProximityPrompt สูงสุดของเกม)
+    if hrp and (hrp.Position - pawculaPos).Magnitude <= 14 then
         return true
     end
-    return reached or false
+    return false
 end
 
 IsCandyStormActive = function()
@@ -3349,10 +3461,15 @@ local function SafeWalkToBossPortal()
             end
         end
         
-        return true
+        char = LocalPlayer.Character or Character
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp and (hrp.Position - targetPos).Magnitude <= 15 then
+            return true
+        end
+        return false
     end)
     IsEnteringBossPortal = false
-    return ok and res
+    return ok and res == true
 end
 
 local lastTowerStartTick = 0
@@ -3977,17 +4094,20 @@ Tabs.Tower:AddButton({
         local wbElem = RS:GetAttribute("WorldBossElement") or "Random"
         local wbDiff = RS:GetAttribute("WorldBossDifficulty") or "Normal"
         
-        if wbState == "Joining" or wbState == "Fighting" then
+        if wbState == "Joining" then
             if CFG.PauseTowerForBoss and IsTowerRunning() then
                 Fire("TowerLeave")
                 Humanizer.Wait(0.8, 1.5)
             end
             
-            SafeWalkToBossPortal()
-            Humanizer.Wait(0.3, 0.6)
-            
-            Fire("WorldBossJoin")
-            Notify("⚔️ บอสโลก", string.format("ส่งคำสั่งเข้าร่วมบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 3)
+            local arrived = SafeWalkToBossPortal()
+            if arrived then
+                Humanizer.Wait(0.3, 0.6)
+                Fire("WorldBossJoin")
+                Notify("⚔️ บอสโลก", string.format("ส่งคำสั่งเข้าร่วมบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 3)
+            else
+                Notify("⚠️ บอสโลก", "ไม่สามารถเดินถึงหน้าประตูบอสโลกได้ (ยกเลิกเพื่อป้องกัน Error 267)", 3)
+            end
         else
             -- คำนวณเวลานับถอยหลังที่เหลืออยู่จริงจนกว่าจะเปิดรับสมัคร
             local timeToJoin = 0
@@ -6757,12 +6877,6 @@ task.spawn(function()
                                 -- ถ้ายังไม่ปลดล็อค ไม่ต้องออกจากหอคอย ไม่ต้องเดินไปประตูบอสโลก ให้ฟาร์มหอคอยต่อไปอย่างปลอดภัย 100%
                                 if not isBossUnlocked then return end
                                 
-                                -- ตรวจสอบการซ่อมแซมประตูบอสโลก
-                                if data and not data.PortalRepaired then
-                                    Fire("PortalRepair")
-                                    Humanizer.Wait(0.5, 1.0)
-                                end
-                                
                                 -- 1. พักหอคอยก่อนเพื่อให้สัตว์เลี้ยงว่างพร้อมตีบอส
                                 if CFG.PauseTowerForBoss and IsTowerRunning() then
                                     Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อเตรียมตัวสู้บอสโลก...", 2)
@@ -6780,15 +6894,25 @@ task.spawn(function()
                                 end
                                 
                                 -- 2. เดินทางไปหน้าประตูบอสด้วยระบบทางการของตัวเกม และเดินขึ้นบันไดตามธรรมชาติ (ปลอดภัยจากการตรวจจับ 100%)
-                                SafeWalkToBossPortal()
+                                local arrived = SafeWalkToBossPortal()
+                                
+                                -- ตรวจสอบการซ่อมแซมประตูบอสโลกเมื่อเดินถึงหน้าประตูแล้วเท่านั้น
+                                if arrived and data and not data.PortalRepaired then
+                                    Fire("PortalRepair")
+                                    Humanizer.Wait(1.0, 1.5)
+                                end
                                 
                                 -- 3. Humanizer หน่วงเวลาเล็กน้อย
                                 Humanizer.Wait(0.5, 1.0)
                                 if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.AutoWorldBoss then return end
                                 
                                 -- 4. ส่งคำสั่งเข้าร่วมบอสโลก
-                                Fire("WorldBossJoin")
-                                Notify("⚔️ บอสโลก", string.format("เข้าร่วมการตีบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 4)
+                                if arrived then
+                                    Fire("WorldBossJoin")
+                                    Notify("⚔️ บอสโลก", string.format("เข้าร่วมการตีบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 4)
+                                else
+                                    Notify("⚠️ บอสโลก", "เดินไม่ถึงหน้าประตูบอสโลก ยกเลิกการส่งคำสั่งเพื่อป้องกัน Error 267", 3)
+                                end
                             end)
                         end
                     end
