@@ -1186,8 +1186,10 @@ local function Fire(...)
         if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
         if session and session.You then
             if readyState == true and session.You.Ready == true then return end
-            if session.You.LockedFor and session.You.LockedFor > 0 then return end
+            if getgenv().TradeLockedUntil and tick() < getgenv().TradeLockedUntil then return end
         end
+        local _, btnText = GetTradeReadyButton()
+        if btnText and string.upper(btnText):find("WAIT") then return end
     end
     if action == "TradeItem" then
         local itemKey = args[2]
@@ -1949,6 +1951,10 @@ end
 
 if getgenv().CFG.TradeTarget == "[ เลือกทุกคนในห้อง ]" then
     getgenv().CFG.TradeTargetId = nil
+end
+
+if getgenv().CFG.AutoReady == nil or ((getgenv().CFG.SenderMode or getgenv().CFG.ReceiverMode) and getgenv().CFG.AutoReady == false) then
+    getgenv().CFG.AutoReady = true
 end
 
 local CFG = getgenv().CFG
@@ -5567,7 +5573,7 @@ TogAutoDropItems = Tabs.Trade:AddToggle("TogAutoDropItems", {
     Callback = function(V) UpdateCFG("AutoDropItems", V) end
 })
 
-Tabs.Trade:AddToggle("TogAutoReady", {
+TogAutoReady = Tabs.Trade:AddToggle("TogAutoReady", {
     Title = "✅ กดพร้อม (Ready) อัตโนมัติ",
     Default = CFG.AutoReady,
     Callback = function(V) UpdateCFG("AutoReady", V) end
@@ -5580,8 +5586,12 @@ TogSender = Tabs.Trade:AddToggle("TogSender", {
         UpdateCFG("SenderMode", V) 
         if V then
             UpdateCFG("AutoDropItems", true)
+            UpdateCFG("AutoReady", true)
             if TogAutoDropItems and TogAutoDropItems.SetValue then
                 pcall(function() TogAutoDropItems:SetValue(true) end)
+            end
+            if TogAutoReady and TogAutoReady.SetValue then
+                pcall(function() TogAutoReady:SetValue(true) end)
             end
             if CFG.ReceiverMode then
                 UpdateCFG("ReceiverMode", false)
@@ -5600,8 +5610,12 @@ TogReceiver = Tabs.Trade:AddToggle("TogReceiver", {
         UpdateCFG("ReceiverMode", V) 
         if V then
             UpdateCFG("AutoDropItems", false)
+            UpdateCFG("AutoReady", true)
             if TogAutoDropItems and TogAutoDropItems.SetValue then
                 pcall(function() TogAutoDropItems:SetValue(false) end)
+            end
+            if TogAutoReady and TogAutoReady.SetValue then
+                pcall(function() TogAutoReady:SetValue(true) end)
             end
             if CFG.SenderMode then
                 UpdateCFG("SenderMode", false)
@@ -6449,6 +6463,7 @@ TradeRemote.OnClientEvent:Connect(function(event, payload)
         getgenv().CurrentTradeSession = nil
         getgenv().TradeItemsDropped = false
         getgenv().ReceiverItemPut = false
+        getgenv().TradeLockedUntil = nil
         getgenv().LastTradeCompleteTime = tick()
         task.spawn(function()
             Humanizer.Wait(2.0, 3.5)
@@ -7395,21 +7410,22 @@ task.spawn(function()
             end
             
             -- 3. โหมดกด Ready อัตโนมัติอย่างปลอดภัย (Safe Auto Ready & Real-Time Sync)
-            if CFG.AutoReady then
+            if CFG.AutoReady or CFG.SenderMode or CFG.ReceiverMode then
                 session = getgenv().CurrentTradeSession
                 you = session and session.You
                 them = session and session.Them
                 
                 -- ตรวจสอบสถานะปุ่ม Ready จริงของเกม
                 local readyBtnFace, readyStatusText = GetTradeReadyButton()
+                local cleanStatus = string.upper(string.gsub(readyStatusText or "", "%s+", ""))
                 
                 -- ถ้าปุ่มอยู่ในสถานะรอคูลดาวน์ (เช่น "WAIT 3", "WAIT 2", "WAIT 1") ให้รอจนกว่าคูลดาวน์หมด
-                local isLocked = readyStatusText:find("WAIT") or (getgenv().TradeLockedUntil and tick() < getgenv().TradeLockedUntil)
+                local isLocked = cleanStatus:find("WAIT") or (getgenv().TradeLockedUntil and tick() < getgenv().TradeLockedUntil)
                 if isLocked then
                     task.wait(0.5)
-                elseif readyStatusText == "UNREADY" or (you and you.Ready) then
+                elseif cleanStatus:find("UNREADY") or (you and you.Ready) then
                     -- ฝั่งเรากดพร้อมเรียบร้อยแล้ว ไม่ต้องกดซ้ำ (ป้องกันการกดยกเลิก)
-                elseif (readyStatusText == "READY" or readyStatusText == "") and (not you or not you.Ready) then
+                elseif (cleanStatus:find("READY") or cleanStatus == "") and (not you or not you.Ready) then
                     -- ฝั่งเรายังไม่ได้กดพร้อม และปุ่มปลดล็อคให้กดได้
                     local canPressReady = true
                     
@@ -7423,7 +7439,17 @@ task.spawn(function()
                         if (CFG.TwoWayTrade ~= false) and not getgenv().ReceiverItemPut then
                             canPressReady = false
                         elseif them and not them.Ready then
-                            local themHasItems = (them.Items and next(them.Items) ~= nil) or (them.Pets and next(them.Pets) ~= nil)
+                            local themHasItems = false
+                            if them.Pets and #them.Pets > 0 then
+                                themHasItems = true
+                            elseif them.Items then
+                                for _, itCount in pairs(them.Items) do
+                                    if type(itCount) == "number" and itCount > 0 then
+                                        themHasItems = true
+                                        break
+                                    end
+                                end
+                            end
                             if not themHasItems then
                                 canPressReady = false
                             end
@@ -7432,18 +7458,24 @@ task.spawn(function()
                     
                     if canPressReady and IsInTrade() then
                         -- หน่วงเวลาก่อนกด Ready เพื่อจำลองมนุษย์ตรวจสอบไอเทม (3-5 วินาที)
-                        local readyDelay = CFG.TradeReadyDelay or 4
-                        Humanizer.Wait(readyDelay * 0.8, readyDelay * 1.2)
+                        local readyDelay = tonumber(CFG.TradeReadyDelay) or 4
+                        if readyDelay > 0 then
+                            Humanizer.Wait(readyDelay * 0.75, readyDelay * 1.1)
+                        end
                         
                         -- Re-check confirmation before sending
                         if IsInTrade() then
                             local readyFaceNow, textNow = GetTradeReadyButton()
+                            local cleanNow = string.upper(string.gsub(textNow or "", "%s+", ""))
                             local curSession = getgenv().CurrentTradeSession
                             local curYou = curSession and curSession.You
-                            if (textNow == "READY" or textNow == "") and (not curYou or not curYou.Ready) then
+                            if (cleanNow == "" or cleanNow:find("READY")) and not cleanNow:find("UNREADY") and not cleanNow:find("WAIT") and (not curYou or not curYou.Ready) then
                                 Fire("TradeReady", true)
                                 if readyFaceNow and firesignal then
+                                    pcall(function() firesignal(readyFaceNow.Activated) end)
                                     pcall(function() firesignal(readyFaceNow.MouseButton1Click) end)
+                                    pcall(function() firesignal(readyFaceNow.MouseButton1Down) end)
+                                    pcall(function() firesignal(readyFaceNow.MouseButton1Up) end)
                                 end
                                 Notify("✅ พร้อมเทรด", "กดยืนยัน Ready เรียบร้อย!", 2)
                                 Humanizer.Wait(2.0, 3.0)
