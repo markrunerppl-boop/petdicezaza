@@ -614,25 +614,34 @@ local IsTowerInArena
 local function IsPlayerAtHomePlot()
     local char = LocalPlayer.Character or Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
+    if not hrp then return true end
     
+    local pos = hrp.Position
+    local distCenter = Vector3.new(pos.X, 0, pos.Z).Magnitude
+    
+    -- ลานพลาซ่า (Plaza Hub) มีรัศมีประมาณ 70 studs จากจุดกึ่งกลาง (0,0)
+    -- หากอยู่นอกระยะ 70 studs แปลว่าอยู่ที่แปลงบ้าน หรือในอารีน่าหอคอยแล้ว
+    if distCenter >= 70 then
+        return true
+    end
+    
+    -- ตรวจสอบตำแหน่งแปลงบ้านของผู้เล่น
     local plots = workspace:FindFirstChild("Plots")
     if plots then
         local uid = LocalPlayer.UserId
         for _, p in ipairs(plots:GetChildren()) do
             local ownerId = p:GetAttribute("OwnerId") or p:GetAttribute("Owner")
             if ownerId and (tonumber(ownerId) == uid or tostring(ownerId) == tostring(uid)) then
-                local pp = p.PrimaryPart or p:FindFirstChildWhichIsA("BasePart")
-                if pp then
-                    local d = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(pp.Position.X, 0, pp.Position.Z)).Magnitude
-                    return (d <= 85)
+                local cf, sz = p:GetBoundingBox()
+                local d = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(cf.Position.X, 0, cf.Position.Z)).Magnitude
+                if d <= 180 then
+                    return true
                 end
             end
         end
     end
     
-    local distCenter = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude
-    return (distCenter >= 150)
+    return false
 end
 local isPetEnhanceRolling = false
 local isPetOperationMutex = false
@@ -1873,7 +1882,7 @@ end
 local ConfigFile = "PetDice_Master_v4_Config.json"
 
 local defaultCFG = {
-    Tower = false, AutoPlay = false, AutoExitArena = true,
+    Tower = true, AutoPlay = true, AutoExitArena = true,
     HalloweenAutoClaim = false,
     HalloweenAutoBuyBags = false,
     HalloweenAutoBuyLimitedPull = false,
@@ -3463,12 +3472,8 @@ SwitchOrStartTower = function(targetTowerId, force)
     local char = LocalPlayer.Character or Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if hrp and not IsPlayerAtHomePlot() then
-        if force then
-            Fire("Teleport", "Home")
-            Humanizer.Wait(2.5, 3.5)
-        else
-            return false, "Not At Home Plot"
-        end
+        Fire("Teleport", "Home")
+        Humanizer.Wait(2.0, 3.0)
     end
     
     local nowTick = tick()
@@ -6681,28 +6686,28 @@ task.spawn(function()
                         local char = LocalPlayer.Character or Character
                         local hrp = char and char:FindFirstChild("HumanoidRootPart")
                         if hrp and not IsPlayerAtHomePlot() then
-                            -- หากตัวละครไม่ได้อยู่ที่บ้านของตัวเอง ให้พากลับบ้านอย่างปลอดภัยก่อนเริ่มหอคอย
-                            if (now - LastZoneTransitionTime >= 5.0) then
+                            -- หากตัวละครอยู่ในลานพลาซ่า ให้พากลับบ้านก่อนเริ่มหอคอย
+                            if (now - LastZoneTransitionTime >= 4.0) then
                                 Fire("Teleport", "Home")
-                                Humanizer.Wait(4.5, 5.5)
+                                Humanizer.Wait(2.5, 3.5)
                                 LastZoneTransitionTime = tick()
                             else
-                                task.wait(2.0)
+                                task.wait(1.5)
+                                continue
                             end
+                        end
+                        
+                        -- รอให้การเปลี่ยนโซนก่อนหน้า โหลดเสร็จอย่างสมบูรณ์ ป้องกัน Error 267
+                        if (now - LastZoneTransitionTime < 3.5) then
+                            task.wait(1.0)
                             continue
                         end
                         
-                        -- รอให้การเปลี่ยนโซนก่อนหน้า (เช่น วาร์ปกลับบ้าน) โหลดเสร็จอย่างสมบูรณ์ ป้องกัน Error 267
-                        if (now - LastZoneTransitionTime < 5.0) then
-                            task.wait(1.5)
-                            continue
-                        end
-                        
-                        local baseDelay = math.max(6.0, tonumber(CFG.TowerRestartDelay) or 6.0)
+                        local baseDelay = math.max(4.0, tonumber(CFG.TowerRestartDelay) or 5.0)
                         local backoffDelay = baseDelay + math.min(30, consecutiveFailCount * 5.0)
                         if not isSwitchingTower and (now - lastLoopStartAttempt >= backoffDelay) then
                             lastLoopStartAttempt = now
-                            SwitchOrStartTower(targetId, false)
+                            SwitchOrStartTower(targetId, true)
                             task.delay(4.0, function()
                                 if not IsTowerRunning() then
                                     consecutiveFailCount = consecutiveFailCount + 1
