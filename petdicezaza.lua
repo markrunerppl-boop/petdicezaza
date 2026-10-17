@@ -107,11 +107,8 @@ pcall(function()
     end)
 end)
 
--- Auto-Rejoin / Auto-Reconnect 24/7 (เซิร์ฟเวอร์รีสตาร์ท หรือเน็ตหลุด ให้เชื่อมต่อใหม่โดยอัตโนมัติ)
+-- Clean up any legacy Auto-Rejoin listeners (ความปลอดภัยสูงสุด: ปิดการรีจอยอัตโนมัติ 100% ป้องกันโดนแบน Error 600)
 pcall(function()
-    local GuiService = game:GetService("GuiService")
-    local TeleportService = game:GetService("TeleportService")
-    
     if getgenv().PetDiceErrorConn then
         pcall(function() getgenv().PetDiceErrorConn:Disconnect() end)
         getgenv().PetDiceErrorConn = nil
@@ -119,100 +116,6 @@ pcall(function()
     if getgenv().PetDiceOverlayConn then
         pcall(function() getgenv().PetDiceOverlayConn:Disconnect() end)
         getgenv().PetDiceOverlayConn = nil
-    end
-    
-    local isReconnecting = false
-    local function HandleReconnect(errorMsg)
-        if not errorMsg or errorMsg == "" or isReconnecting then return end
-        
-        -- ตรวจสอบความปลอดภัยสูงสุด: หากกำลังติดคำสั่งแบน Error 600 หรือ Cloud Halt ห้าม Rejoin เด็ดขาด
-        if getgenv().EmergencyKickLockout or getgenv().EmergencyCloudHalt or getgenv().EmergencyPatchHalt then
-            return
-        end
-        
-        local msgLower = tostring(errorMsg):lower()
-        local isBan = msgLower:find("600") or msgLower:find("banned")
-        local isKick = msgLower:find("267") or msgLower:find("kicked") or msgLower:find("unexpected client behavior") or msgLower:find("security")
-        
-        -- หากตรวจพบ Error 600 หรือการแบน ยกเลิกการ Rejoin ทันที 100%
-        if isBan then
-            warn("[PetDice Security] Game Ban (Error 600) detected. Auto-reconnect permanently aborted.")
-            return
-        end
-        
-        -- ตรวจสอบประวัติ Kick Guard ในเครื่อง
-        local kickLogFile = "petdice_kick_guard.json"
-        local kCount = 0
-        local lastK = 0
-        if isfile and isfile(kickLogFile) and readfile then
-            pcall(function()
-                local raw = readfile(kickLogFile)
-                local dec = HS:JSONDecode(raw)
-                if type(dec) == "table" then
-                    kCount = dec.count or 0
-                    lastK = dec.lastKick or 0
-                end
-            end)
-        end
-        
-        -- หากถูกเตะสะสม 2 ครั้งขึ้นไปใน 30 นาที ห้าม Rejoin เด็ดขาด เพื่อป้องกันเซิร์ฟเวอร์ยกระดับเป็น Error 600
-        if isKick and kCount >= 2 and (os.time() - lastK < 1800) then
-            getgenv().EmergencyKickLockout = true
-            warn("[PetDice Security] Multiple kicks detected (" .. kCount .. "). Auto-reconnect aborted to prevent Error 600 ban.")
-            return
-        end
-        
-        -- กรองข้อผิดพลาดประเภทเน็ตหลุด / เซิร์ฟเวอร์ปิดปรับปรุง / เตะชั่วคราว
-        local isSafeToReconnect = msgLower:find("server shut down") 
-            or msgLower:find("please reconnect") 
-            or msgLower:find("lost connection") 
-            or msgLower:find("connection timed out") 
-            or msgLower:find("277") 
-            or msgLower:find("279") 
-            or msgLower:find("260") 
-            or msgLower:find("284")
-            or isKick
-            or msgLower:find("disconnected")
-            
-        if isSafeToReconnect then
-            isReconnecting = true
-            task.spawn(function()
-                -- หากเป็นการเตะ ให้หน่วงเวลานานขึ้น (45-60 วินาที) เพื่อให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
-                local waitTime = isKick and math.random(45, 60) or math.random(20, 30)
-                task.wait(waitTime)
-                
-                if getgenv().EmergencyKickLockout then return end
-                
-                pcall(function()
-                    local queue = syn and syn.queue_on_teleport or queue_on_teleport or (Fluxus and Fluxus.queue_on_teleport)
-                    if queue then
-                        queue([[loadstring(game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua"))()]])
-                    end
-                end)
-                pcall(function()
-                    TeleportService:Teleport(game.PlaceId, LocalPlayer)
-                end)
-            end)
-        end
-    end
-    
-    getgenv().PetDiceErrorConn = GuiService.ErrorMessageChanged:Connect(function()
-        local errorMsg = GuiService:GetErrorMessage()
-        HandleReconnect(errorMsg)
-    end)
-    
-    -- ตรวจสอบผ่าน CoreGui Overlay เพิ่มเติมเพื่อความครอบคลุม 100%
-    local CoreGui = game:GetService("CoreGui")
-    local promptGui = CoreGui:FindFirstChild("RobloxPromptGui")
-    local promptOverlay = promptGui and promptGui:FindFirstChild("promptOverlay")
-    if promptOverlay then
-        getgenv().PetDiceOverlayConn = promptOverlay.ChildAdded:Connect(function(child)
-            task.wait(2.0)
-            local title = child:FindFirstChild("TitleFrame") and child.TitleFrame:FindFirstChild("ErrorTitle")
-            local text = child:FindFirstChild("MessageArea") and child.MessageArea:FindFirstChild("ErrorText")
-            local mStr = (title and title.Text or "") .. " " .. (text and text.Text or "")
-            HandleReconnect(mStr)
-        end)
     end
 end)
 -- ==============================================================================
