@@ -1888,7 +1888,10 @@ end
 -- ==============================================================================
 -- [3] CONFIGURATION MANAGEMENT
 -- ==============================================================================
-local ConfigFile = "PetDice_Master_v4_Config.json"
+local userUid = (LocalPlayer and LocalPlayer.UserId) or 0
+local userConfigFile = string.format("PetDice_Config_%s.json", tostring(userUid))
+local legacyConfigFile = "PetDice_Master_v4_Config.json"
+local ConfigFile = userConfigFile
 
 local defaultCFG = {
     Tower = true, AutoPlay = true, AutoExitArena = true,
@@ -1947,11 +1950,14 @@ for k, v in pairs(defaultCFG) do
     end
 end
 
-if readfile and isfile and isfile(ConfigFile) then
-    pcall(function()
-        local saved = HS:JSONDecode(readfile(ConfigFile))
-        for k, v in pairs(saved) do getgenv().CFG[k] = v end
-    end)
+if readfile and isfile then
+    local fileToLoad = isfile(userConfigFile) and userConfigFile or (isfile(legacyConfigFile) and legacyConfigFile)
+    if fileToLoad then
+        pcall(function()
+            local saved = HS:JSONDecode(readfile(fileToLoad))
+            for k, v in pairs(saved) do getgenv().CFG[k] = v end
+        end)
+    end
 end
 
 -- ตั้งค่าเริ่มต้นหากยังไม่มีการเลือกหอคอย
@@ -7033,13 +7039,13 @@ task.spawn(function()
             isZoneTransitionLocked = false
         end
 
-        -- 4. Trade Session Watchdog (15s timeout if TradeActiveSession is stuck without window or session)
+        -- 4. Trade Session Watchdog (Auto-clears orphaned TradeActiveSession flag if trade window/session is gone)
         if getgenv().TradeActiveSession then
             local hasSession = (getgenv().CurrentTradeSession ~= nil)
             local hasWindow = (GetTradeWindow and GetTradeWindow() ~= nil)
             if not hasSession and not hasWindow then
                 local reqTime = getgenv().LastTradeRequestTime or 0
-                if reqTime > 0 and (nowTick - reqTime > 15.0) then
+                if reqTime == 0 or (nowTick - reqTime > 10.0) then
                     getgenv().TradeActiveSession = false
                     getgenv().LastTradeRequestTime = 0
                     if FlushTradeDeferredQueue then
