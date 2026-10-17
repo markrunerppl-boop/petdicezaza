@@ -839,8 +839,7 @@ local function Fire(...)
         if isBoss or IsEnteringBossPortal == true then
             return -- ป้องกันการเริ่มหอคอยระหว่างศึกบอสโลก
         end
-        local d = State.Data
-        if (IsTowerRunning and IsTowerRunning()) or (d and d.TowerResume ~= nil and d.TowerResume.Floor and d.TowerResume.Floor > 0) then
+        if (LiveTower and LiveTower.Active == true and not LiveTower.Starting) then
             return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
         end
         local char = LocalPlayer.Character or Character
@@ -3260,9 +3259,7 @@ end
 
 IsTowerRunning = function()
     SyncLiveTowerFromGame()
-    local data = State.Data
-    local hasResume = (data and data.TowerResume ~= nil and data.TowerResume.Floor ~= nil and data.TowerResume.Floor > 0)
-    return LiveTower.Active == true or hasResume == true
+    return LiveTower.Active == true
 end
 
 IsTowerInArena = function()
