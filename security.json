@@ -2,9 +2,9 @@
   "safe": true,
   "status": "operational",
   "min_script_version": "v4.8",
-  "verified_game_place_version": 158,
+  "verified_game_place_version": 164,
   "kill_switch_active": false,
   "notice_title": "ระบบความปลอดภัยปกติ",
-  "notice_message": "สคริปต์ทำงานตามปกติ ปลอดภัย 100% รองรับแพทช์ v158",
-  "updated_at": "2026-10-16T11:01:00+07:00"
+  "notice_message": "สคริปต์ทำงานตามปกติ ปลอดภัย 100% รองรับแพทช์ v164",
+  "updated_at": "2026-10-17T22:01:00+07:00"
 }

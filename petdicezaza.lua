@@ -122,7 +122,7 @@ end)
 -- [0] AIRTIGHT ANTI-BAN & PATCH SENTINEL SYSTEM (100% FAIL-SAFE PROTECTION)
 -- ==============================================================================
 do
-local VERIFIED_GAME_PLACE_VERSION = 158
+local VERIFIED_GAME_PLACE_VERSION = 164
 local SECURITY_CONFIG_URL = "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/security.json"
 
 getgenv().EmergencyPatchHalt = false
