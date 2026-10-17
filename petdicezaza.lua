@@ -131,7 +131,38 @@ pcall(function()
         end
         
         local msgLower = tostring(errorMsg):lower()
-        -- กรองข้อผิดพลาดประเภทเน็ตหลุด / เซิร์ฟเวอร์ปิดปรับปรุง / เตะชั่วคราว Error 267
+        local isBan = msgLower:find("600") or msgLower:find("banned")
+        local isKick = msgLower:find("267") or msgLower:find("kicked") or msgLower:find("unexpected client behavior") or msgLower:find("security")
+        
+        -- หากตรวจพบ Error 600 หรือการแบน ยกเลิกการ Rejoin ทันที 100%
+        if isBan then
+            warn("[PetDice Security] Game Ban (Error 600) detected. Auto-reconnect permanently aborted.")
+            return
+        end
+        
+        -- ตรวจสอบประวัติ Kick Guard ในเครื่อง
+        local kickLogFile = "petdice_kick_guard.json"
+        local kCount = 0
+        local lastK = 0
+        if isfile and isfile(kickLogFile) and readfile then
+            pcall(function()
+                local raw = readfile(kickLogFile)
+                local dec = HS:JSONDecode(raw)
+                if type(dec) == "table" then
+                    kCount = dec.count or 0
+                    lastK = dec.lastKick or 0
+                end
+            end)
+        end
+        
+        -- หากถูกเตะสะสม 2 ครั้งขึ้นไปใน 30 นาที ห้าม Rejoin เด็ดขาด เพื่อป้องกันเซิร์ฟเวอร์ยกระดับเป็น Error 600
+        if isKick and kCount >= 2 and (os.time() - lastK < 1800) then
+            getgenv().EmergencyKickLockout = true
+            warn("[PetDice Security] Multiple kicks detected (" .. kCount .. "). Auto-reconnect aborted to prevent Error 600 ban.")
+            return
+        end
+        
+        -- กรองข้อผิดพลาดประเภทเน็ตหลุด / เซิร์ฟเวอร์ปิดปรับปรุง / เตะชั่วคราว
         local isSafeToReconnect = msgLower:find("server shut down") 
             or msgLower:find("please reconnect") 
             or msgLower:find("lost connection") 
@@ -140,15 +171,18 @@ pcall(function()
             or msgLower:find("279") 
             or msgLower:find("260") 
             or msgLower:find("284")
-            or msgLower:find("267")
-            or msgLower:find("kicked")
+            or isKick
             or msgLower:find("disconnected")
             
         if isSafeToReconnect then
             isReconnecting = true
             task.spawn(function()
-                -- หน่วงเวลาสุ่ม 20-30 วินาที เพื่อรอให้เซิร์ฟเวอร์เคลียร์สถานะตัวละครอย่างปลอดภัย
-                task.wait(math.random(20, 30))
+                -- หากเป็นการเตะ ให้หน่วงเวลานานขึ้น (45-60 วินาที) เพื่อให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
+                local waitTime = isKick and math.random(45, 60) or math.random(20, 30)
+                task.wait(waitTime)
+                
+                if getgenv().EmergencyKickLockout then return end
+                
                 pcall(function()
                     local queue = syn and syn.queue_on_teleport or queue_on_teleport or (Fluxus and Fluxus.queue_on_teleport)
                     if queue then
@@ -220,13 +254,8 @@ pcall(function()
         end)
     end
     
-    -- ตรวจสอบ Error Message ปัจจุบันใน GuiService
-    local currentErr = ""
-    pcall(function() currentErr = GuiService:GetErrorMessage() end)
-    local isCurrentlyKicked = currentErr and (currentErr:find("267") or currentErr:lower():find("kicked") or currentErr:find("unexpected client behavior"))
-    
-    -- รีเซ็ตประวัติหากการเตะครั้งล่าสุดผ่านไปเกิน 30 นาที หรือผู้เล่นกลับเข้ามาเล่นในเกมได้ตามปกติ
-    if nowTime - (kickData.lastKick or 0) > 1800 or not isCurrentlyKicked then
+    -- รีเซ็ตประวัติเฉพาะเมื่อผ่านไปเกิน 30 นาที (1800 วินาที) นับจากการเตะครั้งล่าสุด
+    if nowTime - (kickData.lastKick or 0) > 1800 then
         kickData.count = 0
         getgenv().EmergencyKickLockout = false
         if writefile then
@@ -234,16 +263,26 @@ pcall(function()
         end
     end
     
-    -- หากผู้เล่นกำลังติดหน้าจอเตะจริง และถูกเตะติดต่อกัน 2 ครั้งขึ้นไป สั่งล็อกดาวน์เพื่อความปลอดภัย
-    if isCurrentlyKicked and kickData.count >= 2 and (nowTime - kickData.lastKick < 1800) then
+    -- หากถูกเตะสะสม 2 ครั้งขึ้นไปภายใน 30 นาที สั่งล็อกดาวน์ทันที ไม่ให้รันสคริปต์ต่อเพื่อป้องกัน Error 600
+    if (kickData.count or 0) >= 2 and (nowTime - (kickData.lastKick or 0) < 1800) then
         getgenv().EmergencyKickLockout = true
-        getgenv().SecurityStatusMessage = string.format("ล็อกดาวน์ฉุกเฉิน: ถูกเตะติดต่อกัน %d ครั้ง (ป้องกันแบน 600)", kickData.count)
+        getgenv().SecurityStatusMessage = string.format("ล็อกดาวน์ฉุกเฉิน: ถูกเตะติดต่อกัน %d ครั้ง (ป้องกันแบน Error 600)", kickData.count)
         task.spawn(function()
             task.wait(2)
-            SafeNotify("🛑 ล็อกดาวน์ความปลอดภัยฉุกเฉิน", string.format("ตรวจพบว่าไอดีนี้เพิ่งถูกเตะ (Error 267) ติดต่อกัน %d ครั้ง!\nระบบสั่งหยุดทำงานอัตโนมัติเพื่อป้องกันไอดีโดนแบนถาวร (Error 600)", kickData.count), 15)
+            SafeNotify("🛑 ล็อกดาวน์ความปลอดภัยฉุกเฉิน", string.format("ตรวจพบว่าไอดีนี้เพิ่งถูกเตะ (Error 267) ติดต่อกัน %d ครั้ง!\nระบบสั่งหยุดทำงานอัตโนมัติ 30 นาที เพื่อป้องกันการถูกแบนถาวร (Error 600)\nกรุณาปิดสคริปต์และพักไอดีชั่วคราว", kickData.count), 20)
         end)
     else
         getgenv().EmergencyKickLockout = false
+        -- หากเล่นต่อเนื่องได้อย่างปลอดภัยเกิน 10 นาที (600 วินาที) ค่อยล้างประวัติการเตะ
+        task.spawn(function()
+            task.wait(600)
+            if getgenv().PetDiceScriptToken == scriptToken and not getgenv().EmergencyKickLockout then
+                kickData.count = 0
+                if writefile then
+                    pcall(function() writefile(kickLogFile, HS:JSONEncode(kickData)) end)
+                end
+            end
+        end)
     end
     
     -- บันทึกเหตุการณ์ถูกเตะแบบเรียลไทม์ (กรองเฉพาะ Error 267 / ข้อความเตะจริงเท่านั้น)
@@ -485,6 +524,8 @@ local function IsInTrade()
     return getgenv().TradeActiveSession == true or getgenv().CurrentTradeSession ~= nil or GetTradeWindow() ~= nil
 end
 
+local IsFeatureUnlocked = nil
+
 -- ==============================================================================
 -- 👑 UNIVERSAL 5-TIER PRIORITY HIERARCHY MANAGER
 -- 1. เทรดปลอดภัย (Safe Trade) - ลำดับ 1 (สูงสุด)
@@ -526,11 +567,12 @@ local function CanRunHalloween()
     return true
 end
 
--- ลำดับ 4 (หอคอย): ทำงานได้เมื่อ Trade(1), Boss(2), Halloween(3) ไม่ได้ทำงาน
+-- ลำดับ 4 (หอคอย): ทำงานได้เมื่อ Trade(1), Boss(2), Halloween(3) ไม่ได้ทำงาน และปลดล็อคในระบบเกมแล้ว
 local function CanRunTower()
     if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
     if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
     if IsHalloweenActive() then return false, "Priority 3 Active: Halloween Event in progress" end
+    if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then return false, "Towers not unlocked in tree" end
     return true
 end
 
@@ -701,13 +743,8 @@ local GlobalTokenBucket = {
     }
 }
 
-local function IsFeatureUnlocked(featureName, idName)
+IsFeatureUnlocked = function(featureName, idName)
     local data = State.Data
-    if action == "RollGrade" or action == "RollTrait" or action == "UpgradePet" or action == "UpgradePetLevels" or action == "BuyAllUpgrades" then
-        if IsHalloweenActive() then
-            return -- พักคำสั่งสุ่ม/อัปเกรดชั่วคราวระหว่างทำฮาโลวีน ป้องกัน Remote Burst & Error 267
-        end
-    end
     local u = data and data.Upgrades
     if not u then return false end
     local openByFunc = false
@@ -1256,27 +1293,7 @@ local function Fire(...)
     table.insert(RemoteQueue, { action = action, args = args })
 end
 
-local ActionMenuMap = {
-    EquipBest = "Pets",
-    EquipDice = "Dice",
-    BuyDice = "Dice",
-    TowerStart = "Team",
-    Rebirth = "Rebirth",
-    BuyAllUpgrades = "Upgrades",
-    BuyUpgrade = "Upgrades",
-    MarketBuyAll = "Market",
-    MarketBuy = "Market",
-    HalloweenGoalClaim = "HalloweenGoals",
-    SpookyBuy = "SpookyShop",
-    ClaimDaily = "Daily",
-    SendExpedition = "Expeditions",
-    ClaimExpedition = "Expeditions",
-    OpenLootBag = "LootBags",
-    RollGrade = "Grades",
-    RollTrait = "Traits",
-    UpgradePet = "PetUpgrades",
-    UpgradePetLevels = "PetUpgrades",
-}
+
 
 -- Dedicated Single-Threaded Remote Dispatcher (รับประกันการส่งคำสั่งทีละ 1 คำสั่ง ปราศจากการยิงชนกัน 100%)
 task.spawn(function()
@@ -1329,30 +1346,9 @@ task.spawn(function()
                         task.delay(3.6, function() isZoneTransitionLocked = false end)
                     end
                     
-                    if action == "TowerStart" then
-                        pcall(function() Action:FireServer("Menu", "Towers", true) end)
-                        task.wait(0.15)
-                        pcall(function() Action:FireServer("Menu", "Team", true) end)
-                        task.wait(0.20)
-                        pcall(function() Action:FireServer(unpack(args)) end)
-                        task.wait(0.30)
-                        pcall(function() Action:FireServer("Menu", "Team", false) end)
-                        task.wait(0.10)
-                        pcall(function() Action:FireServer("Menu", "Towers", false) end)
-                    else
-                        local targetMenu = ActionMenuMap[action]
-                        if targetMenu then
-                            pcall(function() Action:FireServer("Menu", targetMenu, true) end)
-                            task.wait(0.18)
-                            pcall(function() Action:FireServer(unpack(args)) end)
-                            task.wait(0.25)
-                            pcall(function() Action:FireServer("Menu", targetMenu, false) end)
-                        else
-                            pcall(function()
-                                Action:FireServer(unpack(args))
-                            end)
-                        end
-                    end
+                    pcall(function()
+                        Action:FireServer(unpack(args))
+                    end)
                 end
             end
         end
@@ -4760,19 +4756,7 @@ local function ClaimAllRewardsManual()
             Humanizer.Wait(0.4, 0.8)
         end
         
-        -- Social
-        if data and data.Social then
-            if not data.Social.Group then
-                Fire("ClaimSocial", "Group")
-                claimedCount = claimedCount + 1
-                Humanizer.Wait(0.3, 0.6)
-            end
-            if not data.Social.Like then
-                Fire("ClaimSocial", "Like")
-                claimedCount = claimedCount + 1
-                Humanizer.Wait(0.3, 0.6)
-            end
-        end
+        -- Note: Social rewards (Like/Group) require GUI/SocialStart handshake, skipped in auto-claim for safety
         
         -- Quests
         if data and data.Quests then
