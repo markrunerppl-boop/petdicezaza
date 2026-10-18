@@ -86,28 +86,35 @@ getgenv().IsTrickOrTreatActiveRunning = false
 getgenv().TrickOrTreatMutex = false
 getgenv().LastTrickOrTreatStartTime = 0
 
--- Anti-AFK Dual-Layer (VirtualUser Event + 10-Min Periodic Heartbeat) ป้องกันเซิร์ฟเวอร์เตะเมื่อฟาร์ม 24/7
+-- Anti-AFK Dual-Layer (VirtualUser Event + Jittered Periodic Heartbeat with Natural Viewport Coordinates)
 pcall(function()
     if getgenv().PetDiceAntiAFKConn then
         pcall(function() getgenv().PetDiceAntiAFKConn:Disconnect() end)
         getgenv().PetDiceAntiAFKConn = nil
     end
     local VirtualUser = game:GetService("VirtualUser")
+    local function GetNaturalViewportClickPos()
+        local cam = workspace.CurrentCamera
+        local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+        local rx = math.clamp(math.random(math.floor(vp.X * 0.15), math.floor(vp.X * 0.45)), 20, 600)
+        local ry = math.clamp(math.random(math.floor(vp.Y * 0.15), math.floor(vp.Y * 0.45)), 20, 400)
+        return Vector2.new(rx, ry)
+    end
     getgenv().PetDiceAntiAFKConn = LocalPlayer.Idled:Connect(function()
         pcall(function()
             VirtualUser:CaptureController()
-            VirtualUser:ClickButton2(Vector2.new())
+            VirtualUser:ClickButton2(GetNaturalViewportClickPos())
         end)
     end)
     
-    -- Layer 2: Pulse ทุก 10 นาที ป้องกันกรณีหน้าต่างถูก Minimize / Unfocused ใน Windows 24/7
+    -- Layer 2: Pulse สุ่มระยะเวลา 480 - 720 วินาที พร้อมตำแหน่งคลิกธรรมชาติ ป้องกันการตรวจจับบน UGPhone / Cloud 24/7
     task.spawn(function()
         while true do
-            task.wait(600)
+            task.wait(math.random(480, 720))
             if getgenv().PetDiceAntiAFKConn == nil then break end
             pcall(function()
                 VirtualUser:CaptureController()
-                VirtualUser:ClickButton2(Vector2.new(10, 10))
+                VirtualUser:ClickButton2(GetNaturalViewportClickPos())
             end)
         end
     end)
@@ -812,7 +819,11 @@ local function Fire(...)
     local args = {...}
     local action = args[1]
     if typeof(action) ~= "string" then
-        Action:FireServer(unpack(args))
+        if State and type(State.Send) == "function" then
+            State.Send(unpack(args))
+        else
+            Action:FireServer(unpack(args))
+        end
         return
     end
 
@@ -944,12 +955,16 @@ local function Fire(...)
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local p = workspace:FindFirstChild("WorldBossPortal", true)
         local spot = p and (p:FindFirstChild("PromptSpot") or p:FindFirstChild("JoinZone"))
-        local bossPortalPos = spot and spot.Position or Vector3.new(0, 18.0, -298.0)
-        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 25 then
-            return -- ต้องอยู่ใกล้หน้าประตูบอสโลกไม่เกิน 25 studs ป้องกันส่งจากระยะไกลจนโดนเตะ Error 267 / 600
+        local bossPortalPos = spot and spot.Position or Vector3.new(0, 17.85, -298.0)
+        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 14 then
+            return -- ต้องอยู่ใกล้หน้าประตูบอสโลกไม่เกิน 14 studs (ProximityPrompt 16 studs) ป้องกัน Error 267 / 600
         end
-        if hrp.AssemblyLinearVelocity.Magnitude > 3.0 then
-            task.wait(0.3) -- รอให้ตัวละครหยุดนิ่งก่อนส่งคำสั่ง เพื่อป้องกัน position desync
+        if hrp.AssemblyLinearVelocity.Magnitude > 0.5 then
+            local waitStop = tick()
+            while hrp and hrp.AssemblyLinearVelocity.Magnitude > 0.5 and (tick() - waitStop < 1.0) do
+                task.wait(0.1)
+            end
+            if not hrp or hrp.AssemblyLinearVelocity.Magnitude > 0.5 then return end
         end
     end
     if action == "WorldBossLeave" then
@@ -965,9 +980,16 @@ local function Fire(...)
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local p = workspace:FindFirstChild("WorldBossPortal", true)
         local spot = p and (p:FindFirstChild("PromptSpot") or p:FindFirstChild("JoinZone"))
-        local bossPortalPos = spot and spot.Position or Vector3.new(0, 18.0, -298.0)
-        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 22 then
-            return -- ต้องอยู่หน้าประตูบอสโลกจริงขณะซ่อม ป้องกัน Error 267 / 600
+        local bossPortalPos = spot and spot.Position or Vector3.new(0, 17.85, -298.0)
+        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 14 then
+            return -- ต้องอยู่หน้าประตูบอสโลกจริงขณะซ่อม (Prompt 16 studs) ป้องกัน Error 267 / 600
+        end
+        if hrp.AssemblyLinearVelocity.Magnitude > 0.5 then
+            local waitStop = tick()
+            while hrp and hrp.AssemblyLinearVelocity.Magnitude > 0.5 and (tick() - waitStop < 1.0) do
+                task.wait(0.1)
+            end
+            if not hrp or hrp.AssemblyLinearVelocity.Magnitude > 0.5 then return end
         end
     end
     if action == "Teleport" and args[2] == "Portal" and not IsFeatureUnlocked("WorldBoss", "worldboss") then
@@ -1076,8 +1098,15 @@ local function Fire(...)
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local pawculaPos = Vector3.new(38.9, 2.25, -38.4)
-        if not hrp or (hrp.Position - pawculaPos).Magnitude > 14 then
-            return -- ต้องอยู่ใกล้เคานต์พาวคูลาในระยะ ProximityPrompt (14 studs) ป้องกันเซิร์ฟเวอร์เตะ Error 267
+        if not hrp or (hrp.Position - pawculaPos).Magnitude > 10 then
+            return -- ต้องอยู่ใกล้เคานต์พาวคูลาในระยะปลอดภัย (Prompt 12 studs) ป้องกันเซิร์ฟเวอร์เตะ Error 267
+        end
+        if hrp.AssemblyLinearVelocity.Magnitude > 0.5 then
+            local waitStop = tick()
+            while hrp and hrp.AssemblyLinearVelocity.Magnitude > 0.5 and (tick() - waitStop < 1.0) do
+                task.wait(0.1)
+            end
+            if not hrp or hrp.AssemblyLinearVelocity.Magnitude > 0.5 then return end
         end
     end
     if action == "SpookyBuy" then
@@ -1291,11 +1320,29 @@ local function Fire(...)
             return -- ยังไม่บรรลุเป้าหมาย
         end
     end
+    if action == "SocialStart" then
+        local sType = args[2]
+        if not data or not data.Social then return end
+        if sType == "Like" then
+            if data.Social.Like then return end
+            local waitSec = (Config and Config.Social and Config.Social.LikeWaitSeconds) or 20
+            getgenv().SocialLikeReadyTime = os.clock() + waitSec
+        end
+    end
     if action == "ClaimSocial" then
         local sType = args[2]
         if not data or not data.Social then return end
-        if sType == "Group" and data.Social.Group then return end
-        if sType == "Like" and data.Social.Like then return end
+        if sType == "Group" then
+            if data.Social.Group then return end
+            local isInGroup = false
+            pcall(function() isInGroup = LocalPlayer:IsInGroup(3281836) end)
+            if not isInGroup then return end -- ยังไม่ได้เข้ากลุ่มผู้พัฒนาจริง ห้ามยิงเด็ดขาด ป้องกันเซิร์ฟเวอร์ดักจับ
+        elseif sType == "Like" then
+            if data.Social.Like then return end
+            if not getgenv().SocialLikeReadyTime or os.clock() < getgenv().SocialLikeReadyTime then
+                return -- ต้องส่ง SocialStart และรอครบ 20 วินาทีตามกลไกทางการของเกม ป้องกันโดนแบน Error 600
+            end
+        end
     end
     if action == "TradeRequest" then
         local targetUserId = tonumber(args[2])
@@ -1496,7 +1543,11 @@ task.spawn(function()
                     end
                     
                     pcall(function()
-                        Action:FireServer(unpack(args))
+                        if State and type(State.Send) == "function" then
+                            State.Send(unpack(args))
+                        else
+                            Action:FireServer(unpack(args))
+                        end
                     end)
                 else
                     table.clear(RemoteQueue)
@@ -1526,6 +1577,52 @@ function Humanizer.Jitter(val, pct)
     local diff = val * pct
     return val + (math.random() * (diff * 2) - diff)
 end
+
+-- Human Activity & Mobile Heuristic Simulator (UGPhone & 24/7 Cloud Bot Protection)
+local LastHumanActivityTime = tick()
+local LastMicroIdleTime = tick()
+
+function Humanizer.SimulateActivity()
+    local now = tick()
+    -- 1. Camera Yaw Drift: จำลองการหมุนมุมกล้องเบาๆ ทุก 35 - 75 วินาที เสมือนมีคนแตะหน้าจอมือถือจริง
+    if now - LastHumanActivityTime >= math.random(35, 75) then
+        LastHumanActivityTime = now
+        pcall(function()
+            local cam = workspace.CurrentCamera
+            if cam and cam.CameraType == Enum.CameraType.Custom then
+                local currentCf = cam.CFrame
+                local subtleAngle = math.rad(math.random(-30, 30) / 10) -- สุ่มหมุนเล็กน้อย -3.0 ถึง +3.0 องศา
+                cam.CFrame = currentCf * CFrame.Angles(0, subtleAngle, 0)
+            end
+        end)
+    end
+    
+    -- 2. Natural Micro-Idle: พักมือตามธรรมชาติ 4 - 8 วินาที ทุกๆ 20 - 30 นาที ทำลายแพทเทิร์นหุ่นยนต์ 100%
+    if now - LastMicroIdleTime >= math.random(1200, 1800) then
+        LastMicroIdleTime = now
+        task.wait(math.random(40, 80) / 10)
+    end
+end
+
+-- Telemetry Sync: ส่ง Track UI เมื่อเปิดฟังก์ชันสำคัญ ให้เซิร์ฟเวอร์เห็นเหมือนเล่นผ่าน GUI ปกติ
+function Humanizer.SyncUi(panelName, isOpen)
+    if State and type(State.Send) == "function" then
+        pcall(function()
+            State.Send("Track", "Ui", panelName, isOpen == true)
+        end)
+    end
+end
+
+-- Background Thread: รัน Human Activity Simulator ตลอด 24/7 สำหรับ UGPhone และ Cloud Emulators
+task.spawn(function()
+    while true do
+        task.wait(5.0)
+        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if not getgenv().EmergencyBanLockout and not getgenv().EmergencyKickLockout then
+            pcall(Humanizer.SimulateActivity)
+        end
+    end
+end)
 
 local CircuitBreaker = {
     Failures = {},
