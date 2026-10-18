@@ -428,17 +428,52 @@ local IsFeatureUnlocked = nil
 -- ==============================================================================
 local isTrickOrTreatMutex = false
 local isCollectingCandyMutex = false
+local wasInWorldBossFight = false
+local IsEnteringBossPortal = false
 
 local function IsTradeActive()
     return (IsInTrade and IsInTrade()) or (getgenv().TradeActiveSession == true) or (getgenv().CurrentTradeSession ~= nil) or (GetTradeWindow and GetTradeWindow() ~= nil) or ((getgenv().TradeLockedUntil or 0) > tick())
 end
 
+local function DoesWorldBossMatchFilter()
+    local wbElem = RS:GetAttribute("WorldBossElement") or ""
+    local wbDiff = RS:GetAttribute("WorldBossDifficulty") or ""
+    local elemMatch = (not CFG.WorldBossElementFilter) or 
+                     (CFG.WorldBossElementFilter == "[ ตีทุกธาตุ (All Elements) ]") or 
+                     (wbElem:lower() == tostring(CFG.WorldBossElementFilter):lower()) or
+                     (tostring(CFG.WorldBossElementFilter):find(wbElem))
+    local diffMatch = (not CFG.WorldBossDifficultyFilter) or 
+                     (CFG.WorldBossDifficultyFilter == "[ ตีทุกระดับ (All Difficulties) ]") or
+                     (wbDiff:lower() == tostring(CFG.WorldBossDifficultyFilter):lower()) or
+                     (tostring(CFG.WorldBossDifficultyFilter):find(wbDiff))
+    return elemMatch and diffMatch
+end
+
 local function IsWorldBossActive()
-    if CFG and (CFG.PauseTowerForBoss == false or CFG.AutoWorldBoss == false) then
+    if not CFG or CFG.AutoWorldBoss == false or CFG.PauseTowerForBoss == false then
         return false
     end
-    local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true) or (IsEnteringBossPortal == true)
-    return isJoined
+    
+    -- 1. ตัวละครกำลังอยู่ในบอสโลก กำลังเดินเข้าประตู หรืออยู่ในรอบต่อสู้
+    local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or 
+                     (LocalPlayer:GetAttribute("InWorldBoss") == true) or 
+                     (IsEnteringBossPortal == true) or 
+                     (wasInWorldBossFight == true)
+    if isJoined then return true end
+    
+    -- 2. ตัวเกมอยู่ในช่วงเปิดรับสมัคร (Joining) หรือกำลังต่อสู้จริงในเซิร์ฟเวอร์ (Fighting)
+    local wbState = RS:GetAttribute("WorldBossState")
+    if wbState == "Joining" then
+        if DoesWorldBossMatchFilter() then
+            return true
+        end
+    elseif wbState == "Fighting" then
+        if wasInWorldBossFight or isJoined or DoesWorldBossMatchFilter() then
+            return true
+        end
+    end
+    
+    return false
 end
 
 local function IsHalloweenActive()
@@ -558,7 +593,7 @@ local IsTowerInArena
 local UpdateTowerStatus
 local ResolveTowerId
 local isSwitchingTower = false
-local IsEnteringBossPortal = false
+-- IsEnteringBossPortal declared above in top-level priority scope
 local LiveTower = {
     Active = false,
     Starting = false,
@@ -810,9 +845,8 @@ local function Fire(...)
         if IsHalloweenActive() then
             return -- ห้ามเริ่มหอคอยเด็ดขาดหากกิจกรรมฮาโลวีนหรือพายุลูกกวาดกำลังทำงาน (Priority 3 เหนือกว่า Priority 4)
         end
-        local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then
-            return -- ป้องกันการเริ่มหอคอยระหว่างศึกบอสโลก
+        if IsWorldBossActive and IsWorldBossActive() then
+            return -- ป้องกันการเริ่มหอคอยระหว่างศึกบอสโลก (Priority 2 เหนือกว่า Priority 4)
         end
         if (LiveTower and LiveTower.Active == true and not LiveTower.Starting) then
             return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
@@ -3610,9 +3644,8 @@ local function StartTowerDirect(targetTowerId)
         return false, "Towers not unlocked in tree"
     end
     
-    local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-    if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
-        return false, "In World Boss"
+    if IsWorldBossActive() then
+        return false, "In World Boss (Priority 2)"
     end
     
     local data = State.Data
@@ -3633,6 +3666,11 @@ local function StartTowerDirect(targetTowerId)
             Fire("SetSetting", "TowerAutoplay", true)
         end
     end)
+    
+    -- หน่วงเวลารอให้เซิร์ฟเวอร์เคลียร์สถานะ TowerLeave อย่างสมบูรณ์ก่อนส่งคำสั่ง TowerStart
+    while (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.2) do
+        task.wait(0.2)
+    end
     
     -- สั่งเริ่มหอคอยผ่าน Remote Action ของเกมทันที
     Fire("TowerStart", towerDef.Id, team)
@@ -3663,12 +3701,11 @@ SwitchOrStartTower = function(targetTowerId, force)
         return false, "Towers not unlocked in tree"
     end
     
-    local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-    if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
+    if IsWorldBossActive() then
         if force then
-            Notify("⚠️ พักหอคอยชั่วคราว", "ระบบกำลังเตรียมพร้อมเข้าสู้บอสโลก (ปิด 'พักหอคอยเพื่อตีบอส' หากต้องการลงหอคอยทันที)", 3)
+            Notify("⚔️ บอสโลก (Priority 2)", "กำลังอยู่ในช่วงเวลากิจกรรมบอสโลก หอคอยจะเริ่มให้อัตโนมัติหลังตีบอสเสร็จสิ้น", 3)
         end
-        return false, "In World Boss"
+        return false, "In World Boss (Priority 2)"
     end
     
     local nowTick = tick()
@@ -6947,6 +6984,18 @@ task.spawn(function()
             end
             lastBossStateInTower = curBossState
             
+            -- ตรวจสอบลำดับความสำคัญ World Boss (Priority 2):
+            -- หากบอสโลกกำลังดำเนินอยู่ (ช่วง Joining ที่ตรงตามตัวกรอง หรือช่วง Fighting) ต้องหยุดและออกจากหอคอยทันที
+            if IsWorldBossActive and IsWorldBossActive() then
+                LiveTower.Active = false
+                LiveTower.Starting = false
+                if IsTowerRunning and IsTowerRunning() then
+                    Fire("TowerLeave")
+                    Humanizer.Wait(1.0, 1.5)
+                end
+                return
+            end
+            
             if not CanRunTower() then
                 LiveTower.Active = false
                 LiveTower.Starting = false
@@ -6956,16 +7005,6 @@ task.spawn(function()
             local char = LocalPlayer.Character or Character
             local hum = char and (char:FindFirstChildOfClass("Humanoid") or Humanoid)
             if not char or not hum or hum.Health <= 0 then return end
-            
-            -- ตรวจสอบเงื่อนไข World Boss: พักหอคอยเฉพาะตอนที่ตัวละครอยู่ในบอสโลกจริง หรือกำลังเดินทางเข้าประตูบอส
-            local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-            if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
-                if IsTowerRunning() then
-                    Fire("TowerLeave")
-                    Humanizer.Wait(1.0, 1.5)
-                end
-                return
-            end
             
             if CFG.Tower and (not IsFeatureUnlocked or IsFeatureUnlocked("Towers", "towers")) then
                 local data = State.Data
@@ -6987,9 +7026,8 @@ task.spawn(function()
                     local activeId = GetActiveTowerId()
                     local targetId = (ResolveTowerId and ResolveTowerId(CFG.SelectedTower)) or "Infinity"
                     
-                    -- ตรวจสอบเงื่อนไขการพักหอคอยเมื่อกำลังต่อสู้กับบอสโลก
-                    local isBossJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-                    if not (CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isBossJoined or IsEnteringBossPortal == true)) then
+                    -- ตรวจสอบเงื่อนไขการพักหอคอยเมื่อกิจกรรมบอสโลกกำลังดำเนินอยู่
+                    if not (IsWorldBossActive and IsWorldBossActive()) then
                         if isRunning then
                             consecutiveFailCount = 0
                             -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย
@@ -7054,7 +7092,7 @@ task.spawn(function()
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         LoopHeartbeats["Loop3_WorldBoss"] = tick()
-        if not CanRunGeneralFarm() then task.wait(2.0) continue end
+        if not CanRunWorldBoss() then task.wait(2.0) continue end
         local char = LocalPlayer.Character or Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not char or not hum or hum.Health <= 0 then task.wait(2.0) continue end
@@ -7062,14 +7100,16 @@ task.spawn(function()
         local wbState = RS:GetAttribute("WorldBossState") or "Idle"
         local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         
-        if isJoined or wbState == "Fighting" then
+        if isJoined or (wbState == "Fighting" and (wasInBoss or DoesWorldBossMatchFilter())) then
             wasInBoss = true
+            wasInWorldBossFight = true
         end
         
-        -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และให้เริ่มหอคอยต่อทันทีอัตโนมัติ
-        local bossJustEnded = (wasInBoss and not isJoined and wbState ~= "Fighting") or (lastWbState == "Fighting" and wbState ~= "Fighting")
+        -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และให้เริ่มหอคอยต่อทันทีอัตโนมัติ (Priority 2 -> Priority 4)
+        local bossJustEnded = (wasInBoss or wasInWorldBossFight) and (wbState ~= "Fighting" and wbState ~= "Joining") and not isJoined
         if bossJustEnded then
             wasInBoss = false
+            wasInWorldBossFight = false
             task.wait(1.5)
             pcall(function()
                 Fire("Teleport", "Home")
