@@ -128,14 +128,15 @@ end)
 -- [0] AIRTIGHT ANTI-BAN & PATCH SENTINEL SYSTEM (100% FAIL-SAFE PROTECTION)
 -- ==============================================================================
 do
-local VERIFIED_GAME_PLACE_VERSION = 164
+local VERIFIED_GAME_PLACE_VERSION = 172
 local SECURITY_CONFIG_URL = "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/security.json"
 
 getgenv().EmergencyPatchHalt = false
 getgenv().EmergencyCloudHalt = false
 getgenv().EmergencyStructuralHalt = false
 getgenv().EmergencyKickLockout = false
-getgenv().SecurityStatusMessage = "ระบบปลอดภัย ทำงานปกติ"
+getgenv().EmergencyBanLockout = false
+getgenv().SecurityStatusMessage = "ระบบปลอดภัย ทำงานปกติ (Game Patch v172)"
 
 local function SafeNotify(title, content, duration)
     pcall(function()
@@ -147,12 +148,35 @@ local function SafeNotify(title, content, duration)
     end)
 end
 
--- 1. Error 267 Anti-Ban Lockout (ป้องกันการเตะสะสมจนกลายเป็น Error 600 แบนถาวร)
+-- 1. Error 600 & Error 267 Anti-Ban Lockout Sentinel (ป้องกันการแบนถาวรและแบนลูกโซ่บน UGPhone / Cloud)
 pcall(function()
     local userUidStr = tostring(LocalPlayer and LocalPlayer.UserId or "0")
     local kickLogFile = string.format("petdice_kick_guard_%s.json", userUidStr)
+    local banLogFile = string.format("petdice_ban_guard_%s.json", userUidStr)
     local nowTime = os.time()
     local kickData = { count = 0, lastKick = 0 }
+    local banData = { banned = false, banTime = 0, code = 0 }
+    
+    -- ตรวจสอบประวัติการโดนแบน Error 600 ล่วงหน้า (ป้องกันการรันซ้ำบนเครื่อง UGPhone ที่อาจลามแบนไอดีอื่น)
+    if isfile and isfile(banLogFile) and readfile then
+        pcall(function()
+            local raw = readfile(banLogFile)
+            local decoded = HS:JSONDecode(raw)
+            if type(decoded) == "table" and decoded.banned == true then
+                banData = decoded
+            end
+        end)
+    end
+    
+    if banData.banned == true and (nowTime - (banData.banTime or 0) < 604800) then
+        getgenv().EmergencyBanLockout = true
+        getgenv().EmergencyKickLockout = true
+        getgenv().SecurityStatusMessage = "🚨 บัญชีนี้ติดสถานะแบน Error 600 (ระบบตัดไฟ 100% ป้องกันแบนลาม)"
+        task.spawn(function()
+            task.wait(2)
+            SafeNotify("🛑 ระบบล็อกดาวน์ Error 600", "ตรวจพบว่าบัญชีนี้เคยถูกระงับ (Error 600)!\nระบบสั่งตัดการทำงาน 100% เพื่อป้องกันไม่ให้ไอดีอื่นใน UGPhone/IP เดียวกันถูกแบนตาม", 20)
+        end)
+    end
     
     if isfile and isfile(kickLogFile) and readfile then
         pcall(function()
@@ -173,23 +197,42 @@ pcall(function()
         end
     end
     
-    -- หากถูกเตะสะสม 5 ครั้งขึ้นไปภายใน 10 นาที จึงสั่งล็อกดาวน์ฉุกเฉิน
-    if (kickData.count or 0) >= 5 and (nowTime - (kickData.lastKick or 0) < 600) then
+    -- หากถูกเตะสะสม 4 ครั้งขึ้นไปภายใน 10 นาที จึงสั่งล็อกดาวน์ฉุกเฉิน
+    if (kickData.count or 0) >= 4 and (nowTime - (kickData.lastKick or 0) < 600) then
         getgenv().EmergencyKickLockout = true
         getgenv().SecurityStatusMessage = string.format("ล็อกดาวน์ฉุกเฉิน: ถูกเตะติดต่อกัน %d ครั้ง (ป้องกันแบน Error 600)", kickData.count)
         task.spawn(function()
             task.wait(2)
-            SafeNotify("🛑 ล็อกดาวน์ความปลอดภัยฉุกเฉิน", string.format("ตรวจพบว่าไอดีนี้เพิ่งถูกเตะ (Error 267) ติดต่อกัน %d ครั้ง!\nระบบสั่งหยุดทำงานอัตโนมัติชั่วคราว เพื่อป้องกันการถูกแบนถาวร", kickData.count), 15)
+            SafeNotify("🛑 ล็อกดาวน์ความปลอดภัยฉุกเฉิน", string.format("ตรวจพบว่าไอดีนี้เพิ่งถูกเตะติดต่อกัน %d ครั้ง!\nระบบสั่งหยุดทำงานอัตโนมัติชั่วคราว เพื่อป้องกันการถูกแบนถาวร", kickData.count), 15)
         end)
-    else
-        getgenv().EmergencyKickLockout = false
     end
     
-    -- บันทึกเหตุการณ์ถูกเตะแบบเรียลไทม์ (กรองเฉพาะ Error 267 / ข้อความเตะจริงเท่านั้น)
+    -- บันทึกเหตุการณ์ถูกเตะหรือถูกแบนแบบเรียลไทม์ (ดักจับ Error 600 / Error 267 / Ban API ของ Roblox)
     GuiService.ErrorMessageChanged:Connect(function(msg)
         if msg and type(msg) == "string" and msg ~= "" then
-            local isRealKick = msg:find("267") or msg:lower():find("kicked") or msg:find("unexpected client behavior") or msg:lower():find("banned") or msg:find("Security")
-            if isRealKick then
+            local lowerMsg = msg:lower()
+            local isBan600 = msg:find("600") or lowerMsg:find("ban") or lowerMsg:find("restricted") or lowerMsg:find("suspended")
+            local isRealKick = isBan600 or msg:find("267") or lowerMsg:find("kicked") or msg:find("unexpected client behavior") or msg:find("Security")
+            
+            if isBan600 then
+                getgenv().EmergencyBanLockout = true
+                getgenv().EmergencyKickLockout = true
+                getgenv().SecurityStatusMessage = "🚨 ตรวจพบการถูกแบน (Error 600) สั่งตัดไฟสคริปต์ 100% ทันที!"
+                banData = {
+                    banned = true,
+                    code = 600,
+                    message = msg,
+                    banTime = os.time(),
+                    userId = userUidStr
+                }
+                if writefile then
+                    pcall(function()
+                        writefile(banLogFile, HS:JSONEncode(banData))
+                    end)
+                end
+                if getgenv().RemoteQueue then table.clear(getgenv().RemoteQueue) end
+                getgenv().PetDiceScriptToken = nil -- สั่งยุติการทำงานของลูปทั้งหมดทันที
+            elseif isRealKick then
                 kickData.count = (kickData.count or 0) + 1
                 kickData.lastKick = os.time()
                 if writefile then
@@ -882,9 +925,14 @@ local function Fire(...)
         end
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local bossPortalPos = Vector3.new(0, 20.43, -298)
-        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 28 then
-            return -- ต้องอยู่ใกล้หน้าประตูบอสโลกไม่เกิน 28 studs ป้องกันส่งจากระยะไกลจนโดนเตะ Error 267
+        local p = workspace:FindFirstChild("WorldBossPortal", true)
+        local spot = p and (p:FindFirstChild("PromptSpot") or p:FindFirstChild("JoinZone"))
+        local bossPortalPos = spot and spot.Position or Vector3.new(0, 18.0, -298.0)
+        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 25 then
+            return -- ต้องอยู่ใกล้หน้าประตูบอสโลกไม่เกิน 25 studs ป้องกันส่งจากระยะไกลจนโดนเตะ Error 267 / 600
+        end
+        if hrp.AssemblyLinearVelocity.Magnitude > 3.0 then
+            task.wait(0.3) -- รอให้ตัวละครหยุดนิ่งก่อนส่งคำสั่ง เพื่อป้องกัน position desync
         end
     end
     if action == "WorldBossLeave" then
@@ -898,9 +946,11 @@ local function Fire(...)
         if d and d.PortalRepaired then return end
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local bossPortalPos = Vector3.new(0, 20.43, -298)
-        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 25 then
-            return -- ต้องอยู่หน้าประตูบอสโลกจริงขณะซ่อม ป้องกัน Error 267
+        local p = workspace:FindFirstChild("WorldBossPortal", true)
+        local spot = p and (p:FindFirstChild("PromptSpot") or p:FindFirstChild("JoinZone"))
+        local bossPortalPos = spot and spot.Position or Vector3.new(0, 18.0, -298.0)
+        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 22 then
+            return -- ต้องอยู่หน้าประตูบอสโลกจริงขณะซ่อม ป้องกัน Error 267 / 600
         end
     end
     if action == "Teleport" and args[2] == "Portal" and not IsFeatureUnlocked("WorldBoss", "worldboss") then
@@ -1022,8 +1072,9 @@ local function Fire(...)
         if not itemDef then return end -- ไอเทมไม่มีอยู่จริงในร้าน ไม่ส่ง
         local entry = GetHalloweenEntry and GetHalloweenEntry()
         if itemKey == "LimitedPull" then
+            local maxStock = (itemDef and itemDef.Stock) or 10
             local boughtPulls = entry and entry.Bought and (entry.Bought.LimitedPull or entry.Bought.HalloweenPull or entry.Bought.SinglePull) or 0
-            if boughtPulls >= 5 then return end -- ซื้อครบ 5 ครั้งแล้ว ไม่ส่งซ้ำ
+            if boughtPulls >= maxStock then return end -- ซื้อครบโควต้าตามแพทช์ v172 แล้ว ไม่ส่งซ้ำ
         end
         local candyCost = itemDef.Price or 0
         local candyHave = (entry and entry.Candy) or (data and (data.Candy or data.Candies or (data.Halloween and data.Halloween.Candy))) or 0
@@ -1388,7 +1439,7 @@ task.spawn(function()
                 local action = item.action
                 local args = item.args
                 
-                if not getgenv().EmergencyCloudHalt then
+                if not getgenv().EmergencyCloudHalt and not getgenv().EmergencyPatchHalt and not getgenv().EmergencyKickLockout and not getgenv().EmergencyBanLockout and not getgenv().EmergencyStructuralHalt then
                     -- 1. ควบคุมความถี่เฉพาะของแต่ละคำสั่ง (Per-Action Rate Limiting)
                     local minInterval = RemoteRateLimits[action] or 0.15
                     local now = tick()
@@ -1397,7 +1448,7 @@ task.spawn(function()
                         task.wait(minInterval - diff)
                     end
                     
-                    -- 2. Single-Threaded Global Inter-Packet Serializer (เว้นระยะอย่างน้อย 0.18s เสมอ)
+                    -- 2. Single-Threaded Global Inter-Packet Serializer (เว้นระยะอย่างน้อย MIN_GLOBAL_REMOTE_INTERVAL)
                     local nowFire = tick()
                     local globalDiff = nowFire - LastGlobalRemoteFireTime
                     if globalDiff < MIN_GLOBAL_REMOTE_INTERVAL then
@@ -1430,6 +1481,9 @@ task.spawn(function()
                     pcall(function()
                         Action:FireServer(unpack(args))
                     end)
+                else
+                    table.clear(RemoteQueue)
+                    task.wait(0.5)
                 end
             end
         end
@@ -1995,7 +2049,7 @@ local defaultCFG = {
     AutoRollGrade = false,
     AutoRollTrait = false,
     EnhancePetCount = 4,
-    RollSpeed = 0.25,
+    RollSpeed = 0.40,
     TargetGradeRank = 8,
     TargetGradeName = "S (Rank 8)",
     TargetTraitRank = 6,
@@ -2555,7 +2609,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
                     currentBatchAmounts[s.Key] = sellFromStack
                 end
                 batchCount = batchCount + 1
-                if batchCount >= 25 then
+                if batchCount >= 18 then
                     table.insert(sellBatches, { keys = currentBatchKeys, amounts = currentBatchAmounts })
                     currentBatchKeys = {}
                     currentBatchAmounts = {}
@@ -2577,7 +2631,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
             if getgenv().PetDiceScriptToken ~= scriptToken then break end
             Fire("SellKeys", batch.keys, batch.amounts)
             if bIndex < #sellBatches then
-                Humanizer.Wait(0.60, 0.90)
+                Humanizer.Wait(0.80, 1.20)
             end
         end
         
@@ -2709,7 +2763,12 @@ local function UpdateOverviewTab()
         )
         
         if SecurityStatusPara then
-            if getgenv().EmergencyPatchHalt then
+            if getgenv().EmergencyBanLockout then
+                SafeUpdatePara(SecurityStatusPara,
+                    "🚨 บัญชีติดสถานะแบน Error 600 (ระบบตัดไฟ 100%)",
+                    getgenv().SecurityStatusMessage or "ระบบสั่งหยุดทำงานถาวรเพื่อป้องกันการแบนลูกโซ่ไปยังไอดีอื่นใน UGPhone/IP เดียวกัน"
+                )
+            elseif getgenv().EmergencyPatchHalt then
                 SafeUpdatePara(SecurityStatusPara,
                     "🚨 ตรวจพบเกมอัปเดตแพทช์ใหม่! (หยุดทำงานอัตโนมัติ)",
                     string.format("Game Version: v%d (เกณฑ์ทดสอบ v%d)\nระบบสั่งหยุดทำงาน 100%% เพื่อความปลอดภัยจากการแบน Error 600", game.PlaceVersion, VERIFIED_GAME_PLACE_VERSION)
@@ -2722,7 +2781,7 @@ local function UpdateOverviewTab()
             elseif getgenv().EmergencyKickLockout then
                 SafeUpdatePara(SecurityStatusPara,
                     "🔒 ล็อกดาวน์ความปลอดภัยฉุกเฉิน (Anti-Ban Lockout)",
-                    "ถูกเตะติดต่อกันเกิน 2 ครั้ง ระบบสั่งพัก 30 นาทีเพื่อป้องกันแบนถาวร"
+                    "ถูกเตะติดต่อกันเกินเกณฑ์ ระบบสั่งพักเพื่อความปลอดภัยจากการแบนถาวร"
                 )
             else
                 SafeUpdatePara(SecurityStatusPara,
@@ -5343,13 +5402,13 @@ Tabs.Halloween:AddButton({
         local entry = GetHalloweenEntry()
         local candy = entry and entry.Candy or 0
         local boughtPulls = entry and entry.Bought and entry.Bought.LimitedPull or 0
-        if boughtPulls >= 5 then
-            Notify("⚠️ สิทธิ์เต็มแล้ว", "คุณซื้อตั๋ว Limited Pull ครบโควต้า 5/5 แล้ว", 3)
+        if boughtPulls >= 10 then
+            Notify("⚠️ สิทธิ์เต็มแล้ว", "คุณซื้อตั๋ว Limited Pull ครบโควต้า 10/10 แล้ว", 3)
             return
         end
         if candy >= 800 then
             Fire("SpookyBuy", "LimitedPull")
-            Notify("🎟️ ซื้อ Limited Pull", "ซื้อสำเร็จ! (" .. (boughtPulls + 1) .. "/5) (เหลือลูกอม: " .. (candy - 800) .. ")", 3)
+            Notify("🎟️ ซื้อ Limited Pull", "ซื้อสำเร็จ! (" .. (boughtPulls + 1) .. "/10) (เหลือลูกอม: " .. (candy - 800) .. ")", 3)
         else
             Notify("⚠️ ลูกอมไม่พอ", "ต้องใช้ 800 ลูกอม (คุณมี: " .. candy .. ")", 2)
         end
@@ -7491,14 +7550,14 @@ task.spawn(function()
                 end
             end
             
-            -- 2. Auto Buy Limited Pull (800 Candy, Limit 5)
+            -- 2. Auto Buy Limited Pull (800 Candy, Limit 10)
             if CFG.HalloweenAutoBuyLimitedPull and (nowTick - lastHalloweenLimitedPullTick > 8) then
                 local boughtPulls = entry.Bought and (entry.Bought.LimitedPull or entry.Bought.HalloweenPull or entry.Bought.SinglePull) or 0
                 local candyHave = (entry.Candy or 0)
-                if boughtPulls < 5 and candyHave >= 800 then
+                if boughtPulls < 10 and candyHave >= 800 then
                     lastHalloweenLimitedPullTick = nowTick
                     Fire("SpookyBuy", "LimitedPull")
-                    Notify("🎟️ ซื้อตั๋วฮาโลวีน", string.format("ซื้อ Limited Pull สำเร็จ! (%d/5)", boughtPulls + 1), 3)
+                    Notify("🎟️ ซื้อตั๋วฮาโลวีน", string.format("ซื้อ Limited Pull สำเร็จ! (%d/10)", boughtPulls + 1), 3)
                     Humanizer.Wait(1.5, 2.5)
                 end
             end
@@ -7574,22 +7633,16 @@ task.spawn(function()
                         Notify("🍬 ขอขนมฮาโลวีน", "กำลังเดินไปหาเคานต์พาวคูลาเพื่อขอขนมประจำวัน...", 3)
                         local arrived = WalkToPawcula and WalkToPawcula()
                         if arrived and CanTrickOrTreat() then
-                            Humanizer.Wait(0.8, 1.4)
+                            local char = LocalPlayer.Character or Character
+                            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                            if hrp and hrp.AssemblyLinearVelocity.Magnitude > 1.5 then
+                                task.wait(0.6) -- รอให้ตัวละครหยุดนิ่งสนิทก่อนส่งคำสั่ง เพื่อป้องกัน position desync
+                            end
                             
-                            pcall(function()
-                                local p = workspace:FindFirstChild("PetDiceHalloween")
-                                    and workspace.PetDiceHalloween:FindFirstChild("HauntedCorner")
-                                    and workspace.PetDiceHalloween.HauntedCorner:FindFirstChild("CountPawcula")
-                                local prompt = p and p:FindFirstChildWhichIsA("ProximityPrompt", true)
-                                if prompt and typeof(fireproximityprompt) == "function" then
-                                    fireproximityprompt(prompt)
-                                end
-                            end)
-                            
-                            Humanizer.Wait(0.4, 0.8)
+                            Humanizer.Wait(1.0, 1.6)
                             Fire("TrickOrTreat")
                             Notify("🍬 Trick or Treat", "ขอขนมฮาโลวีนสำเร็จเรียบร้อย!", 4)
-                            Humanizer.Wait(2.5, 3.5)
+                            Humanizer.Wait(3.0, 4.2)
                             Fire("Teleport", "Home")
                             Humanizer.Wait(3.5, 4.5)
                             LastZoneTransitionTime = tick()
