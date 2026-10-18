@@ -202,19 +202,11 @@ pcall(function()
     end)
 end)
 
--- 2. PlaceVersion Sentinel (ตรวจจับการอัปเดตแพทช์ใหม่ของตัวเกมแบบเรียลไทม์)
+-- 2. PlaceVersion Sentinel (ตรวจจับการอัปเดตแพทช์ใหม่ของตัวเกมแบบเรียลไทม์ - บันทึกสถานะเท่านั้น ไม่สั่งตัดไฟ)
 local function CheckGamePatch()
     local curVersion = game.PlaceVersion
-    if curVersion > (VERIFIED_GAME_PLACE_VERSION + 20) then
-        if not getgenv().EmergencyPatchHalt then
-            getgenv().EmergencyPatchHalt = true
-            getgenv().SecurityStatusMessage = string.format("เกมอัปเดตแพทช์ใหม่ v%d (เกณฑ์ทดสอบ v%d) - สคริปต์หยุดทำงานอัตโนมัติ", curVersion, VERIFIED_GAME_PLACE_VERSION)
-            SafeNotify("🚨 ตรวจพบเกมอัปเดตแพทช์ใหม่!", string.format("เกม Pet Dice เพิ่งอัปเดตแพทช์ใหม่ (v%d -> v%d)\nระบบหยุดส่งคำสั่งทั้งหมด 100%% ทันที เพื่อป้องกันไอดีโดนแบน (Error 600)\nกรุณารอสคริปต์อัปเดตความปลอดภัยก่อนเปิดใช้งาน", VERIFIED_GAME_PLACE_VERSION, curVersion), 15)
-        end
-        return false
-    else
-        getgenv().EmergencyPatchHalt = false
-    end
+    getgenv().EmergencyPatchHalt = false
+    getgenv().SecurityStatusMessage = string.format("ระบบปลอดภัย Game Patch v%d", curVersion)
     return true
 end
 
@@ -476,11 +468,13 @@ local function CanRunTower()
     return true
 end
 
--- ลำดับ 5 (สุ่มฟาร์มทั่วไป): ทำงานได้เมื่อ Trade(1), Boss(2), Halloween(3) ไม่ได้ทำงาน
+-- ลำดับ 5 (สุ่มฟาร์มทั่วไป): ทำงานได้เมื่อ Trade(1), Boss(2) ไม่ได้ทำงาน และไม่ได้กำลังเดินเก็บแคนดี้
 local function CanRunGeneralFarm()
     if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
     if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
-    if IsHalloweenActive() then return false, "Priority 3 Active: Halloween Event in progress" end
+    if isCollectingCandyMutex or getgenv().CandyStormMutex or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
+        return false, "Priority 3 Active: Halloween Event in progress"
+    end
     return true
 end
 
@@ -704,9 +698,9 @@ local function Fire(...)
         return
     end
 
-    -- 0. ระบบความปลอดภัยระดับฮาร์ดแวร์: Patch Sentinel & Cloud Kill-Switch
-    if getgenv().EmergencyPatchHalt or getgenv().EmergencyCloudHalt then
-        return -- ตัดการส่งคำสั่ง 100% เมื่อตรวจพบความเสี่ยงหรือเกมอัปเดตแพทช์ใหม่ ป้องกัน Error 267 / 600
+    -- 0. ระบบความปลอดภัย: Cloud Kill-Switch เท่านั้น
+    if getgenv().EmergencyCloudHalt then
+        return -- ตัดการส่งคำสั่งเฉพาะเมื่อผู้พัฒนาสั่งหยุดฉุกเฉินจาก Cloud เท่านั้น
     end
 
     -- 0.1 Blanket Trade Isolation & Conflict Queueing (ป้องกันคำสั่งอื่นแทรกแซงระหว่างเทรด 100% พร้อมจัดคิวรอทำตามลำดับ)
@@ -1026,7 +1020,9 @@ local function Fire(...)
         end
     end
     if action == "Roll" then
-        if State.Rolling then return end
+        local nowRoll = tick()
+        local lastRoll = LastRemoteFire["Roll"] or 0
+        if State.Rolling and (nowRoll - lastRoll < 1.2) then return end
         if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return end
@@ -1319,7 +1315,7 @@ task.spawn(function()
                 local action = item.action
                 local args = item.args
                 
-                if not (getgenv().EmergencyPatchHalt or getgenv().EmergencyCloudHalt) then
+                if not getgenv().EmergencyCloudHalt then
                     -- 1. ควบคุมความถี่เฉพาะของแต่ละคำสั่ง (Per-Action Rate Limiting)
                     local minInterval = RemoteRateLimits[action] or 0.15
                     local now = tick()
@@ -1529,11 +1525,17 @@ WalkToPawcula = function()
     local isAlreadyInHub = not IsPlayerAtHomePlot()
     if not isAlreadyInHub then
         Fire("Teleport", "Hub")
-        Humanizer.Wait(2.5, 3.5)
+        local tWait = tick()
+        while IsPlayerAtHomePlot() and (tick() - tWait < 4.0) do
+            task.wait(0.2)
+        end
         char = LocalPlayer.Character or Character
         hum = char and char:FindFirstChildOfClass("Humanoid")
         hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp or hum.Health <= 0 then return false end
+        if IsPlayerAtHomePlot() then
+            return false, "Teleport to Hub not completed yet"
+        end
     end
     
     -- คำนวณระยะทางและตั้งเวลาเดินแบบไดนามิก ป้องกันการหมดเวลากลางคัน
@@ -1971,6 +1973,13 @@ if getgenv().CFG.AutoReady == nil or ((getgenv().CFG.SenderMode or getgenv().CFG
     getgenv().CFG.AutoReady = true
 end
 
+if getgenv().CFG.AutoPlay == nil then getgenv().CFG.AutoPlay = true end
+if getgenv().CFG.AutoBuyDice == nil then getgenv().CFG.AutoBuyDice = true end
+if getgenv().CFG.UpgradeTree == nil then getgenv().CFG.UpgradeTree = true end
+if getgenv().CFG.Reward == nil then getgenv().CFG.Reward = true end
+if getgenv().CFG.Quest == nil then getgenv().CFG.Quest = true end
+if getgenv().CFG.AutoEquipBest == nil then getgenv().CFG.AutoEquipBest = true end
+
 local CFG = getgenv().CFG
 
 local function UpdateCFG(key, val)
@@ -2185,6 +2194,115 @@ local OverviewStats = Tabs.Overview:AddParagraph({
 local SecurityStatusPara = Tabs.Overview:AddParagraph({
     Title = string.format("🛡️ ความปลอดภัย: ปลอดภัย 100%% (Game Patch v%d)", game.PlaceVersion),
     Content = string.format("🎮 Game Version: v%d | ปลอดภัย\n🌐 Cloud Kill-Switch: ปกติ (Operational)\n🔒 Anti-Ban Protection: พร้อมทำงาน (ป้องกัน Error 267 / 600)", game.PlaceVersion)
+})
+
+Tabs.Overview:AddSection("⚡ สวิตช์ควบคุมหลัก (Master Quick Controls)")
+
+local TogOverviewAutoPlay, TogTowerAutoPlay
+local TogOverviewAutoBuyDice, TogTowerAutoBuyDice
+local TogOverviewTree, TogRebirthTree
+local TogOverviewTower, TogTowerTower
+local TogOverviewAutoRebirth, TogRebirthAutoRebirth
+local TogOverviewRewards, TogExpeditionRewards
+local isSyncingMasterToggles = false
+
+local function HandleMasterToggle(key, val, t1, t2, onNotifyTitle, onNotifyMsg, offNotifyMsg)
+    UpdateCFG(key, val)
+    if not isSyncingMasterToggles then
+        isSyncingMasterToggles = true
+        pcall(function()
+            if t1 and t1.Value ~= val then t1:SetValue(val) end
+            if t2 and t2.Value ~= val then t2:SetValue(val) end
+        end)
+        isSyncingMasterToggles = false
+    end
+    if val then
+        if onNotifyTitle and onNotifyMsg then Notify(onNotifyTitle, onNotifyMsg, 2) end
+    else
+        if onNotifyTitle and offNotifyMsg then Notify(onNotifyTitle, offNotifyMsg, 2) end
+    end
+end
+
+TogOverviewAutoPlay = Tabs.Overview:AddToggle("TogAutoPlayOverview", {
+    Title = "🎲 กลิ้งลูกเต๋าอัตโนมัติ (Auto Roll Dice)",
+    Default = CFG.AutoPlay,
+    Callback = function(V)
+        HandleMasterToggle("AutoPlay", V, TogOverviewAutoPlay, TogTowerAutoPlay, "🎲 กลิ้งลูกเต๋า", "เปิดระบบทอยลูกเต๋าอัตโนมัติแล้ว!", "ปิดระบบทอยลูกเต๋าแล้ว")
+        if V then
+            task.spawn(function()
+                local data = State.Data
+                if data and Stats and Stats.HasAuto and Stats.HasAuto(data, State.Mods and State.Mods() or {}) then
+                    Fire("SetAuto", true)
+                end
+                Fire("Roll")
+                if UpdateTowerStatus then task.delay(0.2, UpdateTowerStatus) end
+            end)
+        else
+            Fire("SetAuto", false)
+            if UpdateTowerStatus then task.delay(0.2, UpdateTowerStatus) end
+        end
+    end
+})
+
+TogOverviewAutoBuyDice = Tabs.Overview:AddToggle("TogAutoBuyDiceOverview", {
+    Title = "🎲 ซื้อลูกเต๋าอัตโนมัติ (Auto Buy Dice)",
+    Default = CFG.AutoBuyDice,
+    Callback = function(V)
+        HandleMasterToggle("AutoBuyDice", V, TogOverviewAutoBuyDice, TogTowerAutoBuyDice, "🎲 ซื้อลูกเต๋า", "เปิดระบบซื้อลูกเต๋าอัตโนมัติแล้ว!", "ปิดระบบซื้อลูกเต๋าแล้ว")
+    end
+})
+
+TogOverviewTree = Tabs.Overview:AddToggle("TogTreeOverview", {
+    Title = "🌳 อัปเกรดสกิลทรีอัตโนมัติ (Auto Upgrade Skill Tree)",
+    Default = CFG.UpgradeTree,
+    Callback = function(V)
+        HandleMasterToggle("UpgradeTree", V, TogOverviewTree, TogRebirthTree, "🌳 สกิลทรี", "เปิดระบบอัปเกรดสกิลทรีอัตโนมัติแล้ว!", "ปิดระบบอัปเกรดสกิลทรีแล้ว")
+    end
+})
+
+TogOverviewTower = Tabs.Overview:AddToggle("TogTowerOverview", {
+    Title = "🏰 ลงหอคอยอัตโนมัติ (Auto Infinity Tower)",
+    Default = CFG.Tower,
+    Callback = function(V)
+        HandleMasterToggle("Tower", V, TogOverviewTower, TogTowerTower, "🏰 หอคอย", "เปิดระบบลงหอคอยอัตโนมัติแล้ว!", "ปิดระบบลงหอคอยแล้ว")
+        if V and (not IsFeatureUnlocked or IsFeatureUnlocked("Towers", "towers")) then
+            task.spawn(function()
+                local targetId = ResolveTowerId(CFG.SelectedTower)
+                SwitchOrStartTower(targetId, true)
+            end)
+        end
+    end
+})
+
+TogOverviewAutoRebirth = Tabs.Overview:AddToggle("TogAutoRebirthOverview", {
+    Title = "🔄 เกิดใหม่อัตโนมัติเมื่อเงินครบ (Auto Rebirth)",
+    Default = CFG.AutoRebirth,
+    Callback = function(V)
+        HandleMasterToggle("AutoRebirth", V, TogOverviewAutoRebirth, TogRebirthAutoRebirth, "🔄 เกิดใหม่", "เปิดระบบเกิดใหม่อัตโนมัติแล้ว!", "ปิดระบบเกิดใหม่อัตโนมัติแล้ว")
+    end
+})
+
+TogOverviewRewards = Tabs.Overview:AddToggle("TogRewardsOverview", {
+    Title = "🎁 รับรางวัลและเควสท์อัตโนมัติ (Auto Rewards & Quests)",
+    Default = CFG.Reward,
+    Callback = function(V)
+        UpdateCFG("Reward", V)
+        UpdateCFG("Quest", V)
+        if not isSyncingMasterToggles then
+            isSyncingMasterToggles = true
+            pcall(function()
+                if TogExpeditionRewards and TogExpeditionRewards.Value ~= V then
+                    TogExpeditionRewards:SetValue(V)
+                end
+            end)
+            isSyncingMasterToggles = false
+        end
+        if V then
+            Notify("🎁 รางวัล & เควสท์", "เปิดระบบรับรางวัลและเควสท์อัตโนมัติแล้ว!", 2)
+        else
+            Notify("🎁 รางวัล & เควสท์", "ปิดระบบรับรางวัลและเควสท์แล้ว", 2)
+        end
+    end
 })
 
 Tabs.Overview:AddSection("🐾 สัตว์เลี้ยงที่ดีที่สุด 8 อันดับ (เรียงตามรายได้พื้นฐาน)")
@@ -3304,11 +3422,20 @@ local function GetActiveTowerId()
 end
 
 IsTowerRunning = function()
+    if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then
+        LiveTower.Active = false
+        LiveTower.Starting = false
+        return false
+    end
     SyncLiveTowerFromGame()
     return LiveTower.Active == true
 end
 
 IsTowerInArena = function()
+    if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then
+        LiveTower.InArena = false
+        return false
+    end
     SyncLiveTowerFromGame()
     return LiveTower.Active == true and LiveTower.InArena == true
 end
@@ -3782,11 +3909,16 @@ DropdownTower = Tabs.Tower:AddDropdown("DropSelectTower", {
     end
 })
 
-Tabs.Tower:AddToggle("TogTower", {
+TogTowerTower = Tabs.Tower:AddToggle("TogTower", {
     Title = "1. ฟาร์มหอคอยอัตโนมัติ (Auto Tower)",
     Default = CFG.Tower,
     Callback = function(V)
         UpdateCFG("Tower", V)
+        if not isSyncingMasterToggles and TogOverviewTower and TogOverviewTower.Value ~= V then
+            isSyncingMasterToggles = true
+            pcall(function() TogOverviewTower:SetValue(V) end)
+            isSyncingMasterToggles = false
+        end
         if V then
             task.spawn(function()
                 -- ล้างค่าสถานะค้างทั้งหมด ให้พร้อมเริ่มทันที
@@ -4088,20 +4220,24 @@ Tabs.Tower:AddButton({
 
 Tabs.Tower:AddSection("🎲 กลิ้งลูกเต๋า (Auto Dice)")
 
-Tabs.Tower:AddToggle("TogAutoPlay", {
+TogTowerAutoPlay = Tabs.Tower:AddToggle("TogAutoPlay", {
     Title = "4. กลิ้งลูกเต๋าอัตโนมัติ (Auto Roll Dice)",
     Default = CFG.AutoPlay,
     Callback = function(V)
         UpdateCFG("AutoPlay", V)
+        if not isSyncingMasterToggles and TogOverviewAutoPlay and TogOverviewAutoPlay.Value ~= V then
+            isSyncingMasterToggles = true
+            pcall(function() TogOverviewAutoPlay:SetValue(V) end)
+            isSyncingMasterToggles = false
+        end
         if V then
             task.spawn(function()
                 local data = State.Data
                 if data and Stats and Stats.HasAuto and Stats.HasAuto(data, State.Mods and State.Mods() or {}) then
                     Fire("SetAuto", true)
-                    Notify("🎲 กลิ้งลูกเต๋า", "เปิดระบบ Auto Roll ในเกมเรียบร้อย!", 2)
-                else
-                    Notify("🎲 กลิ้งลูกเต๋า", "เปิดระบบทอยลูกเต๋าอัตโนมัติเรียบร้อย!", 2)
                 end
+                Fire("Roll")
+                Notify("🎲 กลิ้งลูกเต๋า", "เปิดระบบทอยลูกเต๋าอัตโนมัติเรียบร้อย!", 2)
                 task.delay(0.2, UpdateTowerStatus)
             end)
         else
@@ -4114,11 +4250,16 @@ Tabs.Tower:AddToggle("TogAutoPlay", {
     end
 })
 
-Tabs.Tower:AddToggle("TogAutoBuyDice", {
+TogTowerAutoBuyDice = Tabs.Tower:AddToggle("TogAutoBuyDice", {
     Title = "5. ซื้อลูกเต๋าอัตโนมัติเมื่อเงินพอ (Auto Buy Dice)",
     Default = CFG.AutoBuyDice,
     Callback = function(V)
         UpdateCFG("AutoBuyDice", V)
+        if not isSyncingMasterToggles and TogOverviewAutoBuyDice and TogOverviewAutoBuyDice.Value ~= V then
+            isSyncingMasterToggles = true
+            pcall(function() TogOverviewAutoBuyDice:SetValue(V) end)
+            isSyncingMasterToggles = false
+        end
         if V then
             Notify("🎲 ซื้อลูกเต๋า", "เปิดระบบซื้อลูกเต๋าอัตโนมัติเรียบร้อย!", 2)
         else
@@ -4132,10 +4273,17 @@ Tabs.Tower:AddToggle("TogAutoBuyDice", {
 -- ------------------------------------------------------------------------------
 Tabs.Rebirth:AddSection("🌟 เกิดใหม่อัตโนมัติ (Auto Rebirth)")
 
-Tabs.Rebirth:AddToggle("TogAutoRebirth", {
+TogRebirthAutoRebirth = Tabs.Rebirth:AddToggle("TogAutoRebirth", {
     Title = "เปิดระบบเกิดใหม่อัตโนมัติเมื่อเงินครบ (Auto Rebirth)",
     Default = CFG.AutoRebirth,
-    Callback = function(V) UpdateCFG("AutoRebirth", V) end
+    Callback = function(V)
+        UpdateCFG("AutoRebirth", V)
+        if not isSyncingMasterToggles and TogOverviewAutoRebirth and TogOverviewAutoRebirth.Value ~= V then
+            isSyncingMasterToggles = true
+            pcall(function() TogOverviewAutoRebirth:SetValue(V) end)
+            isSyncingMasterToggles = false
+        end
+    end
 })
 
 Tabs.Rebirth:AddButton({
@@ -4156,10 +4304,17 @@ Tabs.Rebirth:AddButton({
 
 Tabs.Rebirth:AddSection("🌳 อัปเกรดต้นไม้ทักษะ (Skill Tree)")
 
-Tabs.Rebirth:AddToggle("TogTree", {
+TogRebirthTree = Tabs.Rebirth:AddToggle("TogTree", {
     Title = "วนซื้ออัปเกรดต้นไม้ทั้งหมดอัตโนมัติ",
     Default = CFG.UpgradeTree,
-    Callback = function(V) UpdateCFG("UpgradeTree", V) end
+    Callback = function(V)
+        UpdateCFG("UpgradeTree", V)
+        if not isSyncingMasterToggles and TogOverviewTree and TogOverviewTree.Value ~= V then
+            isSyncingMasterToggles = true
+            pcall(function() TogOverviewTree:SetValue(V) end)
+            isSyncingMasterToggles = false
+        end
+    end
 })
 
 do
@@ -4872,10 +5027,17 @@ Tabs.Expedition:AddButton({
     Callback = ClaimAllRewardsManual
 })
 
-Tabs.Expedition:AddToggle("TogReward", {
+TogExpeditionRewards = Tabs.Expedition:AddToggle("TogReward", {
     Title = "1. รับรางวัลประจำวัน & เวลาเล่นอัตโนมัติ (Auto Rewards)",
     Default = CFG.Reward,
-    Callback = function(V) UpdateCFG("Reward", V) end
+    Callback = function(V)
+        UpdateCFG("Reward", V)
+        if not isSyncingMasterToggles and TogOverviewRewards and TogOverviewRewards.Value ~= V then
+            isSyncingMasterToggles = true
+            pcall(function() TogOverviewRewards:SetValue(V) end)
+            isSyncingMasterToggles = false
+        end
+    end
 })
 
 Tabs.Expedition:AddToggle("TogQuest", {
@@ -5298,11 +5460,17 @@ SafeCollectPlazaCandies = function(isManual)
         if not isAlreadyInHub then
             Notify("🌪️ พายุลูกกวาด", "กำลังเดินทางไปพลาซ่าเพื่อเก็บแคนดี้...", 2)
             Fire("Teleport", "Hub")
-            Humanizer.Wait(2.0, 2.8)
+            local tWait = tick()
+            while IsPlayerAtHomePlot() and (tick() - tWait < 4.0) do
+                task.wait(0.2)
+            end
             char = LocalPlayer.Character or Character
             hum = char and char:FindFirstChildOfClass("Humanoid")
             hrp = char and char:FindFirstChild("HumanoidRootPart")
             if not hum or not hrp or hum.Health <= 0 then return end
+            if IsPlayerAtHomePlot() then
+                return
+            end
         end
         
         local targets = GetAvailableCandies()
@@ -6605,16 +6773,15 @@ task.spawn(function()
                 local data = State.Data
                 if not data then return end
                 
-                -- สแกนเรียลไทม์: หากปลดล็อค Auto Roll ในเกมแล้ว ให้เปิดการทำงาน Native ของเกม
+                -- สแกนเรียลไทม์: เปิดการทำงาน Native ของเกมควบคู่ไปด้วย
                 if Stats and Stats.HasAuto and Stats.HasAuto(data, State.Mods and State.Mods() or {}) then
                     if not State.Auto then
                         Fire("SetAuto", true)
-                        Humanizer.Wait(1.0, 1.8)
                     end
-                else
-                    Fire("Roll")
-                    Humanizer.Wait(1.2, 2.0)
                 end
+                -- ส่งคำสั่งทอยเต๋าเสมอ 100% รับประกันตัวละครทอยเต๋าต่อเนื่อง ไร้ปัญหาค้างบนมือถือ/UGPhone
+                Fire("Roll")
+                Humanizer.Wait(1.1, 1.8)
             end)
         end
     end
@@ -6633,10 +6800,19 @@ task.spawn(function()
                 local data = State.Data
                 if not data or not data.Money or not data.OwnedDice or not Config.Dice then return end
                 
+                local function HasDice(owned, diceId)
+                    if not owned or not diceId then return false end
+                    if owned[diceId] == true then return true end
+                    for _, v in pairs(owned) do
+                        if v == diceId then return true end
+                    end
+                    return false
+                end
+
                 -- สแกนเรียลไทม์: ซื้อลูกเต๋าที่ดีที่สุดที่ยังไม่มีและเงินพอ
                 for i = #Config.Dice, 1, -1 do
                     local d = Config.Dice[i]
-                    if not data.OwnedDice[d.Id] and (data.Money or 0) >= (d.Cost or 0) then
+                    if not HasDice(data.OwnedDice, d.Id) and (data.Money or 0) >= (d.Cost or 0) then
                         Fire("BuyDice", d.Id)
                         Humanizer.Wait(1.5, 2.5)
                         break
@@ -6648,7 +6824,7 @@ task.spawn(function()
                 if data and data.OwnedDice and Config.Dice then
                     for i = #Config.Dice, 1, -1 do
                         local d = Config.Dice[i]
-                        if data.OwnedDice[d.Id] then
+                        if HasDice(data.OwnedDice, d.Id) then
                             if data.Dice ~= d.Id then
                                 Fire("EquipDice", d.Id)
                                 Humanizer.Wait(1.0, 1.8)
@@ -6922,25 +7098,23 @@ task.spawn(function()
             getgenv().LastEconomyActionStartTime = tick()
             
             pcall(function()
-                CircuitBreaker.Execute("UpgradeTree", function()
-                    local data = State.Data
-                    if not data or not data.Upgrades or not data.Money or data.Money <= 0 then 
-                        task.wait(3.0)
-                        return 
+                local data = State.Data
+                if not data or not data.Upgrades or not data.Money or data.Money <= 0 then 
+                    task.wait(3.0)
+                    return 
+                end
+                
+                -- สแกนเรียลไทม์: ตรวจสอบความพร้อมใช้งานจริงว่ามีอัปเกรดที่เงินพอซื้อได้จริงหรือไม่
+                if Upgrades and Upgrades.PlanBuyAll then
+                    local planned, totalCost = Upgrades.PlanBuyAll(data.Upgrades, data.Money, 50)
+                    if planned and #planned > 0 and totalCost and data.Money >= totalCost then
+                        Fire("BuyAllUpgrades")
+                        Humanizer.Wait(1.8, 2.8)
+                    else
+                        -- ไม่มีอัปเกรดที่เงินพอซื้อในขณะนี้ พัก 4 วินาที ไม่ยิงคำสั่งรัว
+                        task.wait(4.0)
                     end
-                    
-                    -- สแกนเรียลไทม์: ตรวจสอบความพร้อมใช้งานจริงว่ามีอัปเกรดที่เงินพอซื้อได้จริงหรือไม่
-                    if Upgrades and Upgrades.PlanBuyAll then
-                        local planned, totalCost = Upgrades.PlanBuyAll(data.Upgrades, data.Money, 50)
-                        if planned and #planned > 0 and totalCost and data.Money >= totalCost then
-                            Fire("BuyAllUpgrades")
-                            Humanizer.Wait(1.8, 2.8)
-                        else
-                            -- ไม่มีอัปเกรดที่เงินพอซื้อในขณะนี้ พัก 4 วินาที ไม่ยิงคำสั่งรัว
-                            task.wait(4.0)
-                        end
-                    end
-                end)
+                end
             end)
             
             isEconomyActionMutex = false
@@ -8068,13 +8242,16 @@ getgenv().PetDiceScriptStarting = nil
 getgenv().PetDiceNotify = Notify
 Notify("🚀 สคริปต์พร้อมทำงาน", "Pet Dice Master Fluent Edition v4.8 โหลดสำเร็จ!", 4)
 
--- Auto-start tower immediately upon script load if enabled
+-- Auto-start tower immediately upon script load if enabled and unlocked
 if CFG and CFG.Tower then
-    task.delay(1.0, function()
+    task.delay(1.5, function()
         if getgenv().PetDiceScriptToken == scriptToken and CFG.Tower and not IsTowerRunning() then
-            if not IsFeatureUnlocked or IsFeatureUnlocked("Towers", "towers") then
+            if IsFeatureUnlocked and IsFeatureUnlocked("Towers", "towers") then
                 local targetId = ResolveTowerId(CFG.SelectedTower)
                 SwitchOrStartTower(targetId, true)
+            else
+                LiveTower.Active = false
+                LiveTower.Starting = false
             end
         end
     end)
