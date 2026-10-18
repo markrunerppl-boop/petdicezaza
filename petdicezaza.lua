@@ -21,6 +21,13 @@ end
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
+local PET_DICE_PLACE_IDS = {
+    [139815684286865] = true,
+}
+if not PET_DICE_PLACE_IDS[game.PlaceId] and not RS:FindFirstChild("PetDice") then
+    -- ไม่ใช่เกม Pet Dice ข้ามการทำงานอัตโนมัติทันที ป้องกัน Infinite Yield และการรบกวนเกมอื่น
+    return
+end
 local CG = game:GetService("CoreGui")
 local HS = game:GetService("HttpService")
 local GuiService = game:GetService("GuiService")
