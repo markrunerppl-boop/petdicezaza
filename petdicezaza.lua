@@ -528,49 +528,49 @@ end
 
 local LastRemoteFire = {}
 local RemoteRateLimits = {
-    RollTrait = 0.28,        -- Config.RateLimit Cost=0.5
-    RollGrade = 0.28,        -- Config.RateLimit Cost=0.5
-    UpgradePet = 0.35,       -- อัปเกรดเลเวลสัตว์เลี้ยง
-    UpgradePetLevels = 0.35,
-    BuyAllUpgrades = 1.50,   -- ป้องกันการยิงรัวซื้ออัปเกรดต้นไม้
+    RollTrait = 0.35,        -- ปรับเป็น 0.35s เพื่อความปลอดภัยบน UGPhone
+    RollGrade = 0.35,        -- ปรับเป็น 0.35s เพื่อความปลอดภัยบน UGPhone
+    UpgradePet = 0.45,       -- อัปเกรดเลเวลสัตว์เลี้ยง
+    UpgradePetLevels = 0.45,
+    BuyAllUpgrades = 1.80,   -- ป้องกันการยิงรัวซื้ออัปเกรดต้นไม้
     MarketBuyAll = 2.00,     -- ป้องกันการยิงรัวกวาดซื้อของในตลาด
-    MarketBuy = 0.50,        -- ซื้อของชิ้นเดี่ยวในตลาด
+    MarketBuy = 0.60,        -- ซื้อของชิ้นเดี่ยวในตลาด
     Teleport = 3.50,         -- ป้องกัน Error 600 / Teleport State Collision / Desync
     TowerStart = 3.50,       -- ป้องกัน Tower Spurt
     TowerExit = 3.00,
     TowerLeave = 3.50,
     WorldBossJoin = 3.50,
     WorldBossLeave = 3.00,
-    Rebirth = 2.00,
-    UsePotion = 0.40,
-    OpenLootBag = 0.80,
-    QuestClaim = 0.40,
-    GoalClaim = 0.40,
-    ClaimDaily = 1.00,
-    ClaimPlaytime = 1.00,
-    ClaimSocial = 1.00,
-    SendExpedition = 1.00,
-    ClaimExpedition = 0.80,
+    Rebirth = 2.50,
+    UsePotion = 0.50,
+    OpenLootBag = 1.00,
+    QuestClaim = 0.50,
+    GoalClaim = 0.50,
+    ClaimDaily = 1.20,
+    ClaimPlaytime = 1.20,
+    ClaimSocial = 1.20,
+    SendExpedition = 1.20,
+    ClaimExpedition = 1.00,
     TradeRequest = 3.00,     -- เว้นระยะอย่างน้อย 3.00s ต่อการส่งคำขอเทรด ป้องกันการสแปม
     TradeRespond = 2.00,     -- เว้นระยะ 2.00s ต่อการตอบรับคำขอเทรด
     TrickOrTreat = 2.50,     -- เว้นระยะ 2.50s ต่อการขอขนมฮาโลวีน ป้องกัน Error 267
-    SpookyBuy = 1.20,        -- เว้นระยะ 1.20s ต่อการซื้อของร้าน Spooky Shop
+    SpookyBuy = 1.50,        -- เว้นระยะ 1.50s ต่อการซื้อของร้าน Spooky Shop
     HalloweenGoalClaim = 1.50, -- เว้นระยะ 1.50s ต่อการเคลมรางวัลฮาโลวีน
     TradeReady = 2.00,       -- เว้นระยะ 2.00s ต่อการกด Ready/Unready
-    TradeItem = 0.30,        -- เว้นระยะ 0.30s ต่อการวางไอเทมลงในช่องเทรด
-    TradeAddPets = 0.40,     -- เว้นระยะ 0.40s ต่อการใส่สัตว์เลี้ยงลงในช่องเทรด
-    TradeRemovePets = 0.40,  -- เว้นระยะ 0.40s ต่อการดึงสัตว์เลี้ยงออกจากช่องเทรด
+    TradeItem = 0.40,        -- เว้นระยะ 0.40s ต่อการวางไอเทมลงในช่องเทรด
+    TradeAddPets = 0.50,     -- เว้นระยะ 0.50s ต่อการใส่สัตว์เลี้ยงลงในช่องเทรด
+    TradeRemovePets = 0.50,  -- เว้นระยะ 0.50s ต่อการดึงสัตว์เลี้ยงออกจากช่องเทรด
     TradeCancel = 1.50,      -- เว้นระยะ 1.50s ต่อการกดยกเลิกการเทรด
-    BuyDice = 1.50,
-    EquipDice = 0.50,
-    EquipBest = 2.00,
-    SellKeys = 0.50,
-    ClaimLootPets = 0.80,
-    Roll = 0.50,             -- ทอยเต๋า ตาม Cooldown ของเกม ป้องกัน Server Spam Count
-    SetAuto = 1.00,          -- สลับสถานะ Auto Roll
+    BuyDice = 1.80,
+    EquipDice = 0.80,
+    EquipBest = 2.50,
+    SellKeys = 0.80,
+    ClaimLootPets = 1.00,
+    Roll = 0.80,             -- ทอยเต๋า ตาม Cooldown ของเกม ป้องกัน Server Spam Count
+    SetAuto = 1.50,          -- สลับสถานะ Auto Roll
     SetSetting = 1.00,       -- บันทึกการตั้งค่า
     PortalRepair = 3.00,     -- ซ่อมแซมประตูบอสโลก
-    BuyUpgrade = 0.50,       -- ซื้ออัปเกรดเดี่ยว
+    BuyUpgrade = 0.60,       -- ซื้ออัปเกรดเดี่ยว
 }
 
 -- Global Zone Transition Serialization & Anti-Conflict State Machine
@@ -667,16 +667,16 @@ local RemoteQueue = {}
 getgenv().RemoteQueue = RemoteQueue
 local LoopHeartbeats = {}
 getgenv().LoopHeartbeats = LoopHeartbeats
-local MIN_GLOBAL_REMOTE_INTERVAL = 0.18
+local MIN_GLOBAL_REMOTE_INTERVAL = 0.28 -- ปรับเป็น 0.28s เพื่อรองรับปิงแกว่งบน UGPhone และ Cloud Emulators
 local LastGlobalRemoteFireTime = 0
 
 -- Global Token Bucket Rate Limiter (ป้องกันการยิงพร้อมกันจากทุกฟังก์ชันเกินขีดจำกัดเซิร์ฟเวอร์)
 -- ขีดจำกัดเซิร์ฟเวอร์ของตัวเกมแท้: PerSecond = 12, Burst = 24
--- ขีดจำกัดความปลอดภัยขั้นสูงสุดของสคริปต์: PerSecond = 4.0 (ปลอดภัยกว่าขีดจำกัดเซิร์ฟเวอร์ 67%), MaxBurst = 10 (ปลอดภัย 58%)
+-- ขีดจำกัดความปลอดภัยขั้นสูงสุดของสคริปต์สำหรับ PC และ UGPhone: PerSecond = 3.0, MaxBurst = 6.0
 local GlobalTokenBucket = {
-    Tokens = 10.0,
-    MaxTokens = 10.0,
-    RefillRate = 4.0,  -- เติม 4 token ต่อวินาที ต่ำกว่าเซิร์ฟเวอร์ถึง 67% ป้องกันเซิร์ฟเวอร์เตะ Error 267 แน่นอน 100%
+    Tokens = 6.0,
+    MaxTokens = 6.0,
+    RefillRate = 3.0,  -- เติม 3 token ต่อวินาที (ต่ำกว่าเซิร์ฟเวอร์ถึง 75% ป้องกันเซิร์ฟเวอร์เตะ Error 267 แน่นอน 100%)
     LastRefill = tick(),
     Costs = {
         RollTrait = 0.5,
@@ -1079,6 +1079,7 @@ local function Fire(...)
     if action == "Roll" then
         local nowRoll = tick()
         local lastRoll = LastRemoteFire["Roll"] or 0
+        if (nowRoll - lastRoll < 0.60) then return end
         if State.Rolling and (nowRoll - lastRoll < 1.2) then return end
         if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
@@ -1348,11 +1349,26 @@ local function Fire(...)
         end
     end
 
-    -- ป้องกันคิวยาวเกินไปเมื่อหลาย Loop เรียกคำสั่งพร้อมกัน
-    if #RemoteQueue >= 20 then
-        if action == "Roll" or action == "RollGrade" or action == "RollTrait" or action == "SetAuto" then
-            return -- สลัดคำสั่งความสำคัญต่ำทิ้ง ไม่สะสมในคิว
+    -- UGPhone & Mobile Cloud Protection: ป้องกันคิวยาวเกินไปเมื่อเครื่องแลคหรือปิงกระตุก
+    if #RemoteQueue >= 10 then
+        local DroppableActions = {
+            Roll = true,
+            RollGrade = true,
+            RollTrait = true,
+            SetAuto = true,
+            EquipBest = true,
+            BuyUpgrade = true,
+            UpgradePet = true,
+            UpgradePetLevels = true,
+        }
+        if DroppableActions[action] then
+            return -- สลัดคำสั่งทั่วไปทิ้งทันทีเมื่อคิวสะสม ป้องกันการปล่อยแพ็กเก็ต Burst หลังหายแลค (100% Anti-Kick Error 267)
         end
+    end
+
+    -- ป้องกันคิวทะลักขั้นเด็ดขาด (Hard Queue Cap)
+    if #RemoteQueue >= 18 then
+        return
     end
 
     table.insert(RemoteQueue, { action = action, args = args })
@@ -2561,7 +2577,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
             if getgenv().PetDiceScriptToken ~= scriptToken then break end
             Fire("SellKeys", batch.keys, batch.amounts)
             if bIndex < #sellBatches then
-                Humanizer.Wait(0.40, 0.65)
+                Humanizer.Wait(0.60, 0.90)
             end
         end
         
@@ -6898,15 +6914,25 @@ task.spawn(function()
                 local data = State.Data
                 if not data then return end
                 
-                -- สแกนเรียลไทม์: เปิดการทำงาน Native ของเกมควบคู่ไปด้วย
-                if Stats and Stats.HasAuto and Stats.HasAuto(data, State.Mods and State.Mods() or {}) then
+                -- สแกนเรียลไทม์: หากผู้เล่นมีบัฟ/สกิล Auto Roll ของตัวเกม ให้เปิดใช้งาน Native Auto
+                local hasNativeAuto = Stats and Stats.HasAuto and Stats.HasAuto(data, State.Mods and State.Mods() or {})
+                if hasNativeAuto then
                     if not State.Auto then
                         Fire("SetAuto", true)
+                        Humanizer.Wait(0.5, 0.8)
                     end
+                    -- เมื่อตัวเกมเปิดระบบ Native Auto Roll สำเร็จแล้ว ระบบของเกมจะทอยอัตโนมัติอย่างเป็นธรรมชาติ
+                    -- ตรวจสอบ Watchdog: หากตัวเกมหยุดทอยเกิน 3.5 วินาที จึงค่อยส่งคำสั่งทอยสำรอง (ป้องกัน Double Roll ชนกันบน UGPhone)
+                    local lastRollTime = LastRemoteFire["Roll"] or 0
+                    if not State.Rolling and (tick() - lastRollTime > 3.5) then
+                        Fire("Roll")
+                    end
+                    Humanizer.Wait(1.5, 2.5)
+                else
+                    -- หากยังไม่มีระบบ Native Auto ของเกม ให้สคริปต์ส่งคำสั่งทอยเต๋าตามปกติ
+                    Fire("Roll")
+                    Humanizer.Wait(1.2, 1.9)
                 end
-                -- ส่งคำสั่งทอยเต๋าเสมอ 100% รับประกันตัวละครทอยเต๋าต่อเนื่อง ไร้ปัญหาค้างบนมือถือ/UGPhone
-                Fire("Roll")
-                Humanizer.Wait(1.1, 1.8)
             end)
         end
     end
@@ -8004,7 +8030,7 @@ task.spawn(function()
                     
                     local targetRank = CFG.TargetGradeRank or 8
                     local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
-                    local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.2)
+                    local rollDelay = math.clamp(CFG.RollSpeed or 0.40, 0.35, 1.5)
                     local virtualGems = data.Gems
                     local anyRolled = false
                     
@@ -8086,7 +8112,7 @@ task.spawn(function()
                     
                     local targetRank = CFG.TargetTraitRank or 6
                     local targetUids = GetTopBestPets(CFG.EnhancePetCount or 4)
-                    local rollDelay = math.clamp(CFG.RollSpeed or 0.35, 0.25, 1.2)
+                    local rollDelay = math.clamp(CFG.RollSpeed or 0.40, 0.35, 1.5)
                     local virtualShards = data.Shards
                     local anyRolled = false
                     
