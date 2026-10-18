@@ -434,6 +434,9 @@ local function IsTradeActive()
 end
 
 local function IsWorldBossActive()
+    if CFG and (CFG.PauseTowerForBoss == false or CFG.AutoWorldBoss == false) then
+        return false
+    end
     local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true) or (IsEnteringBossPortal == true)
     return isJoined
 end
@@ -553,7 +556,9 @@ local SwitchOrStartTower
 local IsTowerRunning
 local IsTowerInArena
 local UpdateTowerStatus
--- towerIdByOption declared at line 550
+local ResolveTowerId
+local isSwitchingTower = false
+local IsEnteringBossPortal = false
 local LiveTower = {
     Active = false,
     Starting = false,
@@ -571,8 +576,6 @@ local LiveTower = {
     EndedTick = 0,
     LastFloorTime = 0
 }
-
--- ResolveTowerId declared at line 550
 local function IsPlayerAtHomePlot()
     local char = LocalPlayer.Character or Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -3166,8 +3169,7 @@ Tabs.Tower:AddSection("📊 สถานะหอคอยแบบเรีย�
 -- [REAL-TIME LIVE TOWER TRACKER & DEEP GAME SYNC]
 -- ==============================================================================
 -- LiveTower and ResolveTowerId declared at line 550
-
-local IsEnteringBossPortal = false
+IsEnteringBossPortal = false
 
 -- ดึงรายชื่อหอคอยทั้งหมด 1-7 จากตัวเกมจริง
 local elemThai = {
@@ -3204,10 +3206,10 @@ if not CFG.SelectedTower or CFG.SelectedTower == "" then
     CFG.SelectedTowerOption = defaultTowerOpt
 end
 
-local isSwitchingTower = false
+isSwitchingTower = false
 -- lastLoopStartAttempt forward declared
 
-local function ResolveTowerId(val)
+ResolveTowerId = function(val)
     if not val or val == "" then return "Infinity" end
     if Towers and Towers.ById and Towers.ById[val] then return val end
     if towerIdByOption and towerIdByOption[val] then return towerIdByOption[val] end
@@ -6930,103 +6932,115 @@ task.spawn(function()
     local lastTowerId = nil
     local towerStartFloor = 0
     local consecutiveFailCount = 0
+    local lastBossStateInTower = RS:GetAttribute("WorldBossState") or "Idle"
     
     while true do
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         LoopHeartbeats["Loop3_AutoTower"] = tick()
-        if not CanRunTower() then
-            LiveTower.Active = false
-            LiveTower.Starting = false
-            task.wait(2.0)
-            continue
-        end
         
-        local char = LocalPlayer.Character or Character
-        local hum = char and (char:FindFirstChildOfClass("Humanoid") or Humanoid)
-        if not char or not hum or hum.Health <= 0 then task.wait(1.5) continue end
-        
-        -- ตรวจสอบเงื่อนไข World Boss: พักหอคอยเฉพาะตอนที่ตัวละครอยู่ในบอสโลกจริง หรือกำลังเดินทางเข้าประตูบอส
-        local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
-            if IsTowerRunning() then
-                Fire("TowerLeave")
-                Humanizer.Wait(1.0, 1.5)
+        local ok, loopErr = pcall(function()
+            local curBossState = RS:GetAttribute("WorldBossState") or "Idle"
+            if lastBossStateInTower == "Fighting" and curBossState ~= "Fighting" then
+                consecutiveFailCount = 0
+                lastLoopStartAttempt = 0
             end
-            task.wait(2.0)
-            continue
-        end
-        
-        if CFG.Tower and (not IsFeatureUnlocked or IsFeatureUnlocked("Towers", "towers")) then
-            local data = State.Data
-            if data then
-                -- ตรวจสอบและปิดป๊อปอัป BattleResults หากมีค้างอยู่
-                pcall(function()
-                    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-                    local br = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Effects") and pg.PetDiceUI.Root.Effects:FindFirstChild("BattleResults")
-                    if br and br.Visible then br.Visible = false end
-                end)
-                
-                -- ปลดล็อค isSwitchingTower อัตโนมัติหากค้างเกิน 5 วินาที
-                local now = tick()
-                if isSwitchingTower and (now - (LiveTower.SwitchingTick or 0) > 5.0) then
-                    isSwitchingTower = false
+            lastBossStateInTower = curBossState
+            
+            if not CanRunTower() then
+                LiveTower.Active = false
+                LiveTower.Starting = false
+                return
+            end
+            
+            local char = LocalPlayer.Character or Character
+            local hum = char and (char:FindFirstChildOfClass("Humanoid") or Humanoid)
+            if not char or not hum or hum.Health <= 0 then return end
+            
+            -- ตรวจสอบเงื่อนไข World Boss: พักหอคอยเฉพาะตอนที่ตัวละครอยู่ในบอสโลกจริง หรือกำลังเดินทางเข้าประตูบอส
+            local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+            if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
+                if IsTowerRunning() then
+                    Fire("TowerLeave")
+                    Humanizer.Wait(1.0, 1.5)
                 end
-                
-                local isRunning = IsTowerRunning()
-                local activeId = GetActiveTowerId()
-                local targetId = ResolveTowerId(CFG.SelectedTower)
-                
-                -- ตรวจสอบเงื่อนไขการพักหอคอยเมื่อกำลังต่อสู้กับบอสโลก
-                local isBossJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-                if not (CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isBossJoined or IsEnteringBossPortal == true)) then
-                    if isRunning then
-                        consecutiveFailCount = 0
-                        -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย
-                        if activeId and activeId ~= targetId and not isSwitchingTower then
-                            SwitchOrStartTower(targetId, true)
-                        end
-                        
-                        -- ตรวจสอบและเปิด TowerAutoplay ของตัวเกมให้เป็นจริงเสมอ เพื่อการไต่ชั้นอย่างต่อเนื่อง
-                        pcall(function()
-                            if data.Settings and data.Settings.TowerAutoplay ~= true then
-                                Fire("SetSetting", "TowerAutoplay", true)
+                return
+            end
+            
+            if CFG.Tower and (not IsFeatureUnlocked or IsFeatureUnlocked("Towers", "towers")) then
+                local data = State.Data
+                if data then
+                    -- ตรวจสอบและปิดป๊อปอัป BattleResults หากมีค้างอยู่
+                    pcall(function()
+                        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                        local br = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Effects") and pg.PetDiceUI.Root.Effects:FindFirstChild("BattleResults")
+                        if br and br.Visible then br.Visible = false end
+                    end)
+                    
+                    -- ปลดล็อค isSwitchingTower อัตโนมัติหากค้างเกิน 5 วินาที
+                    local now = tick()
+                    if isSwitchingTower and (now - (LiveTower.SwitchingTick or 0) > 5.0) then
+                        isSwitchingTower = false
+                    end
+                    
+                    local isRunning = IsTowerRunning()
+                    local activeId = GetActiveTowerId()
+                    local targetId = (ResolveTowerId and ResolveTowerId(CFG.SelectedTower)) or "Infinity"
+                    
+                    -- ตรวจสอบเงื่อนไขการพักหอคอยเมื่อกำลังต่อสู้กับบอสโลก
+                    local isBossJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+                    if not (CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isBossJoined or IsEnteringBossPortal == true)) then
+                        if isRunning then
+                            consecutiveFailCount = 0
+                            -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย
+                            if activeId and activeId ~= targetId and not isSwitchingTower then
+                                SwitchOrStartTower(targetId, true)
                             end
-                        end)
-                        
-                        -- หากอยู่ในอารีน่า และเปิดออโต้ออกจากอารีน่า ให้ส่งคำสั่งออกสู่ Away Mode
-                        if IsTowerInArena() and CFG.AutoExitArena then
-                            Fire("TowerExit")
-                            Humanizer.Wait(1.0, 1.8)
-                        end
-                        
-                        -- Watchdog: ตรวจสอบกรณีติดค้าง (ตาม FloorTimeout ของเกมคือ 55 วินาที จึงใช้ 75 วินาทีเพื่อความปลอดภัย 100%)
-                        if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 75.0) and (now - LastZoneTransitionTime > 5.0) then
-                            LiveTower.LastFloorTime = now
-                            Fire("TowerLeave")
-                            task.wait(1.0)
-                            SwitchOrStartTower(targetId, true)
-                        end
-                    else
-                        local baseDelay = math.max(4.0, tonumber(CFG.TowerRestartDelay) or 5.0)
-                        local backoffDelay = baseDelay + math.min(30, consecutiveFailCount * 5.0)
-                        if not isSwitchingTower and (now - lastLoopStartAttempt >= backoffDelay) then
-                            lastLoopStartAttempt = now
-                            SwitchOrStartTower(targetId, true)
-                            task.delay(4.0, function()
-                                if not IsTowerRunning() then
-                                    consecutiveFailCount = consecutiveFailCount + 1
-                                    if consecutiveFailCount >= 3 and (consecutiveFailCount % 3 == 0) then
-                                        Notify("⏳ หอคอย", "กำลังเว้นระยะห่างก่อนเริ่มหอคอยใหม่ (ป้องกันการส่งคำสั่งซ้ำ)...", 4)
-                                    end
-                                else
-                                    consecutiveFailCount = 0
+                            
+                            -- ตรวจสอบและเปิด TowerAutoplay ของตัวเกมให้เป็นจริงเสมอ เพื่อการไต่ชั้นอย่างต่อเนื่อง
+                            pcall(function()
+                                if data.Settings and data.Settings.TowerAutoplay ~= true then
+                                    Fire("SetSetting", "TowerAutoplay", true)
                                 end
                             end)
+                            
+                            -- หากอยู่ในอารีน่า และเปิดออโต้ออกจากอารีน่า ให้ส่งคำสั่งออกสู่ Away Mode
+                            if IsTowerInArena() and CFG.AutoExitArena then
+                                Fire("TowerExit")
+                                Humanizer.Wait(1.0, 1.8)
+                            end
+                            
+                            -- Watchdog: ตรวจสอบกรณีติดค้าง (ตาม FloorTimeout ของเกมคือ 55 วินาที จึงใช้ 75 วินาทีเพื่อความปลอดภัย 100%)
+                            if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 75.0) and (now - LastZoneTransitionTime > 5.0) then
+                                LiveTower.LastFloorTime = now
+                                Fire("TowerLeave")
+                                task.wait(1.0)
+                                SwitchOrStartTower(targetId, true)
+                            end
+                        else
+                            local baseDelay = math.max(3.0, tonumber(CFG.TowerRestartDelay) or 4.0)
+                            local backoffDelay = baseDelay + math.min(20, consecutiveFailCount * 3.0)
+                            if not isSwitchingTower and (now - lastLoopStartAttempt >= backoffDelay) then
+                                lastLoopStartAttempt = now
+                                SwitchOrStartTower(targetId, true)
+                                task.delay(4.0, function()
+                                    if not IsTowerRunning() then
+                                        consecutiveFailCount = consecutiveFailCount + 1
+                                        if consecutiveFailCount >= 3 and (consecutiveFailCount % 3 == 0) then
+                                            Notify("⏳ หอคอย", "กำลังเว้นระยะห่างก่อนเริ่มหอคอยใหม่ (ป้องกันการส่งคำสั่งซ้ำ)...", 4)
+                                        end
+                                    else
+                                        consecutiveFailCount = 0
+                                    end
+                                end)
+                            end
                         end
                     end
                 end
             end
+        end)
+        if not ok then
+            warn("[PetDice] AutoTower error caught safely: " .. tostring(loopErr))
         end
     end
 end)
@@ -7035,6 +7049,7 @@ end)
 task.spawn(function()
     local lastBossJoinAttempt = 0
     local wasInBoss = false
+    local lastWbState = RS:GetAttribute("WorldBossState") or "Idle"
     while true do
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
@@ -7044,24 +7059,33 @@ task.spawn(function()
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not char or not hum or hum.Health <= 0 then task.wait(2.0) continue end
         
-        local wbState = RS:GetAttribute("WorldBossState")
+        local wbState = RS:GetAttribute("WorldBossState") or "Idle"
         local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         
         if isJoined or wbState == "Fighting" then
-            if isJoined then wasInBoss = true end
+            wasInBoss = true
         end
         
-        -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และให้ Loop Engine หอคอยกลับมาฟาร์มต่ออัตโนมัติ
-        if wasInBoss and not isJoined then
+        -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และให้เริ่มหอคอยต่อทันทีอัตโนมัติ
+        local bossJustEnded = (wasInBoss and not isJoined and wbState ~= "Fighting") or (lastWbState == "Fighting" and wbState ~= "Fighting")
+        if bossJustEnded then
             wasInBoss = false
-            task.wait(2.0)
+            task.wait(1.5)
             pcall(function()
                 Fire("Teleport", "Home")
             end)
-            Humanizer.Wait(3.5, 4.5)
+            Humanizer.Wait(2.5, 3.5)
             LastZoneTransitionTime = tick()
-            Notify("🏰 หอคอย", "จบศึกบอสโลกเรียบร้อย กลับถึงบ้านแล้ว ระบบหอคอยจะเริ่มฟาร์มต่ออัตโนมัติ", 3)
+            Notify("🏰 หอคอย", "จบศึกบอสโลกเรียบร้อย กลับถึงบ้านแล้ว เริ่มลงหอคอยต่อทันที...", 3)
+            if CFG.Tower and SwitchOrStartTower then
+                task.spawn(function()
+                    task.wait(0.5)
+                    local targetId = (ResolveTowerId and ResolveTowerId(CFG.SelectedTower)) or "Infinity"
+                    SwitchOrStartTower(targetId, true)
+                end)
+            end
         end
+        lastWbState = wbState
         
         if CFG.AutoWorldBoss then
             pcall(function()
