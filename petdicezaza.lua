@@ -31,12 +31,18 @@ while not LocalPlayer do
     LocalPlayer = Players.LocalPlayer
 end
 
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local Humanoid = Character:WaitForChild("Humanoid", 15)
+local Character = LocalPlayer.Character
+local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
+task.spawn(function()
+    if not Character then
+        Character = LocalPlayer.CharacterAdded:Wait()
+    end
+    Humanoid = Character:WaitForChild("Humanoid", 10)
+end)
 
 LocalPlayer.CharacterAdded:Connect(function(c)
     Character = c
-    Humanoid = c:WaitForChild("Humanoid", 15)
+    Humanoid = c:WaitForChild("Humanoid", 10)
 end)
 
 -- เคลียร์ UI เก่าและเธรดเก่าทั้งหมดก่อนรันใหม่ (Clean Startup & Hot-Reload Support)
@@ -2002,31 +2008,51 @@ pcall(function() CleanOldGuis(LocalPlayer:FindFirstChild("PlayerGui")) end)
 if getgenv().PetDiceFluent then
     pcall(function() getgenv().PetDiceFluent:Destroy() end)
 end
-for _, c in ipairs(CG:GetChildren()) do
-    if c:IsA("ScreenGui") and c.Name == "ScreenGui" then
-        pcall(function() c:Destroy() end)
+pcall(function()
+    local safeContainer = (gethui and gethui()) or CG
+    if safeContainer then
+        for _, c in ipairs(safeContainer:GetChildren()) do
+            if c:IsA("ScreenGui") and (c.Name == "ScreenGui" or c.Name == "Fluent") then
+                pcall(function() c:Destroy() end)
+            end
+        end
     end
-end
+end)
 
 -- ==============================================================================
 -- [5] LOAD FLUENT UI & SETUP WINDOW
 -- ==============================================================================
 local Fluent
-local okFluent, fluentRes = pcall(function()
-    return loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-end)
-if okFluent and fluentRes then
-    Fluent = fluentRes
-else
-    local ok2, fluentRes2 = pcall(function()
-        return loadstring(game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/fluent.lua"))()
+local fluentUrls = {
+    "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/fluent.lua?t=" .. tick(),
+    "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/fluent.lua?t=" .. tick(),
+    "https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"
+}
+
+for _, url in ipairs(fluentUrls) do
+    local ok, res = pcall(function()
+        local src = game:HttpGet(url)
+        if src and #src > 1000 then
+            return loadstring(src)()
+        end
+        return nil
     end)
-    if ok2 and fluentRes2 then
-        Fluent = fluentRes2
-    else
-        Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+    if ok and res and type(res) == "table" and res.CreateWindow then
+        Fluent = res
+        break
     end
 end
+
+if not Fluent then
+    pcall(function()
+        local src = game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/main.lua")
+        if src and #src > 1000 then
+            Fluent = loadstring(src)()
+        end
+    end)
+end
+
+assert(Fluent, "Failed to load Fluent UI Library on this executor. Please ensure your executor supports HttpGet.")
 getgenv().PetDiceFluent = Fluent
 
 local Window = Fluent:CreateWindow({
@@ -3435,6 +3461,12 @@ end
 local function StartTowerDirect(targetTowerId)
     if IsInTrade() or getgenv().TradeActiveSession then return false, "In Trade" end
     
+    if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then
+        LiveTower.Active = false
+        LiveTower.Starting = false
+        return false, "Towers not unlocked in tree"
+    end
+    
     local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
     if CFG.PauseTowerForBoss and CFG.AutoWorldBoss and (isJoined or IsEnteringBossPortal == true) then
         return false, "In World Boss"
@@ -3462,7 +3494,6 @@ local function StartTowerDirect(targetTowerId)
     -- สั่งเริ่มหอคอยผ่าน Remote Action ของเกมทันที
     Fire("TowerStart", towerDef.Id, team)
     
-    LiveTower.Active = true
     LiveTower.Starting = true
     LiveTower.LastStartTick = tick()
     LiveTower.TowerId = towerDef.Id
@@ -3481,6 +3512,12 @@ end
 SwitchOrStartTower = function(targetTowerId, force)
     if IsInTrade() or getgenv().TradeActiveSession then
         return false, "In Trade"
+    end
+    
+    if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then
+        LiveTower.Active = false
+        LiveTower.Starting = false
+        return false, "Towers not unlocked in tree"
     end
     
     local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
@@ -6559,7 +6596,9 @@ task.spawn(function()
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         LoopHeartbeats["Loop1_AutoRoll"] = tick()
         if not CanRunGeneralFarm() then task.wait(2.0) continue end
-        if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
+        local char = LocalPlayer.Character or Character
+        local hum = char and (char:FindFirstChildOfClass("Humanoid") or Humanoid)
+        if not char or not hum or hum.Health <= 0 then task.wait(2.0) continue end
         
         if CFG.AutoPlay then
             CircuitBreaker.Execute("AutoPlay", function()
@@ -6634,10 +6673,15 @@ task.spawn(function()
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         LoopHeartbeats["Loop3_AutoTower"] = tick()
-        if not CanRunTower() then task.wait(2.0) continue end
+        if not CanRunTower() then
+            LiveTower.Active = false
+            LiveTower.Starting = false
+            task.wait(2.0)
+            continue
+        end
         
         local char = LocalPlayer.Character or Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hum = char and (char:FindFirstChildOfClass("Humanoid") or Humanoid)
         if not char or not hum or hum.Health <= 0 then task.wait(1.5) continue end
         
         -- ตรวจสอบเงื่อนไข World Boss: พักหอคอยเฉพาะตอนที่ตัวละครอยู่ในบอสโลกจริง หรือกำลังเดินทางเข้าประตูบอส
@@ -6651,7 +6695,7 @@ task.spawn(function()
             continue
         end
         
-        if CFG.Tower then
+        if CFG.Tower and (not IsFeatureUnlocked or IsFeatureUnlocked("Towers", "towers")) then
             local data = State.Data
             if data then
                 -- ตรวจสอบและปิดป๊อปอัป BattleResults หากมีค้างอยู่
@@ -6871,7 +6915,7 @@ task.spawn(function()
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
-        if CFG.UpgradeTree then
+        if CFG.UpgradeTree or (IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers")) then
             if isEconomyActionMutex then task.wait(1.5) continue end
             isEconomyActionMutex = true
             getgenv().EconomyActionMutex = true
@@ -8028,8 +8072,10 @@ Notify("🚀 สคริปต์พร้อมทำงาน", "Pet Dice Mas
 if CFG and CFG.Tower then
     task.delay(1.0, function()
         if getgenv().PetDiceScriptToken == scriptToken and CFG.Tower and not IsTowerRunning() then
-            local targetId = ResolveTowerId(CFG.SelectedTower)
-            SwitchOrStartTower(targetId, true)
+            if not IsFeatureUnlocked or IsFeatureUnlocked("Towers", "towers") then
+                local targetId = ResolveTowerId(CFG.SelectedTower)
+                SwitchOrStartTower(targetId, true)
+            end
         end
     end)
 end
