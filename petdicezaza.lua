@@ -5789,16 +5789,45 @@ local DropdownTrade = Tabs.Trade:AddDropdown("DropTradeTarget", {
         if selection == "[ เลือกทุกคนในห้อง ]" then
             UpdateCFG("TradeTargetId", nil)
         else
-            local t = Players:FindFirstChild(selection) 
+            local t = Players:FindFirstChild(selection)
+            if not t then
+                local sLow = tostring(selection):lower()
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer and (p.Name:lower() == sLow or (p.DisplayName and p.DisplayName:lower() == sLow)) then
+                        t = p
+                        break
+                    end
+                end
+            end
             if t then UpdateCFG("TradeTargetId", t.UserId) end 
         end
     end
 })
 
+local function RefreshPlayerDropdown()
+    pcall(function()
+        if DropdownTrade and DropdownTrade.SetValues then
+            DropdownTrade:SetValues(GetPlayerNames())
+        end
+    end)
+end
+
+Players.PlayerAdded:Connect(function()
+    task.wait(1)
+    if getgenv().PetDiceScriptToken ~= scriptToken then return end
+    RefreshPlayerDropdown()
+end)
+
+Players.PlayerRemoving:Connect(function()
+    task.wait(0.5)
+    if getgenv().PetDiceScriptToken ~= scriptToken then return end
+    RefreshPlayerDropdown()
+end)
+
 Tabs.Trade:AddButton({
     Title = "🔄 รีเฟรชรายชื่อผู้เล่น",
     Callback = function()
-        DropdownTrade:SetValues(GetPlayerNames())
+        RefreshPlayerDropdown()
         Notify("🤝 ผู้เล่น", "รีเฟรชรายชื่อผู้เล่นในห้องเรียบร้อย", 2)
     end
 })
@@ -5977,6 +6006,20 @@ local TradeStatusPara = Tabs.Trade:AddParagraph({
 
 local function UpdateTradeStatus()
     pcall(function()
+        local data = State.Data
+        local canTrade = data and Config.TradeUnlocked and Config.TradeUnlocked(data)
+        
+        local unlockNotice = ""
+        if not canTrade then
+            local toGo = (Config.TradeToGo and Config.TradeToGo(data)) or ""
+            if toGo ~= "" then
+                unlockNotice = string.format("⚠️ บัญชียังไม่ปลดล็อคเทรดในเกม (ขาด: %s)\n", toGo)
+            else
+                local needStr = Config.TradeNeed or "10 REBIRTHS & 10,000 ROLLS"
+                unlockNotice = string.format("⚠️ บัญชียังไม่ปลดล็อคเทรดในเกม (ต้องการ: %s)\n", needStr)
+            end
+        end
+
         local modeStr = "⚪ ปิดระบบเทรด"
         if CFG.SenderMode then
             modeStr = "🚀 โหมดไอดีส่งของ (Sender) ➔ เป้าหมาย: " .. tostring(CFG.TradeTarget or "ทุกคน")
@@ -6004,9 +6047,10 @@ local function UpdateTradeStatus()
         local inTradeStatus = IsInTrade() and ("🤝 กำลังเทรดกับ: " .. partnerName) or "💤 ไม่ได้อยู่ในหน้าต่างเทรด"
         local twoWayStatus = (CFG.TwoWayTrade ~= false) and "🟢 เปิดใช้งาน (Safe Two-Way)" or "🔴 ปิด (One-Way)"
         
-        SafeUpdatePara(TradeStatusPara, "🛡️ ระบบเทรดปลอดภัย: " .. cdStatus,
-            string.format("โหมด: %s\nสถานะ: %s\n%s\nระบบแลกเปลี่ยนสองทาง: %s | หน่วงเวลา Ready: %d วิ",
-            modeStr, inTradeStatus, queueStatus, twoWayStatus, CFG.TradeReadyDelay or 4))
+        local titleHeader = canTrade and ("🛡️ ระบบเทรดปลอดภัย: " .. cdStatus) or "🛡️ ระบบเทรด: ⚠️ ยังไม่ปลดล็อคในเกม"
+        SafeUpdatePara(TradeStatusPara, titleHeader,
+            string.format("%sโหมด: %s\nสถานะ: %s\n%s\nระบบแลกเปลี่ยนสองทาง: %s | หน่วงเวลา Ready: %d วิ",
+            unlockNotice, modeStr, inTradeStatus, queueStatus, twoWayStatus, CFG.TradeReadyDelay or 4))
     end)
 end
 
@@ -6094,8 +6138,18 @@ IsAllowedTradeSender = function(senderId, senderName)
         return true
     end
     -- เช็คความตรงกันของชื่อผู้เล่น (แปลงพิมพ์เล็กป้องกัน case sensitive mismatch)
-    if senderName and CFG.TradeTarget and tostring(senderName):lower() == tostring(CFG.TradeTarget):lower() then
-        return true
+    if senderName and CFG.TradeTarget then
+        local sLower = tostring(senderName):lower()
+        local tLower = tostring(CFG.TradeTarget):lower()
+        if sLower == tLower then
+            return true
+        end
+        local targetPlr = Players:GetPlayerByUserId(tonumber(CFG.TradeTargetId) or 0)
+        if targetPlr then
+            if targetPlr.Name:lower() == sLower or (targetPlr.DisplayName and targetPlr.DisplayName:lower() == sLower) then
+                return true
+            end
+        end
     end
     return false
 end
@@ -7539,6 +7593,15 @@ task.spawn(function()
             if CFG.SenderMode then
                 if not CFG.TradeTargetId and CFG.TradeTarget and CFG.TradeTarget ~= "[ เลือกทุกคนในห้อง ]" then
                     local p = Players:FindFirstChild(CFG.TradeTarget)
+                    if not p then
+                        local sLow = tostring(CFG.TradeTarget):lower()
+                        for _, pl in ipairs(Players:GetPlayers()) do
+                            if pl ~= LocalPlayer and (pl.Name:lower() == sLow or (pl.DisplayName and pl.DisplayName:lower() == sLow)) then
+                                p = pl
+                                break
+                            end
+                        end
+                    end
                     if p then CFG.TradeTargetId = p.UserId end
                 end
 
