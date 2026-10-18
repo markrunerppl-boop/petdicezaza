@@ -553,6 +553,26 @@ local SwitchOrStartTower
 local IsTowerRunning
 local IsTowerInArena
 local UpdateTowerStatus
+-- towerIdByOption declared at line 550
+local LiveTower = {
+    Active = false,
+    Starting = false,
+    TowerId = nil,
+    Floor = 0,
+    InArena = false,
+    Away = false,
+    LastResult = nil,
+    LastFloor = 0,
+    LastFinishedId = nil,
+    LastEventTime = 0,
+    LastStartTick = 0,
+    SwitchingTick = 0,
+    JustEnded = false,
+    EndedTick = 0,
+    LastFloorTime = 0
+}
+
+-- ResolveTowerId declared at line 550
 local function IsPlayerAtHomePlot()
     local char = LocalPlayer.Character or Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -1736,38 +1756,49 @@ end
 -- ==============================================================================
 -- [2] RANK & LEVEL ENHANCER HELPERS
 -- ==============================================================================
-local GradeOptions = {
-    "ZZZ (Rank 1)", "ZZ (Rank 2)", "Z+ (Rank 3)", "Z (Rank 4)",
-    "SSS (Rank 5)", "SS (Rank 6)", "S+ (Rank 7)", "S (Rank 8)",
-    "A+ (Rank 9)", "A (Rank 10)", "B (Rank 11)", "C (Rank 12)"
+local EnhanceConfig = {
+    GradeOptions = {
+        "ZZZ (Rank 1)", "ZZ (Rank 2)", "Z+ (Rank 3)", "Z (Rank 4)",
+        "SSS (Rank 5)", "SS (Rank 6)", "S+ (Rank 7)", "S (Rank 8)",
+        "A+ (Rank 9)", "A (Rank 10)", "B (Rank 11)", "C (Rank 12)"
+    },
+    GradeRankMap = {
+        ["ZZZ (Rank 1)"] = 1, ["ZZ (Rank 2)"] = 2, ["Z+ (Rank 3)"] = 3, ["Z (Rank 4)"] = 4,
+        ["SSS (Rank 5)"] = 5, ["SS (Rank 6)"] = 6, ["S+ (Rank 7)"] = 7, ["S (Rank 8)"] = 8,
+        ["A+ (Rank 9)"] = 9, ["A (Rank 10)"] = 10, ["B (Rank 11)"] = 11, ["C (Rank 12)"] = 12
+    },
+    TraitOptions = {
+        "OMNIPOTENT (Rank 1)", "IMMORTAL (Rank 2)", "ALPHA (Rank 3)", "ROYAL (Rank 4)",
+        "HEROIC (Rank 5)", "VALIANT (Rank 6)", "SPIRITED (Rank 7)",
+        "GREEDY II (Rank 8)", "FIERCE II (Rank 9)", "STURDY II (Rank 10)"
+    },
+    TraitRankMap = {
+        ["OMNIPOTENT (Rank 1)"] = 1, ["IMMORTAL (Rank 2)"] = 2, ["ALPHA (Rank 3)"] = 3, ["ROYAL (Rank 4)"] = 4,
+        ["HEROIC (Rank 5)"] = 5, ["VALIANT (Rank 6)"] = 6, ["SPIRITED (Rank 7)"] = 7,
+        ["GREEDY II (Rank 8)"] = 8, ["FIERCE II (Rank 9)"] = 9, ["STURDY II (Rank 10)"] = 10
+    },
+    GradeNameById = {},
+    TraitNameById = {},
+    UpgradeStepOptions = {
+        "+1 เลเวล (ทีละ 1 ขั้น - ปลอดภัยสูงสุด)",
+        "+5 เลเวล (ทีละ 5 เลเวล)",
+        "+10 เลเวล (ทีละ 10 เลเวล)",
+        "+25 เลเวล (ทีละ 25 เลเวล)",
+        "อัปจนถึงเป้าหมายสูงสุด (Max เท่าที่เงินพอ)"
+    },
+    UpgradeStepMap = {
+        ["+1 เลเวล (ทีละ 1 ขั้น - ปลอดภัยสูงสุด)"] = 1,
+        ["+5 เลเวล (ทีละ 5 เลเวล)"] = 5,
+        ["+10 เลเวล (ทีละ 10 เลเวล)"] = 10,
+        ["+25 เลเวล (ทีละ 25 เลเวล)"] = 25,
+        ["อัปจนถึงเป้าหมายสูงสุด (Max เท่าที่เงินพอ)"] = 999
+    }
 }
-
-local GradeRankMap = {
-    ["ZZZ (Rank 1)"] = 1, ["ZZ (Rank 2)"] = 2, ["Z+ (Rank 3)"] = 3, ["Z (Rank 4)"] = 4,
-    ["SSS (Rank 5)"] = 5, ["SS (Rank 6)"] = 6, ["S+ (Rank 7)"] = 7, ["S (Rank 8)"] = 8,
-    ["A+ (Rank 9)"] = 9, ["A (Rank 10)"] = 10, ["B (Rank 11)"] = 11, ["C (Rank 12)"] = 12
-}
-
-local TraitOptions = {
-    "OMNIPOTENT (Rank 1)", "IMMORTAL (Rank 2)", "ALPHA (Rank 3)", "ROYAL (Rank 4)",
-    "HEROIC (Rank 5)", "VALIANT (Rank 6)", "SPIRITED (Rank 7)",
-    "GREEDY II (Rank 8)", "FIERCE II (Rank 9)", "STURDY II (Rank 10)"
-}
-
-local TraitRankMap = {
-    ["OMNIPOTENT (Rank 1)"] = 1, ["IMMORTAL (Rank 2)"] = 2, ["ALPHA (Rank 3)"] = 3, ["ROYAL (Rank 4)"] = 4,
-    ["HEROIC (Rank 5)"] = 5, ["VALIANT (Rank 6)"] = 6, ["SPIRITED (Rank 7)"] = 7,
-    ["GREEDY II (Rank 8)"] = 8, ["FIERCE II (Rank 9)"] = 9, ["STURDY II (Rank 10)"] = 10
-}
-
-local GradeNameById = {}
 for _, g in ipairs(Modifiers.Grades) do
-    GradeNameById[g.Id] = g.Name
+    EnhanceConfig.GradeNameById[g.Id] = g.Name
 end
-
-local TraitNameById = {}
 for _, t in ipairs(Modifiers.Traits) do
-    TraitNameById[t.Id] = t.Name
+    EnhanceConfig.TraitNameById[t.Id] = t.Name
 end
 
 local function IsPetEligibleForEnhance(pet)
@@ -1832,21 +1863,7 @@ local function FindAffordableLevels(pet, upgrades, money, maxCount)
     return best
 end
 
-local UpgradeStepOptions = {
-    "+1 เลเวล (ทีละ 1 ขั้น - ปลอดภัยสูงสุด)",
-    "+5 เลเวล (ทีละ 5 เลเวล)",
-    "+10 เลเวล (ทีละ 10 เลเวล)",
-    "+25 เลเวล (ทีละ 25 เลเวล)",
-    "อัปจนถึงเป้าหมายสูงสุด (Max เท่าที่เงินพอ)"
-}
-
-local UpgradeStepMap = {
-    ["+1 เลเวล (ทีละ 1 ขั้น - ปลอดภัยสูงสุด)"] = 1,
-    ["+5 เลเวล (ทีละ 5 เลเวล)"] = 5,
-    ["+10 เลเวล (ทีละ 10 เลเวล)"] = 10,
-    ["+25 เลเวล (ทีละ 25 เลเวล)"] = 25,
-    ["อัปจนถึงเป้าหมายสูงสุด (Max เท่าที่เงินพอ)"] = 999
-}
+-- UpgradeStepOptions merged into EnhanceConfig
 
 local function GetTopBestPets(count)
     local data = State.Data
@@ -2055,66 +2072,69 @@ end
 assert(Fluent, "Failed to load Fluent UI Library on this executor. Please ensure your executor supports HttpGet.")
 getgenv().PetDiceFluent = Fluent
 
-local cam = workspace.CurrentCamera
-local vp = cam and cam.ViewportSize or Vector2.new(1024, 768)
-local winWidth = math.min(590, math.max(340, vp.X - 20))
-local winHeight = math.min(480, math.max(300, vp.Y - 60))
+local Window
+do
+    local cam = workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize or Vector2.new(1024, 768)
+    local winWidth = math.min(590, math.max(340, vp.X - 20))
+    local winHeight = math.min(480, math.max(300, vp.Y - 60))
 
-local Window = Fluent:CreateWindow({
-    Title = "Pet Dice Pro Farm",
-    SubTitle = "Master Safe Edition v4.8",
-    TabWidth = (winWidth < 450 and 120 or 160),
-    Size = UDim2.fromOffset(winWidth, winHeight),
-    Acrylic = false,
-    Theme = "Darker",
-    MinimizeKey = Enum.KeyCode.RightControl
-})
-getgenv().PetDiceWindow = Window
-getgenv().PetDiceFluentGui = Window and Window.Root
+    Window = Fluent:CreateWindow({
+        Title = "Pet Dice Pro Farm",
+        SubTitle = "Master Safe Edition v4.8",
+        TabWidth = (winWidth < 450 and 120 or 160),
+        Size = UDim2.fromOffset(winWidth, winHeight),
+        Acrylic = false,
+        Theme = "Darker",
+        MinimizeKey = Enum.KeyCode.RightControl
+    })
+    getgenv().PetDiceWindow = Window
+    getgenv().PetDiceFluentGui = Window and Window.Root
 
--- Fix transparency: Make background 100% solid dark and high contrast for crystal clear readability
-local function ApplySolidWindowStyle(win)
-    pcall(function()
-        if win.AcrylicPaint and win.AcrylicPaint.Frame then
-            win.AcrylicPaint.Frame.BackgroundTransparency = 0
-            win.AcrylicPaint.Frame.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
-        end
-        if win.Root then
-            win.Root.BackgroundTransparency = 0
-            win.Root.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
-        end
-        if win.TabHolder then
-            win.TabHolder.BackgroundTransparency = 0
-            win.TabHolder.BackgroundColor3 = Color3.fromRGB(22, 24, 32)
-        end
-    end)
-end
-ApplySolidWindowStyle(Window)
-getgenv().PetDiceOldFluent = Fluent
-
--- ป้องกันหน้าต่างหลุดออกนอกจอ (Auto-Clamp Window to Viewport)
-local function EnsureWindowInViewport(win)
-    pcall(function()
-        local c = workspace.CurrentCamera
-        local v = c and c.ViewportSize or Vector2.new(800, 600)
-        local frame = win and (win.Frame or (win.Root and win.Root.Parent))
-        if frame and frame:IsA("GuiObject") then
-            local w = frame.AbsoluteSize.X > 100 and frame.AbsoluteSize.X or winWidth
-            local h = frame.AbsoluteSize.Y > 100 and frame.AbsoluteSize.Y or winHeight
-            local curX = frame.Position.X.Offset
-            local curY = frame.Position.Y.Offset
-            if curX < 0 or curX > (v.X - 60) or curY < 0 or curY > (v.Y - 60) then
-                local posX = math.max(10, math.floor((v.X - w) / 2))
-                local posY = math.max(10, math.floor((v.Y - h) / 2))
-                frame.Position = UDim2.fromOffset(posX, posY)
+    -- Fix transparency: Make background 100% solid dark and high contrast for crystal clear readability
+    local function ApplySolidWindowStyle(win)
+        pcall(function()
+            if win.AcrylicPaint and win.AcrylicPaint.Frame then
+                win.AcrylicPaint.Frame.BackgroundTransparency = 0
+                win.AcrylicPaint.Frame.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
             end
-        end
+            if win.Root then
+                win.Root.BackgroundTransparency = 0
+                win.Root.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
+            end
+            if win.TabHolder then
+                win.TabHolder.BackgroundTransparency = 0
+                win.TabHolder.BackgroundColor3 = Color3.fromRGB(22, 24, 32)
+            end
+        end)
+    end
+    ApplySolidWindowStyle(Window)
+    getgenv().PetDiceOldFluent = Fluent
+
+    -- ป้องกันหน้าต่างหลุดออกนอกจอ (Auto-Clamp Window to Viewport)
+    local function EnsureWindowInViewport(win)
+        pcall(function()
+            local c = workspace.CurrentCamera
+            local v = c and c.ViewportSize or Vector2.new(800, 600)
+            local frame = win and (win.Frame or (win.Root and win.Root.Parent))
+            if frame and frame:IsA("GuiObject") then
+                local w = frame.AbsoluteSize.X > 100 and frame.AbsoluteSize.X or winWidth
+                local h = frame.AbsoluteSize.Y > 100 and frame.AbsoluteSize.Y or winHeight
+                local curX = frame.Position.X.Offset
+                local curY = frame.Position.Y.Offset
+                if curX < 0 or curX > (v.X - 60) or curY < 0 or curY > (v.Y - 60) then
+                    local posX = math.max(10, math.floor((v.X - w) / 2))
+                    local posY = math.max(10, math.floor((v.Y - h) / 2))
+                    frame.Position = UDim2.fromOffset(posX, posY)
+                end
+            end
+        end)
+    end
+    task.spawn(function()
+        task.wait(0.3)
+        EnsureWindowInViewport(Window)
     end)
 end
-task.spawn(function()
-    task.wait(0.3)
-    EnsureWindowInViewport(Window)
-end)
 
 local function Notify(title, content, duration)
     pcall(function()
@@ -2267,8 +2287,11 @@ TogOverviewTower = Tabs.Overview:AddToggle("TogTowerOverview", {
         HandleMasterToggle("Tower", V, TogOverviewTower, TogTowerTower, "🏰 หอคอย", "เปิดระบบลงหอคอยอัตโนมัติแล้ว!", "ปิดระบบลงหอคอยแล้ว")
         if V and (not IsFeatureUnlocked or IsFeatureUnlocked("Towers", "towers")) then
             task.spawn(function()
-                local targetId = ResolveTowerId(CFG.SelectedTower)
-                SwitchOrStartTower(targetId, true)
+                task.wait(0.2)
+                local targetId = ResolveTowerId and ResolveTowerId(CFG.SelectedTower) or "Infinity"
+                if SwitchOrStartTower then
+                    SwitchOrStartTower(targetId, true)
+                end
             end)
         end
     end
@@ -2686,8 +2709,8 @@ local function UpdateOverviewTab()
                 if pet then
                     local gId = pet.G
                     local tId = pet.T
-                    local gName = gId and (GradeNameById[gId] or gId) or "None"
-                    local tName = tId and (TraitNameById[tId] or tId) or "None"
+                    local gName = gId and (EnhanceConfig.GradeNameById[gId] or gId) or "None"
+                    local tName = tId and (EnhanceConfig.TraitNameById[tId] or tId) or "None"
                     local lvl = pet.L or 0
                     local baseInc = 0
                     pcall(function() baseInc = Stats.PetBaseIncome(pet) end)
@@ -2869,12 +2892,12 @@ do
     DropUpgradeLevelStep = Tabs.Enhance:AddDropdown("DropUpgradeLevelStep", {
         Title = "⚡ รูปแบบ / จำนวนเลเวลที่จะอัปต่อรอบ",
         Description = "เลือกจำนวนขั้นเลเวลที่จะส่งคำสั่งอัปเกรด",
-        Values = UpgradeStepOptions,
+        Values = EnhanceConfig.UpgradeStepOptions,
         Default = CFG.UpgradeLevelStepName or "+1 เลเวล (ทีละ 1 ขั้น - ปลอดภัยสูงสุด)",
         Multi = false,
         Callback = function(val)
             UpdateCFG("UpgradeLevelStepName", val)
-            local step = UpgradeStepMap[val] or 1
+            local step = EnhanceConfig.UpgradeStepMap[val] or 1
             UpdateCFG("UpgradeLevelStep", step)
             pcall(function()
                 if InputCustomUpgradeStep and InputCustomUpgradeStep.Value ~= tostring(step) then
@@ -2905,12 +2928,12 @@ end
 Tabs.Enhance:AddDropdown("DropTargetGrade", {
     Title = "🎯 เกรดเป้าหมายขั้นต่ำ",
     Description = "ระบบจะหยุดสุ่มเกรดทันทีเมื่อได้เกรดนี้หรือสูงกว่า",
-    Values = GradeOptions,
+    Values = EnhanceConfig.GradeOptions,
     Default = CFG.TargetGradeName or "S (Rank 8)",
     Multi = false,
     Callback = function(val)
         UpdateCFG("TargetGradeName", val)
-        UpdateCFG("TargetGradeRank", GradeRankMap[val] or 8)
+        UpdateCFG("TargetGradeRank", EnhanceConfig.GradeRankMap[val] or 8)
         UpdateOverviewTab()
     end
 })
@@ -2918,12 +2941,12 @@ Tabs.Enhance:AddDropdown("DropTargetGrade", {
 Tabs.Enhance:AddDropdown("DropTargetTrait", {
     Title = "🎯 คุณสมบัติบัฟเป้าหมายขั้นต่ำ",
     Description = "ระบบจะหยุดสุ่มบัฟทันทีเมื่อได้บัฟนี้หรือสูงกว่า",
-    Values = TraitOptions,
+    Values = EnhanceConfig.TraitOptions,
     Default = CFG.TargetTraitName or "VALIANT (Rank 6)",
     Multi = false,
     Callback = function(val)
         UpdateCFG("TargetTraitName", val)
-        UpdateCFG("TargetTraitRank", TraitRankMap[val] or 6)
+        UpdateCFG("TargetTraitRank", EnhanceConfig.TraitRankMap[val] or 6)
         UpdateOverviewTab()
     end
 })
@@ -3131,27 +3154,18 @@ Tabs.Enhance:AddToggle("TogAutoPetTrait", {
 -- ------------------------------------------------------------------------------
 -- 🏰 TAB 3: TOWER & DICE
 -- ------------------------------------------------------------------------------
+local GetActiveTowerId
+local SafeWalkToBossPortal
+-- isSwitchingTower forward declared
+local lastLoopStartAttempt = 0
+-- IsEnteringBossPortal forward declared
+do -- TAB 3: TOWER & DICE
 Tabs.Tower:AddSection("📊 สถานะหอคอยแบบเรียลไทม์ (Live Tower Status)")
 
 -- ==============================================================================
 -- [REAL-TIME LIVE TOWER TRACKER & DEEP GAME SYNC]
 -- ==============================================================================
-local LiveTower = {
-    Active = false,
-    Starting = false,
-    TowerId = nil,
-    Floor = 0,
-    InArena = false,
-    Away = false,
-    LastResult = nil,
-    LastFloor = 0,
-    LastFinishedId = nil,
-    LastEventTime = 0,
-    LastStartTick = 0,
-    SwitchingTick = 0,
-    JustEnded = false,
-    EndedTick = 0
-}
+-- LiveTower and ResolveTowerId declared at line 550
 
 local IsEnteringBossPortal = false
 
@@ -3191,7 +3205,7 @@ if not CFG.SelectedTower or CFG.SelectedTower == "" then
 end
 
 local isSwitchingTower = false
-local lastLoopStartAttempt = 0  -- shared across TogTower + supervisor loops
+-- lastLoopStartAttempt forward declared
 
 local function ResolveTowerId(val)
     if not val or val == "" then return "Infinity" end
@@ -3413,7 +3427,7 @@ local function SyncLiveTowerFromGame()
     LiveTower.Away = false
 end
 
-local function GetActiveTowerId()
+GetActiveTowerId = function()
     SyncLiveTowerFromGame()
     if LiveTower.Active then
         return LiveTower.TowerId or GetCurrentOrNextTowerId(false) or "Infinity"
@@ -3458,7 +3472,7 @@ local BossStatusPara = Tabs.Tower:AddParagraph({
     Content = "กำลังตรวจสอบกำหนดการและระดับของบอสโลก..."
 })
 
-local function SafeWalkToBossPortal()
+SafeWalkToBossPortal = function()
     if not IsFeatureUnlocked("WorldBoss", "worldboss") then
         return false
     end
@@ -4267,6 +4281,7 @@ TogTowerAutoBuyDice = Tabs.Tower:AddToggle("TogAutoBuyDice", {
         end
     end
 })
+end -- END TAB 3: TOWER & DICE
 
 -- ------------------------------------------------------------------------------
 -- 🔄 TAB 4: REBIRTH & SKILL TREE
@@ -4381,6 +4396,9 @@ Tabs.Rebirth:AddButton({
 -- ------------------------------------------------------------------------------
 -- 🧪 TAB 5: POTIONS & CONSUMABLES
 -- ------------------------------------------------------------------------------
+local UpdatePotionStatus
+local UpdateMarketStatus
+do -- TAB 5: POTIONS & CONSUMABLES
 Tabs.Items:AddSection("📊 สถานะน้ำยาและไอเทมแบบเรียลไทม์ (นับถอยหลังวินาที)")
 
 local PotionStatusPara = Tabs.Items:AddParagraph({
@@ -4388,7 +4406,7 @@ local PotionStatusPara = Tabs.Items:AddParagraph({
     Content = "กำลังตรวจสอบเวลานับถอยหลังของน้ำยาแต่ละชนิด..."
 })
 
-local function UpdatePotionStatus()
+UpdatePotionStatus = function()
     pcall(function()
         local data = State.Data
         if not data then return end
@@ -4426,7 +4444,7 @@ local MarketStatusPara = Tabs.Items:AddParagraph({
     Content = "กำลังตรวจสอบสินค้าและเวลารีสต็อกของตลาด..."
 })
 
-local function UpdateMarketStatus()
+UpdateMarketStatus = function()
     pcall(function()
         if not Market then return end
         local data = State.Data
@@ -4617,10 +4635,15 @@ Tabs.Items:AddToggle("TogAutoBuyMarket", {
     Default = CFG.AutoBuyMarket,
     Callback = function(V) UpdateCFG("AutoBuyMarket", V) end
 })
+end -- END TAB 5: POTIONS & CONSUMABLES
 
 -- ------------------------------------------------------------------------------
 -- 🌙 TAB 6: EXPEDITIONS & QUESTS
 -- ------------------------------------------------------------------------------
+local UpdateExpeditionStatus
+local GetBestExpeditionPets
+local ClaimAllDoneExpeditions
+do -- TAB 6: EXPEDITIONS & QUESTS
 Tabs.Expedition:AddSection("🌙 สถานะผจญภัย & เควสแบบเรียลไทม์")
 
 local ExpeditionStatusPara = Tabs.Expedition:AddParagraph({
@@ -4628,7 +4651,7 @@ local ExpeditionStatusPara = Tabs.Expedition:AddParagraph({
     Content = "กำลังตรวจสอบเรือสำรวจและเควสคงเหลือ..."
 })
 
-local function UpdateExpeditionStatus()
+UpdateExpeditionStatus = function()
     pcall(function()
         local data = State.Data
         if not data then return end
@@ -4722,7 +4745,7 @@ end)
 
 Tabs.Expedition:AddSection("🌙 ควบคุมการผจญภัย (Expedition Commands)")
 
-local function GetBestExpeditionPets(maxCount, excludeUids)
+GetBestExpeditionPets = function(maxCount, excludeUids)
     local data = State.Data
     if not data or not data.Pets or not data.Expeditions then return nil, {} end
     
@@ -4805,7 +4828,7 @@ local function GetNightmarePets(maxCount, excludeUids)
     return pets or {}
 end
 
-local function ClaimAllDoneExpeditions()
+ClaimAllDoneExpeditions = function()
     local data = State.Data
     if not data or not data.Expeditions then return 0 end
     local claimed = 0
@@ -5051,9 +5074,11 @@ Tabs.Expedition:AddToggle("TogCutscene", {
     Default = CFG.Cutscene,
     Callback = function(V) UpdateCFG("Cutscene", V) end
 })
+end -- END TAB 6: EXPEDITIONS & QUESTS
 
 -- 🎃 TAB 7: HALLOWEEN EVENT
 -- ------------------------------------------------------------------------------
+do -- TAB 7: HALLOWEEN EVENT
 Tabs.Halloween:AddSection("🎃 กิจกรรมฮาโลวีน (Halloween Event)")
 
 GetHalloweenEntry = function()
@@ -5397,8 +5422,7 @@ Tabs.Halloween:AddButton({
     end
 })
 
-local isCollectingCandyMutex = false
-
+-- isCollectingCandyMutex declared at line 430
 SafeCollectPlazaCandies = function(isManual)
     local canH, blockReason = CanRunHalloween()
     if not canH then
@@ -5736,11 +5760,15 @@ Tabs.Halloween:AddToggle("TogHalCollectCandy", {
         end
     end
 })
+end -- END TAB 7: HALLOWEEN EVENT
 
--- ------------------------------------------------------------------------------
 -- ------------------------------------------------------------------------------
 -- 🤝 TAB 8: SAFE AUTO TRADE
 -- ------------------------------------------------------------------------------
+local PutSafeTwoWayTradeItem
+local IsAllowedTradeSender
+local RespondAcceptTrade
+do -- TAB 8: SAFE AUTO TRADE
 Tabs.Trade:AddSection("🎯 เป้าหมายการเทรด")
 
 local function GetPlayerNames() 
@@ -5990,7 +6018,7 @@ task.spawn(function()
     end
 end)
 
-local function PutSafeTwoWayTradeItem()
+PutSafeTwoWayTradeItem = function()
     local data = State.Data
     if not data then return false end
     
@@ -6055,7 +6083,7 @@ local function PutSafeTwoWayTradeItem()
     return false
 end
 
-local function IsAllowedTradeSender(senderId, senderName)
+IsAllowedTradeSender = function(senderId, senderName)
     if not senderId and not senderName then return false end
     -- หากเป็นค่าเริ่มต้น หรือเลือกทุกคนในห้อง หรือไม่มีการล็อคไอดี -> ยอมรับทุกคน
     if not CFG.TradeTarget or CFG.TradeTarget == "[ เลือกทุกคนในห้อง ]" or CFG.TradeTargetId == nil then
@@ -6074,7 +6102,7 @@ end
 
 local lastTradeRespondTick = 0
 
-local function RespondAcceptTrade(senderId, senderName)
+RespondAcceptTrade = function(senderId, senderName)
     local now = tick()
     if now - lastTradeRespondTick < 1.0 then return end
     lastTradeRespondTick = now
@@ -6148,6 +6176,7 @@ local function RespondAcceptTrade(senderId, senderName)
         end)
     end)
 end
+end -- END TAB 8: SAFE AUTO TRADE
 
 -- ------------------------------------------------------------------------------
 -- 🛡️ TAB 9: SAFETY & SETTINGS
@@ -6291,9 +6320,11 @@ Tabs.Settings:AddButton({
 -- ==============================================================================
 -- 🔔 TAB 10: DISCORD WEBHOOK INVENTORY & STATS NOTIFICATION
 -- ==============================================================================
+local SendDiscordInventoryReport
+do -- TAB 10: DISCORD WEBHOOK
 local lastDiscordNotifyTick = 0
 
-local function SendDiscordInventoryReport(isManual)
+SendDiscordInventoryReport = function(isManual)
     local webhookUrl = tostring(CFG.DiscordWebhookUrl or ""):gsub("^%s*(.-)%s*$", "%1")
     if webhookUrl == "" or not (webhookUrl:find("^https://discord%.com/api/webhooks/") or webhookUrl:find("^https://discordapp%.com/api/webhooks/")) then
         if isManual then
@@ -6650,6 +6681,7 @@ Tabs.Discord:AddParagraph({
     Title = "🖼️ ข้อมูลใน Embed ที่จัดหมวดหมู่อย่างเป็นระเบียบ",
     Content = "• 👤 ข้อมูลผู้เล่น & บัญชี (ชื่อ, Rebirth, ยอดสุ่ม, สุ่มแจ็คพอต, ตั๋ว/บัตรผ่าน, เวลาเล่น)\n• 💰 สถานะการเงิน & ความคืบหน้า (เงินสด, เพชร, ชาร์ด, หอคอยอินฟินิตี้)\n• 🎃 อีเวนต์ฮาโลวีน 2026 (ลูกอม, ลูกอมพายุสะสม, ถุงสุ่มในตัว, แต้มการันตี, สถิติซื้อ)\n• 🧪 ขวดยาบัฟ & บัฟที่ใช้งาน (Luck, Speed, Cash พร้อมเวลานับถอยหลังของบัฟที่เปิดอยู่)\n• 💎 จีโอด, ถุงสุ่ม & วัตถุดิบ (แยกเกรด Common-Mythic, ถุงดรอป, ถุงธาตุ, Essence)\n• 🎲 ลูกเต๋า & แฟชั่น (ลูกเต๋าที่ใช้และที่สะสมครบทุกแบบ, หมวก, รอยเท้า, ของแต่งตัว)\n• 🐾 สัตว์เลี้ยงที่สวมใส่ (แยก 2 คอลัมน์ 12 ตัว พร้อม $/s, เกรด, ทักษะ, มิวเทชั่น)\n• ⭐ สัตว์เลี้ยงที่ดีที่สุดในกระเป๋า (Top 5 Pets พร้อมเหรียญรางวัลและยอดรวมในคลัง)\n• 🖼️ รูปภาพประกอบ: Avatar Headshot Thumbnail และ 3D Full-Body Render"
 })
+end -- END TAB 10: DISCORD WEBHOOK
 
 Window:SelectTab(1)
 
