@@ -176,6 +176,23 @@ pcall(function()
             task.wait(2)
             SafeNotify("🛑 ระบบล็อกดาวน์ Error 600", "ตรวจพบว่าบัญชีนี้เคยถูกระงับ (Error 600)!\nระบบสั่งตัดการทำงาน 100% เพื่อป้องกันไม่ให้ไอดีอื่นใน UGPhone/IP เดียวกันถูกแบนตาม", 20)
         end)
+        
+        -- Auto-Recovery Sentinel: หากตัวละครอยู่ในเกมและเกมโหลดข้อมูลสำเร็จจริงเกิน 15 วินาที แปลว่าพ้นโทษแบนแล้ว!
+        task.spawn(function()
+            task.wait(15)
+            if LocalPlayer and (LocalPlayer:GetAttribute("DataLoaded") == true or (State and State.Data ~= nil)) and getgenv().EmergencyBanLockout then
+                getgenv().EmergencyBanLockout = false
+                getgenv().EmergencyKickLockout = false
+                getgenv().SecurityStatusMessage = string.format("ระบบปลอดภัย Game Patch v%d (ปลดล็อคปกติ)", game.PlaceVersion)
+                if delfile and isfile and isfile(banLogFile) then
+                    pcall(function() delfile(banLogFile) end)
+                elseif writefile then
+                    pcall(function() writefile(banLogFile, HS:JSONEncode({ banned = false })) end)
+                end
+                SafeNotify("🎉 บัญชีปลดแบนแล้ว!", "ตรวจพบว่าตัวละครสามารถเข้าเล่นและโหลดข้อมูลได้ตามปกติ\nระบบปลดล็อคการทำงานของสคริปต์ให้เรียบร้อยแล้วครับ", 8)
+                pcall(function() if UpdateOverviewTab then UpdateOverviewTab() end end)
+            end
+        end)
     end
     
     if isfile and isfile(kickLogFile) and readfile then
@@ -2321,6 +2338,28 @@ local OverviewStats = Tabs.Overview:AddParagraph({
 local SecurityStatusPara = Tabs.Overview:AddParagraph({
     Title = string.format("🛡️ ความปลอดภัย: ปลอดภัย 100%% (Game Patch v%d)", game.PlaceVersion),
     Content = string.format("🎮 Game Version: v%d | ปลอดภัย\n🌐 Cloud Kill-Switch: ปกติ (Operational)\n🔒 Anti-Ban Protection: พร้อมทำงาน (ป้องกัน Error 267 / 600)", game.PlaceVersion)
+})
+
+Tabs.Overview:AddButton({
+    Title = "🔓 ปลดล็อคความปลอดภัย (Reset Anti-Ban Lockout)",
+    Description = "กดเพื่อรีเซ็ตสถานะตัดไฟฉุกเฉินและเริ่มการทำงานสคริปต์ใหม่ทันทีเมื่อไอดีพ้นโทษแบน",
+    Callback = function()
+        getgenv().EmergencyBanLockout = false
+        getgenv().EmergencyKickLockout = false
+        getgenv().SecurityStatusMessage = string.format("ระบบปลอดภัย Game Patch v%d", game.PlaceVersion)
+        local userUidStr = tostring(LocalPlayer and LocalPlayer.UserId or "0")
+        local kickLogFile = string.format("petdice_kick_guard_%s.json", userUidStr)
+        local banLogFile = string.format("petdice_ban_guard_%s.json", userUidStr)
+        if delfile then
+            pcall(function() delfile(banLogFile) end)
+            pcall(function() delfile(kickLogFile) end)
+        elseif writefile then
+            pcall(function() writefile(banLogFile, HS:JSONEncode({ banned = false })) end)
+            pcall(function() writefile(kickLogFile, HS:JSONEncode({ count = 0 })) end)
+        end
+        Notify("🔓 ปลดล็อคสำเร็จ", "รีเซ็ตสถานะความปลอดภัยเรียบร้อย! สคริปต์กลับมาทำงานปกติแล้วครับ", 4)
+        pcall(function() if UpdateOverviewTab then UpdateOverviewTab() end end)
+    end
 })
 
 Tabs.Overview:AddSection("⚡ สวิตช์ควบคุมหลัก (Master Quick Controls)")
