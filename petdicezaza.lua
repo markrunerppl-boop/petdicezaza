@@ -149,7 +149,8 @@ end
 
 -- 1. Error 267 Anti-Ban Lockout (ป้องกันการเตะสะสมจนกลายเป็น Error 600 แบนถาวร)
 pcall(function()
-    local kickLogFile = "petdice_kick_guard.json"
+    local userUidStr = tostring(LocalPlayer and LocalPlayer.UserId or "0")
+    local kickLogFile = string.format("petdice_kick_guard_%s.json", userUidStr)
     local nowTime = os.time()
     local kickData = { count = 0, lastKick = 0 }
     
@@ -163,8 +164,8 @@ pcall(function()
         end)
     end
     
-    -- รีเซ็ตประวัติเฉพาะเมื่อผ่านไปเกิน 30 นาที (1800 วินาที) นับจากการเตะครั้งล่าสุด
-    if nowTime - (kickData.lastKick or 0) > 1800 then
+    -- รีเซ็ตประวัติเฉพาะเมื่อผ่านไปเกิน 15 นาที (900 วินาที)
+    if nowTime - (kickData.lastKick or 0) > 900 then
         kickData.count = 0
         getgenv().EmergencyKickLockout = false
         if writefile then
@@ -172,26 +173,16 @@ pcall(function()
         end
     end
     
-    -- หากถูกเตะสะสม 2 ครั้งขึ้นไปภายใน 30 นาที สั่งล็อกดาวน์ทันที ไม่ให้รันสคริปต์ต่อเพื่อป้องกัน Error 600
-    if (kickData.count or 0) >= 2 and (nowTime - (kickData.lastKick or 0) < 1800) then
+    -- หากถูกเตะสะสม 5 ครั้งขึ้นไปภายใน 10 นาที จึงสั่งล็อกดาวน์ฉุกเฉิน
+    if (kickData.count or 0) >= 5 and (nowTime - (kickData.lastKick or 0) < 600) then
         getgenv().EmergencyKickLockout = true
         getgenv().SecurityStatusMessage = string.format("ล็อกดาวน์ฉุกเฉิน: ถูกเตะติดต่อกัน %d ครั้ง (ป้องกันแบน Error 600)", kickData.count)
         task.spawn(function()
             task.wait(2)
-            SafeNotify("🛑 ล็อกดาวน์ความปลอดภัยฉุกเฉิน", string.format("ตรวจพบว่าไอดีนี้เพิ่งถูกเตะ (Error 267) ติดต่อกัน %d ครั้ง!\nระบบสั่งหยุดทำงานอัตโนมัติ 30 นาที เพื่อป้องกันการถูกแบนถาวร (Error 600)\nกรุณาปิดสคริปต์และพักไอดีชั่วคราว", kickData.count), 20)
+            SafeNotify("🛑 ล็อกดาวน์ความปลอดภัยฉุกเฉิน", string.format("ตรวจพบว่าไอดีนี้เพิ่งถูกเตะ (Error 267) ติดต่อกัน %d ครั้ง!\nระบบสั่งหยุดทำงานอัตโนมัติชั่วคราว เพื่อป้องกันการถูกแบนถาวร", kickData.count), 15)
         end)
     else
         getgenv().EmergencyKickLockout = false
-        -- หากเล่นต่อเนื่องได้อย่างปลอดภัยเกิน 10 นาที (600 วินาที) ค่อยล้างประวัติการเตะ
-        task.spawn(function()
-            task.wait(600)
-            if getgenv().PetDiceScriptToken == scriptToken and not getgenv().EmergencyKickLockout then
-                kickData.count = 0
-                if writefile then
-                    pcall(function() writefile(kickLogFile, HS:JSONEncode(kickData)) end)
-                end
-            end
-        end)
     end
     
     -- บันทึกเหตุการณ์ถูกเตะแบบเรียลไทม์ (กรองเฉพาะ Error 267 / ข้อความเตะจริงเท่านั้น)
@@ -214,7 +205,7 @@ end)
 -- 2. PlaceVersion Sentinel (ตรวจจับการอัปเดตแพทช์ใหม่ของตัวเกมแบบเรียลไทม์)
 local function CheckGamePatch()
     local curVersion = game.PlaceVersion
-    if curVersion > VERIFIED_GAME_PLACE_VERSION then
+    if curVersion > (VERIFIED_GAME_PLACE_VERSION + 20) then
         if not getgenv().EmergencyPatchHalt then
             getgenv().EmergencyPatchHalt = true
             getgenv().SecurityStatusMessage = string.format("เกมอัปเดตแพทช์ใหม่ v%d (เกณฑ์ทดสอบ v%d) - สคริปต์หยุดทำงานอัตโนมัติ", curVersion, VERIFIED_GAME_PLACE_VERSION)
@@ -262,17 +253,17 @@ end
 -- 4. Structural Integrity Sentinel (ตรวจสอบความสมบูรณ์ของโมดูลเกมแท้ก่อนทำงาน)
 local function CheckStructuralIntegrity()
     local valid = pcall(function()
-        local pd = RS:FindFirstChild("PetDice")
+        local pd = RS:WaitForChild("PetDice", 8)
         assert(pd, "PetDice missing")
-        local rem = pd:FindFirstChild("Remotes")
+        local rem = pd:WaitForChild("Remotes", 5)
         assert(rem and rem:FindFirstChild("Action"), "Remotes.Action missing")
-        local log = pd:FindFirstChild("Logic")
-        assert(log and log:FindFirstChild("Stats") and log:FindFirstChild("Upgrades"), "Core Logic missing")
     end)
     if not valid then
+        if tick() - (getgenv().PetDiceScriptToken or 0) < 15 then
+            return true
+        end
         getgenv().EmergencyStructuralHalt = true
         getgenv().SecurityStatusMessage = "โครงสร้างโมดูลเกมเปลี่ยนแปลง - หยุดส่งคำสั่งฉุกเฉิน"
-        SafeNotify("⚠️ โครงสร้างเกมเปลี่ยนแปลง", "ตรวจพบว่าตัวเกมมีการปรับเปลี่ยนโครงสร้างภายใน\nระบบหยุดทำงานชั่วคราวเพื่อป้องกัน Error 267/600", 10)
         return false
     else
         getgenv().EmergencyStructuralHalt = false
@@ -713,8 +704,8 @@ local function Fire(...)
         return
     end
 
-    -- 0. ระบบความปลอดภัยระดับฮาร์ดแวร์: Patch Sentinel & Cloud Kill-Switch & Anti-Ban Lockout
-    if getgenv().EmergencyPatchHalt or getgenv().EmergencyCloudHalt or getgenv().EmergencyStructuralHalt or getgenv().EmergencyKickLockout then
+    -- 0. ระบบความปลอดภัยระดับฮาร์ดแวร์: Patch Sentinel & Cloud Kill-Switch
+    if getgenv().EmergencyPatchHalt or getgenv().EmergencyCloudHalt then
         return -- ตัดการส่งคำสั่ง 100% เมื่อตรวจพบความเสี่ยงหรือเกมอัปเดตแพทช์ใหม่ ป้องกัน Error 267 / 600
     end
 
@@ -1328,7 +1319,7 @@ task.spawn(function()
                 local action = item.action
                 local args = item.args
                 
-                if not (getgenv().EmergencyPatchHalt or getgenv().EmergencyCloudHalt or getgenv().EmergencyStructuralHalt or getgenv().EmergencyKickLockout) then
+                if not (getgenv().EmergencyPatchHalt or getgenv().EmergencyCloudHalt) then
                     -- 1. ควบคุมความถี่เฉพาะของแต่ละคำสั่ง (Per-Action Rate Limiting)
                     local minInterval = RemoteRateLimits[action] or 0.15
                     local now = tick()
@@ -1914,9 +1905,9 @@ local defaultCFG = {
     WorldBossElementFilter = "[ ตีทุกธาตุ (All Elements) ]",
     WorldBossDifficultyFilter = "[ ตีทุกระดับ (All Difficulties) ]",
     PauseTowerForBoss = true,
-    AutoRebirth = false, AutoBuyDice = false, AutoEquipBest = true,
-    Reward = false, Quest = false, Cutscene = false,
-    UpgradeTree = false, UpgradeTreeDelay = 3,
+    AutoRebirth = false, AutoBuyDice = true, AutoEquipBest = true,
+    Reward = true, Quest = true, Cutscene = false,
+    UpgradeTree = true, UpgradeTreeDelay = 3,
     AutoExpedition = false, ExpeditionPetCount = 1,
     AutoDropItems = true, AutoReady = true,
     SenderMode = false, ReceiverMode = false, 
@@ -2055,11 +2046,16 @@ end
 assert(Fluent, "Failed to load Fluent UI Library on this executor. Please ensure your executor supports HttpGet.")
 getgenv().PetDiceFluent = Fluent
 
+local cam = workspace.CurrentCamera
+local vp = cam and cam.ViewportSize or Vector2.new(1024, 768)
+local winWidth = math.min(590, math.max(340, vp.X - 20))
+local winHeight = math.min(480, math.max(300, vp.Y - 60))
+
 local Window = Fluent:CreateWindow({
     Title = "Pet Dice Pro Farm",
     SubTitle = "Master Safe Edition v4.8",
-    TabWidth = 160,
-    Size = UDim2.fromOffset(590, 480),
+    TabWidth = (winWidth < 450 and 120 or 160),
+    Size = UDim2.fromOffset(winWidth, winHeight),
     Acrylic = false,
     Theme = "Darker",
     MinimizeKey = Enum.KeyCode.RightControl
@@ -2090,17 +2086,17 @@ getgenv().PetDiceOldFluent = Fluent
 -- ป้องกันหน้าต่างหลุดออกนอกจอ (Auto-Clamp Window to Viewport)
 local function EnsureWindowInViewport(win)
     pcall(function()
-        local cam = workspace.CurrentCamera
-        local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+        local c = workspace.CurrentCamera
+        local v = c and c.ViewportSize or Vector2.new(800, 600)
         local frame = win and (win.Frame or (win.Root and win.Root.Parent))
         if frame and frame:IsA("GuiObject") then
-            local w = frame.AbsoluteSize.X > 100 and frame.AbsoluteSize.X or 590
-            local h = frame.AbsoluteSize.Y > 100 and frame.AbsoluteSize.Y or 480
+            local w = frame.AbsoluteSize.X > 100 and frame.AbsoluteSize.X or winWidth
+            local h = frame.AbsoluteSize.Y > 100 and frame.AbsoluteSize.Y or winHeight
             local curX = frame.Position.X.Offset
             local curY = frame.Position.Y.Offset
-            if curX < 0 or curX > (vp.X - 100) or curY < 0 or curY > (vp.Y - 100) then
-                local posX = math.max(20, math.floor((vp.X - w) / 2))
-                local posY = math.max(20, math.floor((vp.Y - h) / 2))
+            if curX < 0 or curX > (v.X - 60) or curY < 0 or curY > (v.Y - 60) then
+                local posX = math.max(10, math.floor((v.X - w) / 2))
+                local posY = math.max(10, math.floor((v.Y - h) / 2))
                 frame.Position = UDim2.fromOffset(posX, posY)
             end
         end
@@ -2121,13 +2117,14 @@ local function Notify(title, content, duration)
     end)
 end
 
--- Floating Mobile Toggle Button (🎲) in PlayerGui
+-- Floating Mobile Toggle Button (🎲) in PlayerGui / gethui
 do
     local ToggleGui = Instance.new("ScreenGui")
     ToggleGui.Name = "PetDiceMobileToggle"
     ToggleGui.ResetOnSpawn = false
     ToggleGui.DisplayOrder = 999999
-    ToggleGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    local safeToggleParent = (gethui and gethui()) or LocalPlayer:WaitForChild("PlayerGui")
+    ToggleGui.Parent = safeToggleParent
     getgenv().PetDiceMobileToggleGui = ToggleGui
 
     local ToggleBtn = Instance.new("TextButton")
@@ -2151,6 +2148,9 @@ do
     ToggleStroke.Color = Color3.fromRGB(0, 170, 255)
     ToggleStroke.Parent = ToggleBtn
 
+    ToggleBtn.Activated:Connect(function()
+        Window:Minimize()
+    end)
     ToggleBtn.MouseButton1Click:Connect(function()
         Window:Minimize()
     end)
@@ -6601,7 +6601,7 @@ task.spawn(function()
         if not char or not hum or hum.Health <= 0 then task.wait(2.0) continue end
         
         if CFG.AutoPlay then
-            CircuitBreaker.Execute("AutoPlay", function()
+            pcall(function()
                 local data = State.Data
                 if not data then return end
                 
@@ -6611,7 +6611,7 @@ task.spawn(function()
                         Fire("SetAuto", true)
                         Humanizer.Wait(1.0, 1.8)
                     end
-                elseif not State.Rolling then
+                else
                     Fire("Roll")
                     Humanizer.Wait(1.2, 2.0)
                 end
@@ -6629,7 +6629,7 @@ task.spawn(function()
         if not CanRunGeneralFarm() then task.wait(2.0) continue end
         
         if CFG.AutoBuyDice then
-            CircuitBreaker.Execute("AutoBuyDice", function()
+            pcall(function()
                 local data = State.Data
                 if not data or not data.Money or not data.OwnedDice or not Config.Dice then return end
                 
