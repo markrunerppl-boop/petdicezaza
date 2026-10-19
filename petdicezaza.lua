@@ -2926,6 +2926,10 @@ end
 
 local RebirthStatusPara
 local TreeStatusPara
+local GetCurrentTowerFloor
+local IsTowerRunning
+local IsTowerInArena
+local GetActiveTowerId
 
 local function UpdateOverviewTab()
     pcall(function()
@@ -2936,13 +2940,25 @@ local function UpdateOverviewTab()
         local moneyStr = Format.Money(data.Money or 0)
         local gemsStr = Format.Commas(data.Gems or 0)
         local shardsStr = Format.Commas(data.Shards or 0)
-        local towerFloor = (data.TowerResume and data.TowerResume.Floor) or (data.TowerBest and data.TowerBest.Infinity) or 0
+        local liveFloor = 0
+        pcall(function()
+            if GetCurrentTowerFloor then
+                liveFloor = GetCurrentTowerFloor() or 0
+            end
+        end)
+        local isRunning = IsTowerRunning and IsTowerRunning()
+        local inArena = IsTowerInArena and IsTowerInArena()
+        local towerFloor = liveFloor > 0 and liveFloor or (isRunning and data.TowerResume and data.TowerResume.Floor) or (data.TowerBest and (data.TowerBest.Infinity or data.TowerBest.Meadow)) or (data.TowerResume and data.TowerResume.Floor) or 0
+        local modeDesc = ""
+        if isRunning then
+            modeDesc = inArena and " (ในอารีน่า)" or " (โหมดเบื้องหลัง Away)"
+        end
         local totalPets = 0
         if data.Pets then for _ in pairs(data.Pets) do totalPets = totalPets + 1 end end
         
         SafeUpdatePara(OverviewStats, 
             string.format("💰 เงิน: %s | 💎 เพชร: %s | 🔮 ชาร์ด: %s", moneyStr, gemsStr, shardsStr),
-            string.format("🏰 หอคอยชั้น: %d | 🐾 สัตว์เลี้ยงทั้งหมด: %d ตัว", towerFloor, totalPets)
+            string.format("🏰 หอคอยชั้น: %d%s | 🐾 สัตว์เลี้ยง: %d ตัว", towerFloor, modeDesc, totalPets)
         )
         
         if SecurityStatusPara then
@@ -6857,7 +6873,9 @@ SendDiscordInventoryReport = function(isManual)
     })
     
     -- 2. สถานะการเงิน & ความคืบหน้า
-    local towerFloor = (data.TowerResume and data.TowerResume.Floor) or (data.TowerBest and data.TowerBest.Infinity) or 0
+    local liveF = (GetCurrentTowerFloor and GetCurrentTowerFloor()) or 0
+    local isRunningF = IsTowerRunning and IsTowerRunning()
+    local towerFloor = liveF > 0 and liveF or (isRunningF and data.TowerResume and data.TowerResume.Floor) or (data.TowerBest and data.TowerBest.Infinity) or (data.TowerResume and data.TowerResume.Floor) or 0
     local towerBest = (data.TowerBest and data.TowerBest.Infinity) or towerFloor
     table.insert(fields, {
         name = "💰 สถานะการเงิน & ความคืบหน้า (Currencies)",
