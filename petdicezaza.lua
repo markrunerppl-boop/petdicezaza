@@ -1180,11 +1180,12 @@ Fire = function(...)
         if isAutoSellingActive or isPetEnhanceRolling then return end
     end
     if action == "EquipDice" then
-        if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
+        if IsTowerInArena and IsTowerInArena() then return end
         if IsHalloweenActive() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
+        if isZoneTransitionLocked then return end
         local diceId = args[2]
         if not diceId or not data or not data.OwnedDice then return end
         if not data.OwnedDice[diceId] then return end -- ยังไม่ได้เป็นเจ้าของ ห้ามส่งคำสั่ง
@@ -1202,9 +1203,12 @@ Fire = function(...)
         end
     end
     if action == "Rebirth" then
-        if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
+        if IsTowerInArena and IsTowerInArena() then return end
+        if IsHalloweenActive() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return end
+        if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
+        if isZoneTransitionLocked then return end
         local cost = Stats and Stats.RebirthCost and Stats.RebirthCost(data)
         if not cost or not data or (data.Money or 0) < cost then
             return -- เงินไม่พอเกิดใหม่ ยกเลิกทันที
@@ -1215,7 +1219,7 @@ Fire = function(...)
         local lastRoll = LastRemoteFire["Roll"] or 0
         if (nowRoll - lastRoll < 0.60) then return end
         if State.Rolling and (nowRoll - lastRoll < 1.2) then return end
-        if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
+        if IsTowerInArena and IsTowerInArena() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
@@ -2182,7 +2186,7 @@ local defaultCFG = {
     WorldBossElementFilter = "[ ตีทุกธาตุ (All Elements) ]",
     WorldBossDifficultyFilter = "[ ตีทุกระดับ (All Difficulties) ]",
     PauseTowerForBoss = true,
-    AutoRebirth = false, AutoBuyDice = true, AutoEquipBest = true,
+    AutoRebirth = false, TargetRebirths = 0, AutoBuyDice = true, AutoEquipBest = true,
     Reward = true, Quest = true, Cutscene = false,
     UpgradeTree = true, UpgradeTreeDelay = 3,
     AutoExpedition = false, ExpeditionPetCount = 1,
@@ -3033,6 +3037,26 @@ local function UpdateOverviewTab()
                     string.format("เลือกทำ %d ตัวแรก (ปรับเพิ่มได้ในแท็บอัปเกรด)", count)
                 )
             end
+        end
+        
+        if RebirthStatusPara then
+            local cost = Stats and Stats.RebirthCost and Stats.RebirthCost(data) or 0
+            local curRebirths = data.Rebirths or 0
+            local curMoney = data.Money or 0
+            local targetR = tonumber(CFG.TargetRebirths) or 0
+            
+            local statusStr = "พร้อมเกิดใหม่ทันที! (เงินครบแล้ว)"
+            if targetR > 0 and curRebirths >= targetR then
+                statusStr = string.format("บรรลุเป้าหมายแล้ว (%d/%d ครั้ง) - หยุดเกิดใหม่อัตโนมัติ", curRebirths, targetR)
+            elseif curMoney < cost then
+                statusStr = string.format("เงินยังไม่พอ (ขาดอีก %s)", Format.Money(cost - curMoney))
+            end
+            
+            local targetDesc = targetR > 0 and string.format(" | เป้าหมาย: %d ครั้ง", targetR) or " | เป้าหมาย: ไม่จำกัด"
+            SafeUpdatePara(RebirthStatusPara,
+                string.format("🌟 สถานะ: %s | เกิดใหม่แล้ว: %s ครั้ง%s", CFG.AutoRebirth and "เปิดอัตโนมัติ" or "ปิดอยู่", Format.Commas(curRebirths), targetDesc),
+                string.format("💰 เงินปัจจุบัน: %s / ค่าเกิดใหม่: %s\n📌 ความคืบหน้า: %s", Format.Money(curMoney), Format.Money(cost), statusStr)
+            )
         end
     end)
 end
@@ -4577,6 +4601,11 @@ end -- END TAB 3: TOWER & DICE
 -- ------------------------------------------------------------------------------
 Tabs.Rebirth:AddSection("🌟 เกิดใหม่อัตโนมัติ (Auto Rebirth)")
 
+local RebirthStatusPara = Tabs.Rebirth:AddParagraph({
+    Title = "📊 สถานะการเกิดใหม่ (Rebirth Status): กำลังคำนวณ...",
+    Content = "กำลังตรวจสอบจำนวน Rebirths และค่าใช้จ่าย..."
+})
+
 TogRebirthAutoRebirth = Tabs.Rebirth:AddToggle("TogAutoRebirth", {
     Title = "เปิดระบบเกิดใหม่อัตโนมัติเมื่อเงินครบ (Auto Rebirth)",
     Default = CFG.AutoRebirth,
@@ -4587,6 +4616,22 @@ TogRebirthAutoRebirth = Tabs.Rebirth:AddToggle("TogAutoRebirth", {
             pcall(function() TogOverviewAutoRebirth:SetValue(V) end)
             isSyncingMasterToggles = false
         end
+        if UpdateOverviewTab then UpdateOverviewTab() end
+    end
+})
+
+Tabs.Rebirth:AddInput("InputTargetRebirths", {
+    Title = "🎯 กำหนดเป้าหมายจำนวนครั้งการเกิดใหม่ (0 = ไม่จำกัด)",
+    Default = tostring(CFG.TargetRebirths or 0),
+    Placeholder = "เช่น 10 เพื่อปลดล็อกเทรด หรือ 20 (Celestial)",
+    Numeric = true,
+    Finished = true,
+    Callback = function(val)
+        local n = tonumber(val) or 0
+        local target = math.max(0, math.floor(n))
+        UpdateCFG("TargetRebirths", target)
+        Notify("🌟 เป้าหมายเกิดใหม่", target > 0 and ("ตั้งเป้าหมายเป็น " .. target .. " ครั้ง") or "ตั้งเป็นไม่จำกัด (เกิดใหม่ตลอด)", 2)
+        if UpdateOverviewTab then UpdateOverviewTab() end
     end
 })
 
@@ -4596,12 +4641,17 @@ Tabs.Rebirth:AddButton({
     Callback = function()
         local data = State.Data
         if not data then return end
-        local cost = Stats.RebirthCost(data)
+        local cost = Stats and Stats.RebirthCost and Stats.RebirthCost(data)
         if cost and (data.Money or 0) >= cost then
+            if isEconomyActionMutex or getgenv().EconomyActionMutex or isZoneTransitionLocked then
+                Notify("⚠️ กำลังทำรายการอื่น", "กำลังทำรายการเศรษฐกิจอยู่ กรุณารอสักครู่...", 2)
+                return
+            end
             Fire("Rebirth")
             Notify("🌟 เกิดใหม่", "ส่งคำสั่งเกิดใหม่สำเร็จ!", 3)
         else
-            Notify("⚠️ เงินไม่พอ", "เงินของคุณยังไม่พอสำหรับการเกิดใหม่", 3)
+            local diff = cost and ((cost or 0) - (data.Money or 0)) or 0
+            Notify("⚠️ เงินไม่พอ", "เงินของคุณยังไม่พอเกิดใหม่ (ขาดอีก " .. (Format and Format.Money and Format.Money(diff) or tostring(diff)) .. ")", 3)
         end
     end
 })
@@ -7455,31 +7505,49 @@ end)
 -- 4. Auto Rebirth
 task.spawn(function()
     while true do
-        task.wait(4.0)
+        task.wait(3.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if not CanRunGeneralFarm() then task.wait(2.0) continue end
+        if IsTowerInArena and IsTowerInArena() then task.wait(2.0) continue end
         
         if CFG.AutoRebirth then
-            if isEconomyActionMutex then task.wait(1.5) continue end
-            isEconomyActionMutex = true
-            getgenv().EconomyActionMutex = true
-            getgenv().LastEconomyActionStartTime = tick()
+            local data = State.Data
+            if not data then task.wait(1.5) continue end
             
-            pcall(function()
-                CircuitBreaker.Execute("AutoRebirth", function()
-                    local data = State.Data
-                    if not data then return end
-                    local cost = Stats.RebirthCost(data)
-                    if cost and (data.Money or 0) >= cost then
-                        Fire("Rebirth")
-                        Humanizer.Wait(2.0, 3.5)
-                    end
+            -- ตรวจสอบเป้าหมาย Rebirth (ถ้าตั้งไว้ และถึงเป้าหมายแล้ว ให้หยุดเกิดใหม่)
+            local currentRebirths = data.Rebirths or 0
+            local targetRebirths = tonumber(CFG.TargetRebirths) or 0
+            if targetRebirths > 0 and currentRebirths >= targetRebirths then
+                task.wait(4.0)
+                continue
+            end
+            
+            local cost = Stats and Stats.RebirthCost and Stats.RebirthCost(data)
+            if cost and (data.Money or 0) >= cost then
+                if isEconomyActionMutex or getgenv().EconomyActionMutex or isZoneTransitionLocked then
+                    task.wait(1.0)
+                    continue
+                end
+                
+                isEconomyActionMutex = true
+                getgenv().EconomyActionMutex = true
+                getgenv().LastEconomyActionStartTime = tick()
+                
+                pcall(function()
+                    CircuitBreaker.Execute("AutoRebirth", function()
+                        local freshData = State.Data
+                        local freshCost = Stats and Stats.RebirthCost and Stats.RebirthCost(freshData)
+                        if freshCost and (freshData.Money or 0) >= freshCost then
+                            Fire("Rebirth")
+                            Humanizer.Wait(2.5, 3.5)
+                        end
+                    end)
                 end)
-            end)
-            
-            isEconomyActionMutex = false
-            getgenv().EconomyActionMutex = false
-            getgenv().LastEconomyActionStartTime = 0
+                
+                isEconomyActionMutex = false
+                getgenv().EconomyActionMutex = false
+                getgenv().LastEconomyActionStartTime = 0
+            end
         end
     end
 end)
