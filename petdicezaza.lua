@@ -694,6 +694,8 @@ local IsTowerInArena
 local GetCurrentTowerFloor
 local UpdateTowerStatus
 local ResolveTowerId
+local LeaveTowerCleanly
+local ExitArenaCleanly
 local isSwitchingTower = false
 -- IsEnteringBossPortal declared above in top-level priority scope
 local LiveTower = {
@@ -964,14 +966,20 @@ Fire = function(...)
         end
     end
     if action == "TowerLeave" then
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        local hud = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root") and pg.PetDiceUI.Root:FindFirstChild("Hud")
+        local inUi = hud and ((hud:FindFirstChild("TowerTracker") and hud.TowerTracker.Visible) or (hud:FindFirstChild("Battle") and hud.Battle.Visible))
         local d = State.Data
-        local inTower = (IsTowerRunning and IsTowerRunning()) or (d and d.TowerResume ~= nil and d.TowerResume.Floor and d.TowerResume.Floor > 0)
+        local inTower = inUi or (IsTowerRunning and IsTowerRunning()) or (d and d.TowerResume ~= nil)
         if not inTower then
             return -- ไม่ได้อยู่ในหอคอย ไม่ส่งคำสั่งออกจากหอ
         end
     end
     if action == "TowerExit" then
-        if not IsTowerInArena or not IsTowerInArena() then
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        local hud = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root") and pg.PetDiceUI.Root:FindFirstChild("Hud")
+        local inArenaUi = hud and hud:FindFirstChild("Battle") and hud.Battle.Visible
+        if not inArenaUi and (not IsTowerInArena or not IsTowerInArena()) then
             return -- ไม่ได้อยู่ในอารีน่าจริง ไม่ส่ง TowerExit
         end
     end
@@ -2603,6 +2611,10 @@ TogOverviewTower = Tabs.Overview:AddToggle("TogTowerOverview", {
                     SwitchOrStartTower(targetId, true)
                 end
             end)
+        elseif not V then
+            if LeaveTowerCleanly then
+                LeaveTowerCleanly("ปิดระบบฟาร์มหอคอยและออกจากหอเรียบร้อย")
+            end
         end
     end
 })
@@ -3892,6 +3904,156 @@ GetCurrentTowerFloor = function()
     return 0
 end
 
+ExitArenaCleanly = function(reason)
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        local hud = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Hud")
+        local battle = hud and hud:FindFirstChild("Battle")
+        local exitArena = battle and battle:FindFirstChild("ExitArena", true)
+        local exitFace = exitArena and exitArena:FindFirstChild("Face")
+        if exitFace and firesignal then
+            pcall(function() firesignal(exitFace.Activated) end)
+            pcall(function() firesignal(exitFace.MouseButton1Click) end)
+        end
+    end)
+    pcall(function()
+        if State and type(State.Send) == "function" then
+            State.Send("TowerExit")
+        end
+        if Action then
+            Action:FireServer("TowerExit")
+        end
+    end)
+    LastRemoteFire["TowerExit"] = tick()
+    LiveTower.InArena = false
+    LiveTower.Away = true
+    local msg = reason or "ออกจากอารีน่ามายังโหมดเบื้องหลัง (Away Mode) เรียบร้อย!"
+    Notify("🚪 หอคอย", msg, 2)
+    task.delay(0.2, function()
+        if UpdateTowerStatus then UpdateTowerStatus() end
+    end)
+end
+
+LeaveTowerCleanly = function(reason)
+    -- 1. ปิด Master Config และ Sync สวิตช์ UI ทั้งหมดทันที 100% ป้องกัน Loop 1 กลับมาสตาร์ท
+    UpdateCFG("Tower", false)
+    if TogTowerTower and TogTowerTower.SetValue then 
+        pcall(function() TogTowerTower:SetValue(false) end) 
+    end
+    if TogOverviewTower and TogOverviewTower.SetValue then 
+        pcall(function() TogOverviewTower:SetValue(false) end) 
+    end
+    isSwitchingTower = false
+    lastLoopStartAttempt = tick() + 10.0 -- หน่วง Loop 1 ไว้อย่างน้อย 10 วินาที
+
+    task.spawn(function()
+        -- 2. ปิด TowerAutoplay ของระบบเกมแท้ทันที เพื่อไม่ให้เซิร์ฟเวอร์เริ่มชั้นถัดไปอัตโนมัติ
+        pcall(function()
+            if State and type(State.Send) == "function" then
+                State.Send("SetSetting", "TowerAutoplay", false)
+            end
+            if Action then
+                Action:FireServer("SetSetting", "TowerAutoplay", false)
+            end
+        end)
+
+        -- 3. ตรวจสอบ UI และยิงสัญญาณออกจากหอคอย
+        local function triggerExitButtons()
+            pcall(function()
+                local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                local hud = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Hud")
+                if hud then
+                    -- หากอยู่ใน 3D Battle Arena ให้กดปุ่ม Stop (StopRun)
+                    local battle = hud:FindFirstChild("Battle")
+                    if battle and battle.Visible then
+                        local stopRun = battle:FindFirstChild("StopRun", true)
+                        local stopFace = stopRun and stopRun:FindFirstChild("Face")
+                        if stopFace and firesignal then
+                            pcall(function() firesignal(stopFace.Activated) end)
+                            pcall(function() firesignal(stopFace.MouseButton1Click) end)
+                        end
+                    end
+
+                    -- หากอยู่ในโหมดเบื้องหลัง (Away Tracker) ให้กดปุ่ม StopTower
+                    local tracker = hud:FindFirstChild("TowerTracker")
+                    if tracker and tracker.Visible then
+                        local stopTower = tracker:FindFirstChild("StopTower", true)
+                        local stopFace = stopTower and stopTower:FindFirstChild("Face")
+                        if stopFace and firesignal then
+                            pcall(function() firesignal(stopFace.Activated) end)
+                            pcall(function() firesignal(stopFace.MouseButton1Click) end)
+                        end
+                    end
+                end
+            end)
+        end
+
+        -- ส่งสัญญาณรอบที่ 1
+        triggerExitButtons()
+        pcall(function()
+            if State and type(State.Send) == "function" then State.Send("TowerLeave") end
+            if Action then Action:FireServer("TowerLeave") end
+        end)
+        LastRemoteFire["TowerLeave"] = tick()
+
+        -- ตรวจสอบและจัดการกรณีเกมสลับจาก Away Mode กลับมายัง Battle Arena
+        local waitStart = tick()
+        while tick() - waitStart < 2.0 do
+            task.wait(0.2)
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            local hud = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Hud")
+            local battle = hud and hud:FindFirstChild("Battle")
+            local tracker = hud and hud:FindFirstChild("TowerTracker")
+            local inArena = battle and battle.Visible == true
+            local inTracker = tracker and tracker.Visible == true
+
+            if not inArena and not inTracker then
+                break -- ออกจากหอคอยสำเร็จทั้งสองโหมดแล้ว
+            end
+
+            -- หากตัวเกมดีดกลับมาหน้า Battle Arena ให้กดยืนยัน StopRun ซ้ำทันที
+            if inArena then
+                triggerExitButtons()
+                pcall(function()
+                    if State and type(State.Send) == "function" then State.Send("TowerLeave") end
+                    if Action then Action:FireServer("TowerLeave") end
+                end)
+            end
+        end
+
+        -- 4. ล้างสถานะ LiveTower ทันที
+        LiveTower.Active = false
+        LiveTower.Starting = false
+        LiveTower.LastEventTime = 0
+        LiveTower.TowerId = nil
+        LiveTower.Floor = 0
+        LiveTower.InArena = false
+        LiveTower.Away = false
+        LiveTower.LastStartTick = 0
+
+        -- 5. ปิด BattleResults UI ทันทีหากมีเปิดขึ้นมา หรือกดปุ่ม ResultsOk
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            local br = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Effects") and pg.PetDiceUI.Root.Effects:FindFirstChild("BattleResults")
+            if br then
+                if br.Visible then br.Visible = false end
+                local okBtn = br:FindFirstChild("ResultsOk", true)
+                local okFace = okBtn and okBtn:FindFirstChild("Face")
+                if okFace and firesignal then
+                    pcall(function() firesignal(okFace.Activated) end)
+                end
+            end
+        end)
+
+        -- 6. แจ้งเตือนผู้เล่น และอัปเดตหน้าต่าง UI
+        local msg = reason or "ออกจากหอคอยและปิดระบบฟาร์มหอคอยเรียบร้อย 100%!"
+        Notify("🛑 หอคอย", msg, 3)
+        task.delay(0.2, function()
+            if UpdateTowerStatus then UpdateTowerStatus() end
+        end)
+    end)
+end
+
 local TowerStatusPara = Tabs.Tower:AddParagraph({
     Title = "⏳ กำลังโหลดสถานะหอคอย...",
     Content = "กำลังตรวจสอบชั้นและสถานะการลงหอคอย..."
@@ -4407,40 +4569,9 @@ TogTowerTower = Tabs.Tower:AddToggle("TogTower", {
                 task.delay(0.2, UpdateTowerStatus)
             end)
         else
-            task.spawn(function()
-                isSwitchingTower = false
-                Fire("TowerLeave")
-                LiveTower.Active = false
-                LiveTower.Starting = false
-                LiveTower.LastEventTime = 0
-                LiveTower.TowerId = nil
-                LiveTower.InArena = false
-                LiveTower.Away = false
-                pcall(function() Fire("SetSetting", "TowerAutoplay", false) end)
-                
-                -- รอจนกว่าตัวเกมจะออกจากหอคอยจริง (Battle และ TowerTracker หายไป)
-                local leaveStart = tick()
-                while tick() - leaveStart < 2.5 do
-                    task.wait(0.1)
-                    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-                    local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
-                    local hud = root and root:FindFirstChild("Hud")
-                    local away = hud and hud:FindFirstChild("TowerTracker") and hud.TowerTracker.Visible == true
-                    local arena = hud and hud:FindFirstChild("Battle") and hud.Battle.Visible == true
-                    if not away and not arena then break end
-                end
-                LiveTower.Away = false
-                
-                -- ปิดหน้าต่างผลลัพธ์ BattleResults UI ทันที
-                pcall(function()
-                    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-                    local br = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Effects") and pg.PetDiceUI.Root.Effects:FindFirstChild("BattleResults")
-                    if br and br.Visible then br.Visible = false end
-                end)
-                
-                Notify("🏰 หอคอย", "ปิดระบบฟาร์มหอคอยอัตโนมัติแล้ว", 2)
-                task.delay(0.2, UpdateTowerStatus)
-            end)
+            if LeaveTowerCleanly then
+                LeaveTowerCleanly("ปิดระบบฟาร์มหอคอยและออกจากหอเรียบร้อย")
+            end
         end
     end
 })
@@ -4481,8 +4612,9 @@ Tabs.Tower:AddToggle("TogAutoExitArena", {
         if V then
             task.spawn(function()
                 if IsTowerInArena() then
-                    Fire("TowerExit")
-                    Notify("🚪 หอคอย", "ออกจากอารีน่ามาทำงานเบื้องหลังเรียบร้อย!", 2)
+                    if ExitArenaCleanly then
+                        ExitArenaCleanly("ออกจากอารีน่ามาทำงานเบื้องหลังเรียบร้อย!")
+                    end
                 else
                     Notify("🚪 หอคอย", "เปิดระบบออกจากอารีน่าอัตโนมัติแล้ว", 2)
                 end
@@ -4511,25 +4643,19 @@ Tabs.Tower:AddButton({
     Title = "🚪 ออกจากอารีน่าทันที (Exit Arena to Background)",
     Description = "ส่งคำสั่งออกจากอารีน่าเพื่อเดินเล่นในแมพได้อิสระ (หอคอยยังคงฟาร์มต่อ)",
     Callback = function()
-        Fire("TowerExit")
-        Notify("🚪 หอคอย", "ส่งคำสั่งออกจากอารีน่าเรียบร้อย!", 2)
-        task.delay(0.2, UpdateTowerStatus)
+        if ExitArenaCleanly then
+            ExitArenaCleanly("ออกจากอารีน่าสู่โหมดเบื้องหลังเรียบร้อย!")
+        end
     end
 })
 
 Tabs.Tower:AddButton({
     Title = "🛑 สั่งหยุดลงหอคอย (Stop Tower Run)",
-    Description = "ส่งคำสั่งหยุดการลงหอคอยรอบปัจจุบันทันที",
+    Description = "ส่งคำสั่งหยุดการลงหอคอยรอบปัจจุบันและปิดระบบฟาร์มทันที",
     Callback = function()
-        Fire("TowerLeave")
-        LiveTower.Active = false
-        LiveTower.Starting = false
-        LiveTower.TowerId = nil
-        LiveTower.Floor = 0
-        LiveTower.InArena = false
-        LiveTower.Away = false
-        Notify("🛑 หอคอย", "ส่งคำสั่งหยุดการลงหอคอยเรียบร้อย!", 2)
-        task.delay(0.2, UpdateTowerStatus)
+        if LeaveTowerCleanly then
+            LeaveTowerCleanly("สั่งหยุดลงหอคอยและปิดระบบฟาร์มเรียบร้อย!")
+        end
     end
 })
 
@@ -7476,7 +7602,11 @@ task.spawn(function()
                             
                             -- หากอยู่ในอารีน่า และเปิดออโต้ออกจากอารีน่า ให้ส่งคำสั่งออกสู่ Away Mode
                             if IsTowerInArena() and CFG.AutoExitArena then
-                                Fire("TowerExit")
+                                if ExitArenaCleanly then
+                                    ExitArenaCleanly()
+                                else
+                                    Fire("TowerExit")
+                                end
                                 Humanizer.Wait(1.0, 1.8)
                             end
                             
