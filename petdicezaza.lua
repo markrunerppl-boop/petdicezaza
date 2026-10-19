@@ -3698,6 +3698,19 @@ local function SyncLiveTowerFromGame()
         return
     end
     
+    -- ตรวจสอบและปิดป๊อปอัปผลรางวัล LootBag ที่ค้างอยู่บนหน้าจออัตโนมัติ
+    pcall(function()
+        local lb = pg and pg:FindFirstChild("PetDiceLootBag")
+        if lb then
+            local done = lb:FindFirstChild("Done", true)
+            if done and done:FindFirstChild("Face") then
+                firesignal(done.Face.Activated)
+            elseif done and done:IsA("GuiButton") then
+                firesignal(done.Activated)
+            end
+        end
+    end)
+    
     local hud = root and root:FindFirstChild("Hud")
     local tracker = hud and hud:FindFirstChild("TowerTracker")
     local battle = hud and hud:FindFirstChild("Battle")
@@ -7369,11 +7382,21 @@ task.spawn(function()
             if CFG.Tower and (not IsFeatureUnlocked or IsFeatureUnlocked("Towers", "towers")) then
                 local data = State.Data
                 if data then
-                    -- ตรวจสอบและปิดป๊อปอัป BattleResults หากมีค้างอยู่
+                    -- ตรวจสอบและปิดป๊อปอัป BattleResults และ LootBag หากมีค้างอยู่
                     pcall(function()
                         local pg = LocalPlayer:FindFirstChild("PlayerGui")
                         local br = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Effects") and pg.PetDiceUI.Root.Effects:FindFirstChild("BattleResults")
                         if br and br.Visible then br.Visible = false end
+                        
+                        local lb = pg and pg:FindFirstChild("PetDiceLootBag")
+                        if lb then
+                            local done = lb:FindFirstChild("Done", true)
+                            if done and done:FindFirstChild("Face") then
+                                firesignal(done.Face.Activated)
+                            elseif done and done:IsA("GuiButton") then
+                                firesignal(done.Activated)
+                            end
+                        end
                     end)
                     
                     -- ปลดล็อค isSwitchingTower อัตโนมัติหากค้างเกิน 5 วินาที
