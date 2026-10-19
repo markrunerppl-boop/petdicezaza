@@ -691,6 +691,7 @@ local ZoneTransitionActions = {
 local SwitchOrStartTower
 local IsTowerRunning
 local IsTowerInArena
+local GetCurrentTowerFloor
 local UpdateTowerStatus
 local ResolveTowerId
 local isSwitchingTower = false
@@ -3859,7 +3860,7 @@ IsTowerInArena = function()
     return LiveTower.Active == true and LiveTower.InArena == true
 end
 
-local function GetCurrentTowerFloor()
+GetCurrentTowerFloor = function()
     SyncLiveTowerFromGame()
     if LiveTower.Active and LiveTower.Floor and LiveTower.Floor > 0 then
         return LiveTower.Floor
