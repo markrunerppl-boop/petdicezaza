@@ -3933,6 +3933,7 @@ ExitArenaCleanly = function(reason)
         if UpdateTowerStatus then UpdateTowerStatus() end
     end)
 end
+getgenv().ExitArenaCleanly = ExitArenaCleanly
 
 LeaveTowerCleanly = function(reason)
     -- 1. ปิด Master Config และ Sync สวิตช์ UI ทั้งหมดทันที 100% ป้องกัน Loop 1 กลับมาสตาร์ท
@@ -4053,6 +4054,7 @@ LeaveTowerCleanly = function(reason)
         end)
     end)
 end
+getgenv().LeaveTowerCleanly = LeaveTowerCleanly
 
 local TowerStatusPara = Tabs.Tower:AddParagraph({
     Title = "⏳ กำลังโหลดสถานะหอคอย...",
