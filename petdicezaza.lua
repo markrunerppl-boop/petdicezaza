@@ -2303,37 +2303,61 @@ end)
 -- ==============================================================================
 -- [5] LOAD FLUENT UI & SETUP WINDOW
 -- ==============================================================================
-local Fluent
-local fluentUrls = {
-    "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/fluent.lua?t=" .. tick(),
-    "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/fluent.lua?t=" .. tick(),
-    "https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"
-}
-
-for _, url in ipairs(fluentUrls) do
-    local ok, res = pcall(function()
-        local src = game:HttpGet(url)
-        if src and #src > 1000 then
-            return loadstring(src)()
+-- 1. ตรวจสอบไฟล์ UI แคชในเครื่องก่อน (Potassium Workspace) เพื่อความรวดเร็วและปลอดภัยสูงสุด ไม่ต้องผ่านเครือข่าย
+pcall(function()
+    if isfile and readfile and isfile("fluent.lua") then
+        local localSrc = readfile("fluent.lua")
+        if localSrc and #localSrc > 1000 then
+            local ok, res = pcall(function() return loadstring(localSrc)() end)
+            if ok and res and type(res) == "table" and res.CreateWindow then
+                Fluent = res
+            end
         end
-        return nil
-    end)
-    if ok and res and type(res) == "table" and res.CreateWindow then
-        Fluent = res
-        break
     end
+end)
+
+-- 2. ฟังก์ชันดาวน์โหลดแบบปลอดภัย (บายพาสบัค HttpGet ของ Potassium โดยใช้ request / http_request)
+local function FetchFluentSource(url)
+    local content = nil
+    pcall(function() content = game:HttpGet(url, true) end)
+    if not content or type(content) ~= "string" or #content < 500 then
+        local req = request or http_request or (http and http.request) or (syn and syn.request)
+        if req then
+            pcall(function()
+                local resp = req({ Url = url, Method = "GET" })
+                if resp and resp.Body and #resp.Body > 500 then
+                    content = resp.Body
+                end
+            end)
+        end
+    end
+    return content
 end
 
 if not Fluent then
-    pcall(function()
-        local src = game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/main.lua")
+    local fluentUrls = {
+        "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/fluent.lua",
+        "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/fluent.lua",
+        "https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua",
+        "https://raw.githubusercontent.com/dawid-scripts/Fluent/master/main.lua"
+    }
+
+    for _, url in ipairs(fluentUrls) do
+        local src = FetchFluentSource(url)
         if src and #src > 1000 then
-            Fluent = loadstring(src)()
+            local ok, res = pcall(function() return loadstring(src)() end)
+            if ok and res and type(res) == "table" and res.CreateWindow then
+                Fluent = res
+                pcall(function()
+                    if writefile then writefile("fluent.lua", src) end
+                end)
+                break
+            end
         end
-    end)
+    end
 end
 
-assert(Fluent, "Failed to load Fluent UI Library on this executor. Please ensure your executor supports HttpGet.")
+assert(Fluent, "Failed to load Fluent UI Library on this executor. Please ensure your executor supports HttpGet or local storage.")
 getgenv().PetDiceFluent = Fluent
 
 local Window
