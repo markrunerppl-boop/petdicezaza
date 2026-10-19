@@ -7697,14 +7697,16 @@ task.spawn(function()
                 -- 5. สแกนตามรอบเวลา Periodic Check (ทุก 20 วินาที) เผื่อสเตตัสสัตว์เลี้ยงเปลี่ยน
                 if getgenv().NeedEquipBest == true then
                     shouldEquip = true
-                elseif currentTotal ~= lastTotalPets then
-                    shouldEquip = true
                 elseif equippedCount < maxEquipped then
                     shouldEquip = true
-                elseif getgenv().LastPetUpgradedTime and (now - getgenv().LastPetUpgradedTime < 10.0) and (now - lastPeriodicEquipTime >= 6.0) then
+                elseif currentTotal ~= lastTotalPets and (now - lastPeriodicEquipTime >= 15.0) then
+                    shouldEquip = true
+                elseif getgenv().LastPetUpgradedTime and (now - getgenv().LastPetUpgradedTime < 10.0) and (now - lastPeriodicEquipTime >= 10.0) then
                     shouldEquip = true
                 elseif (now - lastPeriodicEquipTime >= 20.0) then
                     shouldEquip = true
+                else
+                    lastTotalPets = currentTotal
                 end
                 
                 if shouldEquip then
