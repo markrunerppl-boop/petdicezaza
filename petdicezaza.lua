@@ -32,6 +32,13 @@ local CG = game:GetService("CoreGui")
 local HS = game:GetService("HttpService")
 local GuiService = game:GetService("GuiService")
 
+-- Forward declarations for script-wide state & config
+local CFG = getgenv().CFG or {}
+getgenv().CFG = CFG
+local State
+local Fire
+local VERIFIED_GAME_PLACE_VERSION = 172
+
 local LocalPlayer = Players.LocalPlayer
 while not LocalPlayer do
     task.wait(0.1)
@@ -141,8 +148,7 @@ end)
 -- ==============================================================================
 -- [0] AIRTIGHT ANTI-BAN & PATCH SENTINEL SYSTEM (100% FAIL-SAFE PROTECTION)
 -- ==============================================================================
-do
-local VERIFIED_GAME_PLACE_VERSION = 172
+VERIFIED_GAME_PLACE_VERSION = 172
 local SECURITY_CONFIG_URL = "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/security.json"
 
 getgenv().EmergencyPatchHalt = false
@@ -368,14 +374,13 @@ task.spawn(function()
         end
     end
 end)
-end
 
 -- โหลดโมดูลภายในของเกม Pet Dice
 local PetDice = RS:WaitForChild("PetDice")
 local Action = PetDice:WaitForChild("Remotes"):WaitForChild("Action")
 local TradeRemote = PetDice:WaitForChild("Remotes"):WaitForChild("Trade")
 
-local State = require(PetDice.Client.Core.State)
+State = require(PetDice.Client.Core.State)
 local Stats = require(PetDice.Logic.Stats)
 local Modifiers = require(PetDice.Logic.Modifiers)
 local Format = require(PetDice.Logic.Format)
@@ -510,27 +515,31 @@ local function IsTradeActive()
 end
 
 local function DoesWorldBossMatchFilter()
+    local cfg = CFG or getgenv().CFG or {}
+    local elemFilter = cfg.WorldBossElementFilter
+    local diffFilter = cfg.WorldBossDifficultyFilter
     local wbElem = RS:GetAttribute("WorldBossElement") or ""
     local wbDiff = RS:GetAttribute("WorldBossDifficulty") or ""
-    local elemMatch = (not CFG.WorldBossElementFilter) or 
-                     (CFG.WorldBossElementFilter == "[ ตีทุกธาตุ (All Elements) ]") or 
-                     (wbElem:lower() == tostring(CFG.WorldBossElementFilter):lower()) or
-                     (tostring(CFG.WorldBossElementFilter):find(wbElem))
-    local diffMatch = (not CFG.WorldBossDifficultyFilter) or 
-                     (CFG.WorldBossDifficultyFilter == "[ ตีทุกระดับ (All Difficulties) ]") or
-                     (wbDiff:lower() == tostring(CFG.WorldBossDifficultyFilter):lower()) or
-                     (tostring(CFG.WorldBossDifficultyFilter):find(wbDiff))
+    local elemMatch = (not elemFilter) or 
+                     (elemFilter == "[ ตีทุกธาตุ (All Elements) ]") or 
+                     (wbElem:lower() == tostring(elemFilter):lower()) or
+                     (tostring(elemFilter):find(wbElem))
+    local diffMatch = (not diffFilter) or 
+                     (diffFilter == "[ ตีทุกระดับ (All Difficulties) ]") or
+                     (wbDiff:lower() == tostring(diffFilter):lower()) or
+                     (tostring(diffFilter):find(wbDiff))
     return elemMatch and diffMatch
 end
 
 local function IsWorldBossActive()
-    if not CFG or CFG.AutoWorldBoss == false or CFG.PauseTowerForBoss == false then
+    local cfg = CFG or getgenv().CFG or {}
+    if cfg.AutoWorldBoss == false or cfg.PauseTowerForBoss == false then
         return false
     end
     
     -- 1. ตัวละครกำลังอยู่ในบอสโลก กำลังเดินเข้าประตู หรืออยู่ในรอบต่อสู้
-    local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or 
-                     (LocalPlayer:GetAttribute("InWorldBoss") == true) or 
+    local isJoined = (LocalPlayer and LocalPlayer:GetAttribute("WorldBossJoined") == true) or 
+                     (LocalPlayer and LocalPlayer:GetAttribute("InWorldBoss") == true) or 
                      (IsEnteringBossPortal == true) or 
                      (wasInWorldBossFight == true)
     if isJoined then return true end
@@ -551,8 +560,9 @@ local function IsWorldBossActive()
 end
 
 local function IsHalloweenActive()
+    local cfg = CFG or getgenv().CFG or {}
     local stormActive = false
-    if CFG and CFG.HalloweenAutoCollectCandy and IsCandyStormActive then
+    if cfg.HalloweenAutoCollectCandy and IsCandyStormActive then
         local ok, act = pcall(IsCandyStormActive)
         if ok and act then stormActive = true end
     end
@@ -561,33 +571,50 @@ end
 
 -- ลำดับ 2 (ตีบอส): ทำงานได้เมื่อ "ไม่มีการเทรด" (Priority 1)
 local function CanRunWorldBoss()
-    return not IsTradeActive()
+    local ok, res, reason = pcall(function()
+        if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
+        return true
+    end)
+    if not ok then return false, tostring(res) end
+    return res, reason
 end
 
 -- ลำดับ 3 (ฮาโลวีน): ทำงานได้เมื่อ "ไม่มีการเทรด" (Priority 1) และ "ไม่ได้กำลังตีบอส" (Priority 2)
 local function CanRunHalloween()
-    if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
-    if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
-    return true
+    local ok, res, reason = pcall(function()
+        if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
+        if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
+        return true
+    end)
+    if not ok then return false, tostring(res) end
+    return res, reason
 end
 
 -- ลำดับ 4 (หอคอย): ทำงานได้เมื่อ Trade(1), Boss(2), Halloween(3) ไม่ได้ทำงาน และปลดล็อคในระบบเกมแล้ว
 local function CanRunTower()
-    if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
-    if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
-    if IsHalloweenActive() then return false, "Priority 3 Active: Halloween Event in progress" end
-    if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then return false, "Towers not unlocked in tree" end
-    return true
+    local ok, res, reason = pcall(function()
+        if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
+        if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
+        if IsHalloweenActive() then return false, "Priority 3 Active: Halloween Event in progress" end
+        if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then return false, "Towers not unlocked in tree" end
+        return true
+    end)
+    if not ok then return false, tostring(res) end
+    return res, reason
 end
 
 -- ลำดับ 5 (สุ่มฟาร์มทั่วไป): ทำงานได้เมื่อ Trade(1), Boss(2) ไม่ได้ทำงาน และไม่ได้กำลังเดินเก็บแคนดี้
 local function CanRunGeneralFarm()
-    if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
-    if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
-    if isCollectingCandyMutex or getgenv().CandyStormMutex or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
-        return false, "Priority 3 Active: Halloween Event in progress"
-    end
-    return true
+    local ok, res, reason = pcall(function()
+        if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
+        if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
+        if isCollectingCandyMutex or getgenv().CandyStormMutex or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
+            return false, "Priority 3 Active: Halloween Event in progress"
+        end
+        return true
+    end)
+    if not ok then return false, tostring(res) end
+    return res, reason
 end
 
 local function GetTradeReadyButton()
@@ -729,6 +756,7 @@ getgenv().LastEconomyActionStartTime = 0
 getgenv().LastZoneTransitionTime = 0
 getgenv().LastPetUpgradedTime = 0
 getgenv().LastTradeRequestTime = 0
+getgenv().NeedEquipBest = false
 
 -- Trade Deferred Action Queue (จัดคิวคำสั่งอื่นที่เข้ามาขณะกำลังเทรด ให้รอทำตามลำดับหลังจากเทรดเสร็จ)
 local TradeDeferredQueue = {}
@@ -822,7 +850,7 @@ local function FlushTradeDeferredQueue()
     end)
 end
 
-local function Fire(...) 
+Fire = function(...) 
     local args = {...}
     local action = args[1]
     if typeof(action) ~= "string" then
@@ -1143,11 +1171,13 @@ local function Fire(...)
         if not goalId or not entry then return end
     end
     if action == "EquipBest" then
-        if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
+        if IsTowerInArena and IsTowerInArena() then return end
         if IsHalloweenActive() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
+        if isZoneTransitionLocked then return end
+        if isAutoSellingActive or isPetEnhanceRolling then return end
     end
     if action == "EquipDice" then
         if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then return end
@@ -2225,7 +2255,7 @@ if getgenv().CFG.Reward == nil then getgenv().CFG.Reward = true end
 if getgenv().CFG.Quest == nil then getgenv().CFG.Quest = true end
 if getgenv().CFG.AutoEquipBest == nil then getgenv().CFG.AutoEquipBest = true end
 
-local CFG = getgenv().CFG
+CFG = getgenv().CFG
 
 local function UpdateCFG(key, val)
     getgenv().CFG[key] = val
@@ -2605,10 +2635,8 @@ local function HandleAutoEquipBestToggle(V)
         isSyncingEquipToggle = false
     end
     if V then
-        task.spawn(function()
-            Fire("EquipBest")
-            Notify("🐾 สัตว์เลี้ยง", "เปิดระบบและสวมใส่ทีมที่ดีที่สุดเรียบร้อย!", 2)
-        end)
+        getgenv().NeedEquipBest = true
+        Notify("🐾 สัตว์เลี้ยง", "เปิดระบบ Auto Equip Best เรียบร้อย!", 2)
     end
 end
 
@@ -2622,8 +2650,13 @@ Tabs.Overview:AddButton({
     Title = "⭐ สวมใส่สัตว์เลี้ยงที่ดีที่สุดทันที (Equip Best Pets)",
     Description = "คำนวณและสวมใส่ทีมที่ดีที่สุดโดยอัตโนมัติ",
     Callback = function()
-        Fire("EquipBest")
-        Notify("⭐ สวมใส่สำเร็จ", "สวมใส่ทีมสัตว์เลี้ยงที่ดีที่สุดเรียบร้อย!", 3)
+        if isPetOperationMutex or isAutoSellingActive or isPetEnhanceRolling or getgenv().PetOperationMutex then
+            Notify("⚠️ กำลังทำรายการอื่น", "กำลังจัดการสัตว์เลี้ยงอยู่ จะสวมใส่ให้อัตโนมัติเมื่อพร้อม...", 2)
+            getgenv().NeedEquipBest = true
+            return
+        end
+        getgenv().NeedEquipBest = true
+        Notify("⭐ สวมใส่สัตว์เลี้ยง", "ส่งคำขอสวมใส่ทีมที่ดีที่สุดเรียบร้อย!", 2)
     end
 })
 
@@ -2782,6 +2815,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
     isPetOperationMutex = false
     getgenv().PetOperationMutex = false
     getgenv().LastPetOperationStartTime = 0
+    getgenv().NeedEquipBest = true
     pcall(function() if UpdateOverviewTab then UpdateOverviewTab() end end)
     
     if not success then
@@ -6095,7 +6129,7 @@ if #tradeItemList == 0 then
     tradeItemList = {"PotionLuck", "PotionCash", "PotionSpeed", "Gems", "Shards", "SuperRolls", "JackpotRolls", "LootBags"}
 end
 
-local TogSender, TogReceiver, TogAutoDropItems
+local TogSender, TogReceiver, TogAutoDropItems, TogAutoReady
 
 TogAutoDropItems = Tabs.Trade:AddToggle("TogAutoDropItems", {
     Title = "🎁 ส่งไอเทมทั้งหมดอัตโนมัติ (เฉพาะโหมดผู้ส่ง)",
@@ -6630,8 +6664,8 @@ Tabs.Settings:AddButton({
 -- 🔔 TAB 10: DISCORD WEBHOOK INVENTORY & STATS NOTIFICATION
 -- ==============================================================================
 local SendDiscordInventoryReport
-do -- TAB 10: DISCORD WEBHOOK
 local lastDiscordNotifyTick = 0
+do -- TAB 10: DISCORD WEBHOOK
 
 SendDiscordInventoryReport = function(isManual)
     local webhookUrl = tostring(CFG.DiscordWebhookUrl or ""):gsub("^%s*(.-)%s*$", "%1")
@@ -7065,18 +7099,9 @@ pcall(function()
                     UpdateMarketStatus()
                 end
                 
-                -- สวมใส่สัตว์เลี้ยงที่ดีที่สุดทันทีแบบเรียลไทม์ เมื่อได้รับสัตว์เลี้ยงใหม่หรือสัตว์เลี้ยงเปลี่ยน
+                -- แจ้งเตือนสถานะความต้องการสวมใส่สัตว์เลี้ยงที่ดีที่สุด (ไม่ยิง Remote โดยตรง ป้องกันคิวชนกัน 100%)
                 if CFG.AutoEquipBest and (syncData.Full or syncData.Pets or syncData.PetAdds or syncData.PetDels) then
-                    local now = tick()
-                    if now - lastEquipBestTick >= 1.0 then
-                        lastEquipBestTick = now
-                        task.spawn(function()
-                            Humanizer.Wait(0.2, 0.4)
-                            if getgenv().PetDiceScriptToken == scriptToken and CanRunGeneralFarm() then
-                                Fire("EquipBest")
-                            end
-                        end)
-                    end
+                    getgenv().NeedEquipBest = true
                 end
             end)
         end)
@@ -7500,12 +7525,12 @@ task.spawn(function()
     end
 end)
 
--- 6. Auto Equip Best Pets
+-- 6. Auto Equip Best Pets (Single-Threaded Mutex Guarded - 100% Anti-Kick & Error 267 Immune)
 task.spawn(function()
     local lastTotalPets = 0
     local lastPeriodicEquipTime = 0
     while true do
-        task.wait(2.5)
+        task.wait(1.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
@@ -7513,6 +7538,14 @@ task.spawn(function()
             CircuitBreaker.Execute("AutoEquipBest", function()
                 local data = State.Data
                 if not data or not data.Pets then return end
+                
+                -- อนุญาตให้ทำงานในโหมด Tower Away Mode ได้ แต่บล็อกเฉพาะขณะอยู่ใน 3D Arena
+                if IsTowerInArena and IsTowerInArena() then
+                    return
+                end
+                if not CanRunGeneralFarm() then
+                    return
+                end
                 
                 local currentTotal = 0
                 for _ in pairs(data.Pets) do currentTotal = currentTotal + 1 end
@@ -7524,32 +7557,57 @@ task.spawn(function()
                         maxEquipped = Stats.MaxEquipped(data) or 1
                     end
                 end)
-                if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then
-                    return
-                end
-                if not CanRunGeneralFarm() then
-                    return
-                end
                 
-                -- สแกนเรียลไทม์:
-                -- 1. มีสัตว์เลี้ยงใหม่เข้ามา (currentTotal ~= lastTotalPets)
-                -- 2. สัตว์เลี้ยงที่ใส่อยู่ยังไม่เต็มช่อง (equippedCount < maxEquipped)
-                -- 3. สัตว์เลี้ยงเพิ่งถูกอัปเกรดเลเวลล่าสุด (และเว้นระยะอย่างน้อย 8 วิ)
                 local now = tick()
                 local shouldEquip = false
-                if currentTotal ~= lastTotalPets then
+                
+                -- ตรวจสอบเงื่อนไขกระตุ้น:
+                -- 1. มีคำขอสวมใส่จากภายนอก (NeedEquipBest = true)
+                -- 2. จำนวนสัตว์เลี้ยงเปลี่ยน (มีสัตว์เลี้ยงใหม่หรือขายออก)
+                -- 3. สัตว์เลี้ยงที่สวมใส่อยู่ยังไม่เต็มโควต้า
+                -- 4. สัตว์เลี้ยงเพิ่งถูกอัปเกรดเลเวล/เกรด/บัฟ (เว้นระยะอย่างน้อย 6 วิ)
+                -- 5. สแกนตามรอบเวลา Periodic Check (ทุก 20 วินาที) เผื่อสเตตัสสัตว์เลี้ยงเปลี่ยน
+                if getgenv().NeedEquipBest == true then
                     shouldEquip = true
-                    lastTotalPets = currentTotal
+                elseif currentTotal ~= lastTotalPets then
+                    shouldEquip = true
                 elseif equippedCount < maxEquipped then
                     shouldEquip = true
-                elseif getgenv().LastPetUpgradedTime and (now - getgenv().LastPetUpgradedTime < 10.0) and (now - lastPeriodicEquipTime >= 8.0) then
+                elseif getgenv().LastPetUpgradedTime and (now - getgenv().LastPetUpgradedTime < 10.0) and (now - lastPeriodicEquipTime >= 6.0) then
+                    shouldEquip = true
+                elseif (now - lastPeriodicEquipTime >= 20.0) then
                     shouldEquip = true
                 end
                 
                 if shouldEquip then
-                    lastPeriodicEquipTime = now
-                    Fire("EquipBest")
-                    Humanizer.Wait(1.5, 2.5)
+                    -- ตั้ง Flag แจ้งให้ Loop อื่นๆ (AutoRollGrade, AutoRollTrait, AutoUpgrade) สละคิวรอ
+                    getgenv().NeedEquipBest = true
+                    
+                    -- รอให้คำสั่งที่กำลังส่งอยู่เสร็จสิ้น (ไม่เกิน 2.0 วินาที)
+                    local waitYield = 0
+                    while (isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive or isZoneTransitionLocked) and waitYield < 20 do
+                        task.wait(0.1)
+                        waitYield = waitYield + 1
+                    end
+                    
+                    -- ล็อค Pet Mutex ป้องกันระบบอื่นแทรกแซงขณะสวมใส่
+                    isPetOperationMutex = true
+                    getgenv().PetOperationMutex = true
+                    getgenv().LastPetOperationStartTime = tick()
+                    
+                    pcall(function()
+                        getgenv().NeedEquipBest = false
+                        lastTotalPets = currentTotal
+                        lastPeriodicEquipTime = tick()
+                        
+                        Fire("EquipBest")
+                        -- หน่วงเวลาให้เซิร์ฟเวอร์อัปเดตข้อมูลเสร็จสิ้นก่อนปลดล็อค Mutex
+                        Humanizer.Wait(1.8, 2.5)
+                    end)
+                    
+                    isPetOperationMutex = false
+                    getgenv().PetOperationMutex = false
+                    getgenv().LastPetOperationStartTime = 0
                 end
             end)
         end
@@ -8110,8 +8168,8 @@ task.spawn(function()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
         if CFG.AutoUpgradePetLevel then
-            if isPetOperationMutex or isAutoSellingActive then
-                task.wait(0.5)
+            if isPetOperationMutex or isAutoSellingActive or getgenv().NeedEquipBest then
+                task.wait(0.3)
                 continue
             end
             isPetOperationMutex = true
@@ -8175,6 +8233,7 @@ task.spawn(function()
                         waitAfter = 3.5
                     else
                         getgenv().LastPetUpgradedTime = tick()
+                        getgenv().NeedEquipBest = true
                         waitAfter = 1.5 -- หน่วงรอเซิร์ฟเวอร์อัปเดตข้อมูลสเตตัส
                     end
                 end)
@@ -8199,7 +8258,7 @@ task.spawn(function()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
         if CFG.AutoRollGrade then
-            if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive then
+            if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive or getgenv().NeedEquipBest then
                 task.wait(0.25)
                 continue
             end
@@ -8256,6 +8315,8 @@ task.spawn(function()
                         consecutiveRolls = 0
                         waitAfter = 3.0 -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือเพชรหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
                     else
+                        getgenv().LastPetUpgradedTime = tick()
+                        getgenv().NeedEquipBest = true
                         waitAfter = math.max(0.4, rollDelay) -- เว้นระยะระหว่างรอบสุ่ม
                     end
                 end)
@@ -8281,7 +8342,7 @@ task.spawn(function()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
         if CFG.AutoRollTrait then
-            if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive then
+            if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive or getgenv().NeedEquipBest then
                 task.wait(0.25)
                 continue
             end
@@ -8338,6 +8399,8 @@ task.spawn(function()
                         consecutiveRolls = 0
                         waitAfter = 3.0 -- เมื่อสัตว์เลี้ยงทั้งหมดถึงเป้าหมายหรือชาร์ดหมด พัก 3.0 วินาที ไม่ยิงซ้ำ
                     else
+                        getgenv().LastPetUpgradedTime = tick()
+                        getgenv().NeedEquipBest = true
                         waitAfter = math.max(0.4, rollDelay) -- เว้นระยะระหว่างรอบสุ่ม
                     end
                 end)
