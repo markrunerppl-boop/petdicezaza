@@ -3785,12 +3785,20 @@ local function SyncLiveTowerFromGame()
         LiveTower.InArena = isArena
         LiveTower.Away = isAway
         
+        -- ตรวจสอบชื่อหอคอยจาก State ของเกมเป็นอันดับแรก (Authoritative)
+        local data = State and State.Data
+        if data and data.TowerResume and data.TowerResume.Tower then
+            LiveTower.TowerId = data.TowerResume.Tower
+        end
+        
         local container = (isArena and battle) or tracker
         for _, lbl in ipairs(container:GetDescendants()) do
             if lbl:IsA("TextLabel") and lbl.Text ~= "" then
                 local txt = lbl.Text:upper()
+                -- ตรวจสอบชื่อหอคอยเฉพาะชื่อเต็มเท่านั้น (เช่น "INFINITY TOWER", "STORM TOWER")
+                -- ห้ามเช็ค t.Id เดี่ยวๆ เช่น "STORM" เพราะจะชนกับชื่อมอนสเตอร์/ธาตุจนทำให้ระบุหอคอยผิดพลาด
                 for _, t in ipairs(Towers.List or {}) do
-                    if txt:find(t.Name:upper(), 1, true) or (t.Id and txt:find(t.Id:upper(), 1, true)) then
+                    if txt:find(t.Name:upper(), 1, true) or txt:find(t.Id:upper() .. " TOWER", 1, true) then
                         LiveTower.TowerId = t.Id
                         break
                     end
@@ -4070,8 +4078,13 @@ SwitchOrStartTower = function(targetTowerId, force)
     end
     
     local nowTick = tick()
+    -- Hard Debounce: ป้องกันการส่งคำสั่งเริ่ม/สลับหอคอยซ้อนกันถี่เกินไป (ขั้นต่ำ 5.0 วินาทีเสมอ แม้จะส่ง force มาก็ตาม)
+    if (nowTick - lastTowerStartTick < 5.0) then
+        return false, "Rate limited (5s debounce)"
+    end
+    
     if isSwitchingTower then
-        if (nowTick - (LiveTower.SwitchingTick or 0) > 4.0) then
+        if (nowTick - (LiveTower.SwitchingTick or 0) > 5.0) then
             isSwitchingTower = false
         elseif not force then
             return false
@@ -4291,8 +4304,7 @@ Tabs.Tower:AddButton({
         task.delay(0.2, UpdateTowerStatus)
         if CFG.Tower then
             task.spawn(function()
-                local activeTower = GetActiveTowerId()
-                if not IsTowerRunning() or activeTower ~= "Infinity" then
+                if not IsTowerRunning() then
                     SwitchOrStartTower("Infinity", true)
                 end
             end)
@@ -4314,8 +4326,7 @@ DropdownTower = Tabs.Tower:AddDropdown("DropSelectTower", {
         task.delay(0.2, UpdateTowerStatus)
         if CFG.Tower then
             task.spawn(function()
-                local activeTower = GetActiveTowerId()
-                if not IsTowerRunning() or activeTower ~= id then
+                if not IsTowerRunning() then
                     SwitchOrStartTower(id, true)
                 end
             end)
@@ -4367,10 +4378,7 @@ TogTowerTower = Tabs.Tower:AddToggle("TogTower", {
                 end
                 
                 -- สั่งเริ่มหรือสลับหอคอยทันทีแบบ force = true
-                local started = SwitchOrStartTower(targetId, true)
-                if not started then
-                    StartTowerDirect(targetId)
-                end
+                SwitchOrStartTower(targetId, true)
                 task.delay(0.2, UpdateTowerStatus)
             end)
         else
@@ -7431,10 +7439,8 @@ task.spawn(function()
                     if not (IsWorldBossActive and IsWorldBossActive()) then
                         if isRunning then
                             consecutiveFailCount = 0
-                            -- หากกำลังลงหอคอยอื่นที่ไม่ตรงกับเป้าหมาย ให้เปลี่ยนมาลงหอคอยเป้าหมาย
-                            if activeId and activeId ~= targetId and not isSwitchingTower then
-                                SwitchOrStartTower(targetId, true)
-                            end
+                            -- [PROTECTION] หากกำลังลงหอคอยอยู่ ให้ปล่อยให้สู้ต่อไปจนจบรอบตามปกติ (ห้าม Abort/Switch กลางคันเด็ดขาด เพื่อป้องกัน Error 267)
+                            -- เมื่อจบรอบหรือตายแล้ว ระบบจะเริ่มหอคอยเป้าหมาย (targetId) ให้อัตโนมัติในบล็อกถัดไป
                             
                             -- ตรวจสอบและเปิด TowerAutoplay ของตัวเกมให้เป็นจริงเสมอ เพื่อการไต่ชั้นอย่างต่อเนื่อง
                             pcall(function()
