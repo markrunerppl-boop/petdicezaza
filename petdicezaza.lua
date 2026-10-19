@@ -757,6 +757,7 @@ getgenv().LastZoneTransitionTime = 0
 getgenv().LastPetUpgradedTime = 0
 getgenv().LastTradeRequestTime = 0
 getgenv().NeedEquipBest = false
+getgenv().IsEquipBestPending = false
 
 -- Trade Deferred Action Queue (จัดคิวคำสั่งอื่นที่เข้ามาขณะกำลังเทรด ให้รอทำตามลำดับหลังจากเทรดเสร็จ)
 local TradeDeferredQueue = {}
@@ -2923,6 +2924,9 @@ local function SafeUpdatePara(para, title, desc)
     end
 end
 
+local RebirthStatusPara
+local TreeStatusPara
+
 local function UpdateOverviewTab()
     pcall(function()
         local data = State.Data
@@ -3057,6 +3061,60 @@ local function UpdateOverviewTab()
                 string.format("🌟 สถานะ: %s | เกิดใหม่แล้ว: %s ครั้ง%s", CFG.AutoRebirth and "เปิดอัตโนมัติ" or "ปิดอยู่", Format.Commas(curRebirths), targetDesc),
                 string.format("💰 เงินปัจจุบัน: %s / ค่าเกิดใหม่: %s\n📌 ความคืบหน้า: %s", Format.Money(curMoney), Format.Money(cost), statusStr)
             )
+        end
+        
+        if TreeStatusPara then
+            local upgrades = data.Upgrades or {}
+            local curMoney = data.Money or 0
+            local fullyMaxed = 0
+            local unmaxedRevealed = {}
+            local minNextCost = nil
+            local cheapestName = nil
+            
+            if Upgrades and Upgrades.List then
+                for _, upg in ipairs(Upgrades.List) do
+                    local curLvl = (Upgrades.Level and Upgrades.Level(upgrades, upg.Id)) or (upgrades[upg.Id] or 0)
+                    local maxLvl = upg.Max or 1
+                    if maxLvl > 0 and curLvl < maxLvl then
+                        local isRev = Upgrades.Revealed and Upgrades.Revealed(upgrades, upg)
+                        if isRev then
+                            local cost = Upgrades.Cost and Upgrades.Cost(upg, curLvl)
+                            if cost then
+                                table.insert(unmaxedRevealed, { id = upg.Id, name = upg.Name, cost = cost })
+                                if not minNextCost or cost < minNextCost then
+                                    minNextCost = cost
+                                    cheapestName = upg.Name or upg.Id
+                                end
+                            end
+                        end
+                    else
+                        fullyMaxed = fullyMaxed + 1
+                    end
+                end
+            end
+            
+            local planned, totalCost = nil, 0
+            if Upgrades and Upgrades.PlanBuyAll then
+                pcall(function()
+                    planned, totalCost = Upgrades.PlanBuyAll(upgrades, curMoney, 50)
+                end)
+            end
+            
+            local canBuyCount = (planned and #planned) or 0
+            local statusTitle = string.format("🌳 สถานะต้นไม้: %s | ตันแล้ว: %d/%d สกิล", CFG.UpgradeTree and "เปิดวนซื้อ" or "ปิดอยู่", fullyMaxed, (Upgrades and Upgrades.List and #Upgrades.List) or 103)
+            local statusDesc = ""
+            
+            if canBuyCount > 0 then
+                statusDesc = string.format("✨ พร้อมซื้อทันที: %d รายการ (รวม %s)\n💰 เงินปัจจุบัน: %s | ระบบกำลังวนซื้ออัตโนมัติตามคิว", canBuyCount, Format and Format.Money and Format.Money(totalCost) or tostring(totalCost), Format and Format.Money and Format.Money(curMoney) or tostring(curMoney))
+            elseif #unmaxedRevealed > 0 and minNextCost then
+                local diff = math.max(0, minNextCost - curMoney)
+                local diffStr = diff > 0 and string.format(" (ขาดอีก %s)", Format and Format.Money and Format.Money(diff) or tostring(diff)) or ""
+                statusDesc = string.format("⏳ เงินยังไม่พอซื้อขั้นถัดไป | ขั้นต่ำ: %s (%s)%s\n💰 เงินปัจจุบัน: %s | กำลังฟาร์มเงินเพื่อซื้ออัตโนมัติ", Format and Format.Money and Format.Money(minNextCost) or tostring(minNextCost), cheapestName or "Next Tier", diffStr, Format and Format.Money and Format.Money(curMoney) or tostring(curMoney))
+            else
+                statusDesc = "🎉 ต้นไม้ทักษะอัปเกรดครบเต็มแม็กซ์ 100% แล้ว! (ไม่มีอัปเกรดเหลือให้ซื้อ)"
+            end
+            
+            SafeUpdatePara(TreeStatusPara, statusTitle, statusDesc)
         end
     end)
 end
@@ -4601,7 +4659,7 @@ end -- END TAB 3: TOWER & DICE
 -- ------------------------------------------------------------------------------
 Tabs.Rebirth:AddSection("🌟 เกิดใหม่อัตโนมัติ (Auto Rebirth)")
 
-local RebirthStatusPara = Tabs.Rebirth:AddParagraph({
+RebirthStatusPara = Tabs.Rebirth:AddParagraph({
     Title = "📊 สถานะการเกิดใหม่ (Rebirth Status): กำลังคำนวณ...",
     Content = "กำลังตรวจสอบจำนวน Rebirths และค่าใช้จ่าย..."
 })
@@ -4657,6 +4715,11 @@ Tabs.Rebirth:AddButton({
 })
 
 Tabs.Rebirth:AddSection("🌳 อัปเกรดต้นไม้ทักษะ (Skill Tree)")
+
+TreeStatusPara = Tabs.Rebirth:AddParagraph({
+    Title = "🌳 สถานะต้นไม้ทักษะ: กำลังคำนวณ...",
+    Content = "กำลังตรวจสอบจำนวนอัปเกรดและเลเวลสูงสุด..."
+})
 
 TogRebirthTree = Tabs.Rebirth:AddToggle("TogTree", {
     Title = "วนซื้ออัปเกรดต้นไม้ทั้งหมดอัตโนมัติ",
@@ -4723,7 +4786,7 @@ Tabs.Rebirth:AddButton({
         if Upgrades and Upgrades.PlanBuyAll then
             local planned, totalCost = Upgrades.PlanBuyAll(data.Upgrades, data.Money, 50)
             if not planned or #planned == 0 then
-                Notify("⚠️ ไม่มีอัปเกรด", "ไม่มีอัปเกรดที่สามารถซื้อได้ในขณะนี้", 3)
+                Notify("⚠️ ยังไม่มีอัปเกรดที่เงินพอซื้อ", "อัปเกรดที่ปลดล็อคแล้วราคาขั้นต่ำสูงกว่าเงินที่คุณมี (ระบบจะซื้อให้อัตโนมัติเมื่อเงินครบ)", 3)
                 return
             end
         end
@@ -7149,10 +7212,7 @@ pcall(function()
                     UpdateMarketStatus()
                 end
                 
-                -- แจ้งเตือนสถานะความต้องการสวมใส่สัตว์เลี้ยงที่ดีที่สุด (ไม่ยิง Remote โดยตรง ป้องกันคิวชนกัน 100%)
-                if CFG.AutoEquipBest and (syncData.Full or syncData.Pets or syncData.PetAdds or syncData.PetDels) then
-                    getgenv().NeedEquipBest = true
-                end
+                -- AutoEquipBest ตรวจสอบการเปลี่ยนแปลงจำนวนสัตว์เลี้ยงผ่าน Loop 6 อัตโนมัติ (ไม่เซ็ต NeedEquipBest รัว ป้องกันการแย่งคิว Loop 10/11/12)
             end)
         end)
     end
@@ -7648,8 +7708,8 @@ task.spawn(function()
                 end
                 
                 if shouldEquip then
-                    -- ตั้ง Flag แจ้งให้ Loop อื่นๆ (AutoRollGrade, AutoRollTrait, AutoUpgrade) สละคิวรอ
-                    getgenv().NeedEquipBest = true
+                    -- ตั้ง Flag แจ้งให้ Loop อื่นๆ (AutoRollGrade, AutoRollTrait, AutoUpgrade) สละคิวรอเฉพาะขณะสวมใส่
+                    getgenv().IsEquipBestPending = true
                     
                     -- รอให้คำสั่งที่กำลังส่งอยู่เสร็จสิ้น (ไม่เกิน 2.0 วินาที)
                     local waitYield = 0
@@ -7675,6 +7735,8 @@ task.spawn(function()
                     
                     isPetOperationMutex = false
                     getgenv().PetOperationMutex = false
+                    getgenv().IsEquipBestPending = false
+                    getgenv().NeedEquipBest = false
                     getgenv().LastPetOperationStartTime = 0
                 end
             end)
@@ -8236,7 +8298,7 @@ task.spawn(function()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
         if CFG.AutoUpgradePetLevel then
-            if isPetOperationMutex or isAutoSellingActive or getgenv().NeedEquipBest then
+            if isPetOperationMutex or isAutoSellingActive or getgenv().IsEquipBestPending then
                 task.wait(0.3)
                 continue
             end
@@ -8326,7 +8388,7 @@ task.spawn(function()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
         if CFG.AutoRollGrade then
-            if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive or getgenv().NeedEquipBest then
+            if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive or getgenv().IsEquipBestPending then
                 task.wait(0.25)
                 continue
             end
@@ -8410,7 +8472,7 @@ task.spawn(function()
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
         
         if CFG.AutoRollTrait then
-            if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive or getgenv().NeedEquipBest then
+            if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive or getgenv().IsEquipBestPending then
                 task.wait(0.25)
                 continue
             end
