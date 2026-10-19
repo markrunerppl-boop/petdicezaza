@@ -2748,9 +2748,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
             if sellFromStack > 0 then
                 toSell = toSell + sellFromStack
                 table.insert(currentBatchKeys, s.Key)
-                if sellFromStack < (totalInStack - info.equipped) then
-                    currentBatchAmounts[s.Key] = sellFromStack
-                end
+                currentBatchAmounts[s.Key] = sellFromStack
                 batchCount = batchCount + 1
                 if batchCount >= 18 then
                     table.insert(sellBatches, { keys = currentBatchKeys, amounts = currentBatchAmounts })
@@ -7123,10 +7121,9 @@ task.spawn(function()
                         Fire("SetAuto", true)
                         Humanizer.Wait(0.5, 0.8)
                     end
-                    -- เมื่อตัวเกมเปิดระบบ Native Auto Roll สำเร็จแล้ว ระบบของเกมจะทอยอัตโนมัติอย่างเป็นธรรมชาติ
-                    -- ตรวจสอบ Watchdog: หากตัวเกมหยุดทอยเกิน 3.5 วินาที จึงค่อยส่งคำสั่งทอยสำรอง (ป้องกัน Double Roll ชนกันบน UGPhone)
-                    local lastRollTime = LastRemoteFire["Roll"] or 0
-                    if not State.Rolling and (tick() - lastRollTime > 3.5) then
+                    -- เมื่อตัวเกมเปิดระบบ Native Auto Roll สำเร็จแล้ว เซิร์ฟเวอร์จะทอยให้อัตโนมัติ 100%
+                    -- ห้ามส่งคำสั่ง Roll ซ้ำเด็ดขาดขณะ State.Auto เป็นจริง เพื่อป้องกันการยิงชนกันและ Error 267
+                    if not State.Auto and not State.Rolling then
                         Fire("Roll")
                     end
                     Humanizer.Wait(1.5, 2.5)
@@ -7276,11 +7273,12 @@ task.spawn(function()
                                 Humanizer.Wait(1.0, 1.8)
                             end
                             
-                            -- Watchdog: ตรวจสอบกรณีติดค้าง (ตาม FloorTimeout ของเกมคือ 55 วินาที จึงใช้ 75 วินาทีเพื่อความปลอดภัย 100%)
-                            if LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 75.0) and (now - LastZoneTransitionTime > 5.0) then
+                            -- Watchdog: ตรวจสอบกรณีติดค้างเฉพาะเมื่ออยู่ในอารีน่า 3D จริงเท่านั้น
+                            -- (ใน Away Mode ตัวเกมแท้จะจัดการไต่ชั้นอัตโนมัติ 100% ไม่ต้องส่งคำสั่งกวน)
+                            if IsTowerInArena() and LiveTower.LastFloorTime and (now - LiveTower.LastFloorTime > 85.0) and (now - LastZoneTransitionTime > 6.0) then
                                 LiveTower.LastFloorTime = now
                                 Fire("TowerLeave")
-                                task.wait(1.0)
+                                task.wait(4.0)
                                 SwitchOrStartTower(targetId, true)
                             end
                         else
