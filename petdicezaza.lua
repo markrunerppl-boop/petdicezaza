@@ -552,6 +552,7 @@ local isTrickOrTreatMutex = false
 local isCollectingCandyMutex = false
 local wasInWorldBossFight = false
 local IsEnteringBossPortal = false
+local isWorldBossTransitioning = false
 
 local function IsTradeActive()
     return (IsInTrade and IsInTrade()) or (getgenv().TradeActiveSession == true) or (getgenv().CurrentTradeSession ~= nil) or (GetTradeWindow and GetTradeWindow() ~= nil) or ((getgenv().TradeLockedUntil or 0) > tick())
@@ -576,14 +577,14 @@ end
 
 local function IsWorldBossActive()
     local cfg = CFG or getgenv().CFG or {}
-    if cfg.AutoWorldBoss == false or cfg.PauseTowerForBoss == false then return false
-    end
+    if cfg.AutoWorldBoss == false then return false end
     
-    -- 1. ตัวละครกำลังอยู่ในบอสโลก กำลังเดินเข้าประตู หรืออยู่ในรอบต่อสู้
+    -- 1. ตัวละครกำลังอยู่ในบอสโลก กำลังเดินเข้าประตู อยู่ในรอบต่อสู้ หรือกำลังเดินทางกลับบ้าน
     local isJoined = (LocalPlayer and LocalPlayer:GetAttribute("WorldBossJoined") == true) or 
                      (LocalPlayer and LocalPlayer:GetAttribute("InWorldBoss") == true) or 
                      (IsEnteringBossPortal == true) or 
-                     (wasInWorldBossFight == true)
+                     (wasInWorldBossFight == true) or
+                     (isWorldBossTransitioning == true)
     if isJoined then return true end
     
     -- 2. ตัวเกมอยู่ในช่วงเปิดรับสมัคร (Joining) หรือกำลังต่อสู้จริงในเซิร์ฟเวอร์ (Fighting)
@@ -1010,6 +1011,9 @@ Fire = function(...)
         end
     end
     if action == "TowerExit" then
+        if IsWorldBossActive and IsWorldBossActive() then
+            return -- บอสโลกทำงาน ไม่ส่งคำสั่ง TowerExit
+        end
         local pg = LocalPlayer:FindFirstChild("PlayerGui")
         local hud = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root") and pg.PetDiceUI.Root:FindFirstChild("Hud")
         local inArenaUi = hud and hud:FindFirstChild("Battle") and hud.Battle.Visible
@@ -7548,9 +7552,13 @@ task.spawn(function()
             if IsWorldBossActive and IsWorldBossActive() then
                 LiveTower.Active = false
                 LiveTower.Starting = false
-                if IsTowerRunning and IsTowerRunning() then
+                if IsTowerRunning and IsTowerRunning() and not isWorldBossTransitioning then
+                    isWorldBossTransitioning = true
+                    Notify("🏰 หอคอย", "พักหอคอยชั่วคราวเพื่อเตรียมตัวสู้บอสโลก...", 2)
                     Fire("TowerLeave")
-                    Humanizer.Wait(1.0, 1.5)
+                    task.delay(3.0, function()
+                        isWorldBossTransitioning = false
+                    end)
                 end
                 return
             end
@@ -7681,16 +7689,18 @@ task.spawn(function()
         if bossJustEnded then
             wasInBoss = false
             wasInWorldBossFight = false
+            isWorldBossTransitioning = true
             task.wait(1.5)
             pcall(function()
                 Fire("Teleport", "Home")
             end)
             Humanizer.Wait(2.5, 3.5)
             LastZoneTransitionTime = tick()
+            isWorldBossTransitioning = false
             Notify("🏰 หอคอย", "จบศึกบอสโลกเรียบร้อย กลับถึงบ้านแล้ว เริ่มลงหอคอยต่อทันที...", 3)
             if CFG.Tower and SwitchOrStartTower then
                 task.spawn(function()
-                    task.wait(0.5)
+                    task.wait(1.0)
                     local targetId = (ResolveTowerId and ResolveTowerId(CFG.SelectedTower)) or "Infinity"
                     SwitchOrStartTower(targetId, true)
                 end)
@@ -7727,10 +7737,13 @@ task.spawn(function()
                                 -- ถ้ายังไม่ปลดล็อค ไม่ต้องออกจากหอคอย ไม่ต้องเดินไปประตูบอสโลก ให้ฟาร์มหอคอยต่อไปอย่างปลอดภัย 100%
                                 if not isBossUnlocked then return end
                                 
-                                -- 1. พักหอคอยก่อนเพื่อให้สัตว์เลี้ยงว่างพร้อมตีบอส
-                                if CFG.PauseTowerForBoss and IsTowerRunning() then
-                                    Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อเตรียมตัวสู้บอสโลก...", 2)
-                                    Fire("TowerLeave")
+                                -- 1. พักหอคอยก่อนเพื่อให้สัตว์เลี้ยงว่างพร้อมตีบอส (Priority 2 เหนือกว่า Priority 4)
+                                if IsTowerRunning and IsTowerRunning() then
+                                    Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อให้สัตว์เลี้ยงพร้อมสู้บอสโลก...", 2)
+                                    if not isWorldBossTransitioning then
+                                        isWorldBossTransitioning = true
+                                        Fire("TowerLeave")
+                                    end
                                     LiveTower.Active = false
                                     LiveTower.Starting = false
                                     LiveTower.LastEventTime = 0
@@ -7739,7 +7752,8 @@ task.spawn(function()
                                     while IsTowerRunning() and (tick() - leaveWaitStart < 4.0) do
                                         task.wait(0.2)
                                     end
-                                    Humanizer.Wait(2.0, 3.0)
+                                    isWorldBossTransitioning = false
+                                    Humanizer.Wait(1.5, 2.5)
                                     LastZoneTransitionTime = tick()
                                 end
                                 
