@@ -14,9 +14,9 @@ if getgenv().PetDiceScriptStarting and (tick() - getgenv().PetDiceScriptStarting
 end
 getgenv().PetDiceScriptStarting = tick()
 
-if not game:IsLoaded() then 
-    pcall(function() game.Loaded:Wait() end)
-    getgenv().PetDiceScriptStarting = tick() -- อัปเดตเวลาหลังโหลดแมพเสร็จ
+-- 1. ป้องกันการรันบนหน้า Desktop App Lobby / Home Screen (PlaceId == 0) หรือเกมอื่น
+if not game.PlaceId or game.PlaceId == 0 then
+    return
 end
 
 local Players = game:GetService("Players")
@@ -28,6 +28,16 @@ if not PET_DICE_PLACE_IDS[game.PlaceId] and not RS:FindFirstChild("PetDice") the
     -- ไม่ใช่เกม Pet Dice ข้ามการทำงานอัตโนมัติทันที ป้องกัน Infinite Yield และการรบกวนเกมอื่น
     return
 end
+
+-- 2. รอโหลดแมพแบบมี Safety Timeout สูงสุด 20 วินาที (ป้องกันการค้างถาวร)
+if not game:IsLoaded() then 
+    local waitStart = tick()
+    while not game:IsLoaded() and (tick() - waitStart < 20) do
+        task.wait(0.2)
+    end
+    getgenv().PetDiceScriptStarting = tick() -- อัปเดตเวลาหลังโหลดแมพเสร็จ
+end
+
 local CG = game:GetService("CoreGui")
 local HS = game:GetService("HttpService")
 local GuiService = game:GetService("GuiService")
@@ -39,10 +49,16 @@ local State
 local Fire
 local VERIFIED_GAME_PLACE_VERSION = 172
 
+-- 3. รอ LocalPlayer แบบมี Safety Timeout (สูงสุด 15 วินาที)
 local LocalPlayer = Players.LocalPlayer
-while not LocalPlayer do
+local lpWait = tick()
+while not LocalPlayer and (tick() - lpWait < 15) do
     task.wait(0.1)
     LocalPlayer = Players.LocalPlayer
+end
+if not LocalPlayer then
+    warn("[PetDice] LocalPlayer not found within 15s timeout.")
+    return
 end
 
 local Character = LocalPlayer.Character
@@ -376,9 +392,22 @@ task.spawn(function()
 end)
 
 -- โหลดโมดูลภายในของเกม Pet Dice
-local PetDice = RS:WaitForChild("PetDice")
-local Action = PetDice:WaitForChild("Remotes"):WaitForChild("Action")
-local TradeRemote = PetDice:WaitForChild("Remotes"):WaitForChild("Trade")
+local PetDice = RS:WaitForChild("PetDice", 25)
+if not PetDice then
+    warn("[PetDice] Timeout waiting for PetDice folder in ReplicatedStorage.")
+    return
+end
+local Remotes = PetDice:WaitForChild("Remotes", 15)
+if not Remotes then
+    warn("[PetDice] Timeout waiting for Remotes.")
+    return
+end
+local Action = Remotes:WaitForChild("Action", 15)
+local TradeRemote = Remotes:WaitForChild("Trade", 15)
+if not Action then
+    warn("[PetDice] Timeout waiting for Action Remote.")
+    return
+end
 
 State = require(PetDice.Client.Core.State)
 local Stats = require(PetDice.Logic.Stats)
