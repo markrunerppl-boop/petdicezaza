@@ -91,10 +91,8 @@ pcall(function()
     end
     local cg = game:GetService("CoreGui")
     for _, gui in ipairs(cg:GetChildren()) do
-        if gui:IsA("ScreenGui") and (gui.Name == "ScreenGui" or gui.Name == "Fluent") then
-            if gui:FindFirstChild("Main") or gui:FindFirstChild("Holder") or gui:FindFirstChild("Window") then
-                pcall(function() gui:Destroy() end)
-            end
+        if gui:IsA("ScreenGui") and (gui.Name == "PetDiceFluentGui" or gui.Name:find("Fluent") or gui.Name:find("Rayfield")) then
+            pcall(function() gui:Destroy() end)
         end
     end
     local pg = LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui")
@@ -359,10 +357,12 @@ local function CheckStructuralIntegrity()
     return true
 end
 
--- ตรวจสอบความปลอดภัยครั้งแรกทันทีตอนเริ่มสคริปต์
+-- ตรวจสอบความปลอดภัยครั้งแรกทันทีตอนเริ่มสคริปต์ (ทำงานแบบ Non-blocking Async ไม่บล็อกการโหลด UI)
 CheckGamePatch()
-CheckCloudSecurity()
-CheckStructuralIntegrity()
+task.spawn(function()
+    pcall(CheckCloudSecurity)
+    pcall(CheckStructuralIntegrity)
+end)
 
 -- Instant Sentinel: ดักจับการอัปเดต PlaceVersion แบบเสี้ยววินาที (0.0001s)
 pcall(function()
@@ -427,10 +427,30 @@ local Market = PetDice.Logic:FindFirstChild("Market") and require(PetDice.Logic.
 local WorldBossConfig = PetDice.Configs:FindFirstChild("WorldBossConfig") and require(PetDice.Configs.WorldBossConfig) or nil
 local ScheduleConfig = PetDice.Configs:FindFirstChild("ScheduleConfig") and require(PetDice.Configs.ScheduleConfig) or nil
 local CombatConfig = PetDice.Configs:FindFirstChild("CombatConfig") and require(PetDice.Configs.CombatConfig) or nil
-local LootBagController = (PetDice.Client:FindFirstChild("Cutscenes") and PetDice.Client.Cutscenes:FindFirstChild("LootBagController") and require(PetDice.Client.Cutscenes.LootBagController)) or nil
-local CutsceneDirector = (PetDice.Client:FindFirstChild("Cutscenes") and PetDice.Client.Cutscenes:FindFirstChild("CutsceneDirector") and require(PetDice.Client.Cutscenes.CutsceneDirector)) or nil
-local HalloweenConfig = (PetDice.Configs:FindFirstChild("HalloweenConfig") and require(PetDice.Configs.HalloweenConfig)) or { Goals = {}, Items = {} }
-local HalloweenShopConfig = (PetDice.Configs:FindFirstChild("HalloweenShopConfig") and require(PetDice.Configs.HalloweenShopConfig)) or {}
+local LootBagController = nil
+pcall(function()
+    if PetDice.Client:FindFirstChild("Cutscenes") and PetDice.Client.Cutscenes:FindFirstChild("LootBagController") then
+        LootBagController = require(PetDice.Client.Cutscenes.LootBagController)
+    end
+end)
+local CutsceneDirector = nil
+pcall(function()
+    if PetDice.Client:FindFirstChild("Cutscenes") and PetDice.Client.Cutscenes:FindFirstChild("CutsceneDirector") then
+        CutsceneDirector = require(PetDice.Client.Cutscenes.CutsceneDirector)
+    end
+end)
+local HalloweenConfig = { Goals = {}, Items = {} }
+pcall(function()
+    if PetDice.Configs:FindFirstChild("HalloweenConfig") then
+        HalloweenConfig = require(PetDice.Configs.HalloweenConfig)
+    end
+end)
+local HalloweenShopConfig = {}
+pcall(function()
+    if PetDice.Configs:FindFirstChild("HalloweenShopConfig") then
+        HalloweenShopConfig = require(PetDice.Configs.HalloweenShopConfig)
+    end
+end)
 
 -- ==============================================================================
 -- [HALLOWEEN CANDY STORM EVENT TRACKER & REMOTES]
@@ -2330,7 +2350,7 @@ pcall(function()
     local safeContainer = (gethui and gethui()) or CG
     if safeContainer then
         for _, c in ipairs(safeContainer:GetChildren()) do
-            if c:IsA("ScreenGui") and (c.Name == "ScreenGui" or c.Name == "Fluent") then
+            if c:IsA("ScreenGui") and (c.Name == "PetDiceFluentGui" or c.Name:find("Fluent") or c.Name:find("Rayfield")) then
                 pcall(function() c:Destroy() end)
             end
         end
@@ -2415,6 +2435,9 @@ do
     })
     getgenv().PetDiceWindow = Window
     getgenv().PetDiceFluentGui = Window and Window.Root
+    if Window and Window.Root then
+        pcall(function() Window.Root.Name = "PetDiceFluentGui" end)
+    end
 
     -- Fix transparency: Make background 100% solid dark and high contrast for crystal clear readability
     local function ApplySolidWindowStyle(win)
@@ -3213,6 +3236,7 @@ end)
 -- ------------------------------------------------------------------------------
 -- ⭐ TAB 2: ENHANCE & ROLL BUFFS
 -- ------------------------------------------------------------------------------
+task.wait()
 Tabs.Enhance:AddSection("⚙️ ตั้งค่าสัตว์เลี้ยงและเป้าหมาย")
 
 do
@@ -3605,6 +3629,7 @@ Tabs.Enhance:AddToggle("TogAutoPetTrait", {
 -- ------------------------------------------------------------------------------
 -- 🏰 TAB 3: TOWER & DICE
 -- ------------------------------------------------------------------------------
+task.wait()
 local GetActiveTowerId
 local SafeWalkToBossPortal
 -- isSwitchingTower forward declared
@@ -4876,6 +4901,7 @@ end -- END TAB 3: TOWER & DICE
 -- ------------------------------------------------------------------------------
 -- 🔄 TAB 4: REBIRTH & SKILL TREE
 -- ------------------------------------------------------------------------------
+task.wait()
 Tabs.Rebirth:AddSection("🌟 เกิดใหม่อัตโนมัติ (Auto Rebirth)")
 
 RebirthStatusPara = Tabs.Rebirth:AddParagraph({
@@ -5017,6 +5043,7 @@ Tabs.Rebirth:AddButton({
 -- ------------------------------------------------------------------------------
 -- 🧪 TAB 5: POTIONS & CONSUMABLES
 -- ------------------------------------------------------------------------------
+task.wait()
 local UpdatePotionStatus
 local UpdateMarketStatus
 do -- TAB 5: POTIONS & CONSUMABLES
@@ -5261,6 +5288,7 @@ end -- END TAB 5: POTIONS & CONSUMABLES
 -- ------------------------------------------------------------------------------
 -- 🌙 TAB 6: EXPEDITIONS & QUESTS
 -- ------------------------------------------------------------------------------
+task.wait()
 local UpdateExpeditionStatus
 local GetBestExpeditionPets
 local ClaimAllDoneExpeditions
@@ -5699,6 +5727,7 @@ end -- END TAB 6: EXPEDITIONS & QUESTS
 
 -- 🎃 TAB 7: HALLOWEEN EVENT
 -- ------------------------------------------------------------------------------
+task.wait()
 do -- TAB 7: HALLOWEEN EVENT
 Tabs.Halloween:AddSection("🎃 กิจกรรมฮาโลวีน (Halloween Event)")
 
@@ -6386,6 +6415,7 @@ end -- END TAB 7: HALLOWEEN EVENT
 -- ------------------------------------------------------------------------------
 -- 🤝 TAB 8: SAFE AUTO TRADE
 -- ------------------------------------------------------------------------------
+task.wait()
 local PutSafeTwoWayTradeItem
 local IsAllowedTradeSender
 local RespondAcceptTrade
@@ -6856,6 +6886,7 @@ end -- END TAB 8: SAFE AUTO TRADE
 -- ------------------------------------------------------------------------------
 -- 🛡️ TAB 9: SAFETY & SETTINGS
 -- ------------------------------------------------------------------------------
+task.wait()
 Tabs.Settings:AddSection("🛡️ ข้อมูลระบบความปลอดภัย (Security Dashboard)")
 
 Tabs.Settings:AddParagraph({
@@ -6995,6 +7026,7 @@ Tabs.Settings:AddButton({
 -- ==============================================================================
 -- 🔔 TAB 10: DISCORD WEBHOOK INVENTORY & STATS NOTIFICATION
 -- ==============================================================================
+task.wait()
 local SendDiscordInventoryReport
 local lastDiscordNotifyTick = 0
 do -- TAB 10: DISCORD WEBHOOK
@@ -7360,6 +7392,7 @@ Tabs.Discord:AddParagraph({
 })
 end -- END TAB 10: DISCORD WEBHOOK
 
+task.wait()
 Window:SelectTab(1)
 
 -- ==============================================================================
