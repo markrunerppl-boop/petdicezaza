@@ -7017,7 +7017,7 @@ SendDiscordInventoryReport = function(isManual)
 
     local function fmtComma(n)
         local s = tostring(math.floor(tonumber(n) or 0))
-        return s:reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", "")
+        return (s:reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", ""))
     end
     
     local playHours = math.floor((data.PlaySeconds or 0) / 3600)
@@ -8424,8 +8424,8 @@ task.spawn(function()
                 them = session and session.Them
                 
                 -- ตรวจสอบสถานะปุ่ม Ready จริงของเกม
-                local readyBtnFace, readyStatusText = GetTradeReadyButton()
-                local cleanStatus = string.upper(string.gsub(readyStatusText or "", "%s+", ""))
+                local _, readyStatusText = GetTradeReadyButton()
+                local cleanStatus = string.upper((string.gsub(readyStatusText or "", "%s+", "")))
                 
                 -- ถ้าปุ่มอยู่ในสถานะรอคูลดาวน์ (เช่น "WAIT 3", "WAIT 2", "WAIT 1") ให้รอจนกว่าคูลดาวน์หมด
                 local isLocked = cleanStatus:find("WAIT") or (getgenv().TradeLockedUntil and tick() < getgenv().TradeLockedUntil)
@@ -8474,7 +8474,7 @@ task.spawn(function()
                         -- Re-check confirmation before sending
                         if IsInTrade() then
                             local readyFaceNow, textNow = GetTradeReadyButton()
-                            local cleanNow = string.upper(string.gsub(textNow or "", "%s+", ""))
+                            local cleanNow = string.upper((string.gsub(textNow or "", "%s+", "")))
                             local curSession = getgenv().CurrentTradeSession
                             local curYou = curSession and curSession.You
                             if (cleanNow == "" or cleanNow:find("READY")) and not cleanNow:find("UNREADY") and not cleanNow:find("WAIT") and (not curYou or not curYou.Ready) then
