@@ -316,7 +316,7 @@ local function CheckCloudSecurity()
         end
         
         if raw and type(raw) == "string" and raw:find("{") then
-            local ok, cfg = pcall(function(); return HS:JSONDecode(raw) end)
+            local ok, cfg = pcall(function() return HS:JSONDecode(raw) end)
             if ok and cfg then
                 if cfg.kill_switch_active == true or cfg.safe == false then
                     getgenv().EmergencyCloudHalt = true
@@ -859,7 +859,7 @@ IsFeatureUnlocked = function(featureName, idName)
     if not u then return false end
     local openByFunc = false
     if Upgrades and Upgrades.IsOpen then
-        local ok, res = pcall(function(); return Upgrades.IsOpen(u, featureName) end)
+        local ok, res = pcall(function() return Upgrades.IsOpen(u, featureName) end)
         if ok and res == true then openByFunc = true end
     end
     local openById = (u[idName] or 0) > 0 or (u[featureName] or 0) > 0; return openByFunc == true or openById == true
@@ -1803,7 +1803,7 @@ end
 -- 🎃 HALLOWEEN HELPER FUNCTIONS (Pawcula & Candy Storm Engine)
 -- ==============================================================================
 local function GetCurrentTimestamp()
-    local ok, t = pcall(function(); return workspace:GetServerTimeNow() end)
+    local ok, t = pcall(function() return workspace:GetServerTimeNow() end)
     if ok and t then return t end
     return os.time()
 end
@@ -2332,7 +2332,7 @@ pcall(function()
     if isfile and readfile and isfile("fluent.lua") then
         local localSrc = readfile("fluent.lua")
         if localSrc and #localSrc > 1000 then
-            local ok, res = pcall(function(); return loadstring(localSrc)() end)
+            local ok, res = pcall(function() return loadstring(localSrc)() end)
             if ok and res and type(res) == "table" and res.CreateWindow then
                 Fluent = res
             end
@@ -2369,7 +2369,7 @@ if not Fluent then
     for _, url in ipairs(fluentUrls) do
         local src = FetchFluentSource(url)
         if src and #src > 1000 then
-            local ok, res = pcall(function(); return loadstring(src)() end)
+            local ok, res = pcall(function() return loadstring(src)() end)
             if ok and res and type(res) == "table" and res.CreateWindow then
                 Fluent = res
                 pcall(function()
@@ -2562,6 +2562,7 @@ local TogOverviewTower, TogTowerTower
 local TogOverviewAutoRebirth, TogRebirthAutoRebirth
 local TogOverviewRewards, TogExpeditionRewards
 local isSyncingMasterToggles = false
+local isUIInitializing = true
 
 local function HandleMasterToggle(key, val, t1, t2, onNotifyTitle, onNotifyMsg, offNotifyMsg)
     UpdateCFG(key, val)
@@ -2573,10 +2574,12 @@ local function HandleMasterToggle(key, val, t1, t2, onNotifyTitle, onNotifyMsg, 
         end)
         isSyncingMasterToggles = false
     end
-    if val then
-        if onNotifyTitle and onNotifyMsg then Notify(onNotifyTitle, onNotifyMsg, 2) end
-    else
-        if onNotifyTitle and offNotifyMsg then Notify(onNotifyTitle, offNotifyMsg, 2) end
+    if not isUIInitializing then
+        if val then
+            if onNotifyTitle and onNotifyMsg then Notify(onNotifyTitle, onNotifyMsg, 2) end
+        else
+            if onNotifyTitle and offNotifyMsg then Notify(onNotifyTitle, offNotifyMsg, 2) end
+        end
     end
 end
 
@@ -2585,6 +2588,7 @@ TogOverviewAutoPlay = Tabs.Overview:AddToggle("TogAutoPlayOverview", {
     Default = CFG.AutoPlay,
     Callback = function(V)
         HandleMasterToggle("AutoPlay", V, TogOverviewAutoPlay, TogTowerAutoPlay, "🎲 กลิ้งลูกเต๋า", "เปิดระบบทอยลูกเต๋าอัตโนมัติแล้ว!", "ปิดระบบทอยลูกเต๋าแล้ว")
+        if isUIInitializing or isSyncingMasterToggles then return end
         if V then
             task.spawn(function()
                 local data = State.Data
@@ -2622,6 +2626,7 @@ TogOverviewTower = Tabs.Overview:AddToggle("TogTowerOverview", {
     Default = CFG.Tower,
     Callback = function(V)
         HandleMasterToggle("Tower", V, TogOverviewTower, TogTowerTower, "🏰 หอคอย", "เปิดระบบลงหอคอยอัตโนมัติแล้ว!", "ปิดระบบลงหอคอยแล้ว")
+        if isUIInitializing or isSyncingMasterToggles then return end
         if V and (not IsFeatureUnlocked or IsFeatureUnlocked("Towers", "towers")) then
             task.spawn(function()
                 task.wait(0.2)
@@ -3941,15 +3946,21 @@ ExitArenaCleanly = function(reason)
 end
 getgenv().ExitArenaCleanly = ExitArenaCleanly
 
+local isLeavingTowerCleanly = false
 LeaveTowerCleanly = function(reason)
+    if isLeavingTowerCleanly then return end
+    isLeavingTowerCleanly = true
+
     -- 1. ปิด Master Config และ Sync สวิตช์ UI ทั้งหมดทันที 100% ป้องกัน Loop 1 กลับมาสตาร์ท
     UpdateCFG("Tower", false)
-    if TogTowerTower and TogTowerTower.SetValue then 
+    isSyncingMasterToggles = true
+    if TogTowerTower and TogTowerTower.SetValue and TogTowerTower.Value ~= false then 
         pcall(function() TogTowerTower:SetValue(false) end) 
     end
-    if TogOverviewTower and TogOverviewTower.SetValue then 
+    if TogOverviewTower and TogOverviewTower.SetValue and TogOverviewTower.Value ~= false then 
         pcall(function() TogOverviewTower:SetValue(false) end) 
     end
+    isSyncingMasterToggles = false
     isSwitchingTower = false
     lastLoopStartAttempt = tick() + 10.0 -- หน่วง Loop 1 ไว้อย่างน้อย 10 วินาที
 
@@ -4058,6 +4069,7 @@ LeaveTowerCleanly = function(reason)
         task.delay(0.2, function()
             if UpdateTowerStatus then UpdateTowerStatus() end
         end)
+        isLeavingTowerCleanly = false
     end)
 end
 getgenv().LeaveTowerCleanly = LeaveTowerCleanly
@@ -4536,6 +4548,7 @@ TogTowerTower = Tabs.Tower:AddToggle("TogTower", {
             pcall(function() TogOverviewTower:SetValue(V) end)
             isSyncingMasterToggles = false
         end
+        if isUIInitializing or isSyncingMasterToggles then return end
         if V then
             task.spawn(function()
                 -- ล้างค่าสถานะค้างทั้งหมด ให้พร้อมเริ่มทันที
@@ -6925,7 +6938,7 @@ Tabs.Settings:AddButton({
                 local url = "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua?t=" .. tostring(tick()); return game:HttpGet(url)
             end)
             if not success or not newCode or #newCode < 1000 then
-                success, newCode = pcall(function(); return game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua")
+                success, newCode = pcall(function() return game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua")
                 end)
             end
             if success and newCode and #newCode > 1000 then
@@ -7231,7 +7244,7 @@ SendDiscordInventoryReport = function(isManual)
     end
     
     task.spawn(function()
-        local ok, res = pcall(function(); return req({
+        local ok, res = pcall(function() return req({
                 Url = webhookUrl,
                 Method = "POST",
                 Headers = {
@@ -8505,7 +8518,8 @@ task.spawn(function()
                     
                     -- ตรวจสอบว่าปลดล็อคระบบอัปเลเวลในต้นไม้ทักษะแล้วหรือไม่ ("PetUpgrades" / "petup")
                     if not IsFeatureUnlocked("PetUpgrades", "petup") then
-                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด; return
+                        waitAfter = 6.0
+                        return
                     end
                     
                     local cap = Stats.PetLevelCap(data.Upgrades)
@@ -8592,7 +8606,8 @@ task.spawn(function()
                     
                     -- ตรวจสอบว่าปลดล็อคระบบเกรดในต้นไม้ทักษะแล้วหรือไม่ ("Grades" / "grades")
                     if not IsFeatureUnlocked("Grades", "grades") then
-                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด; return
+                        waitAfter = 6.0
+                        return
                     end
                     
                     local targetRank = CFG.TargetGradeRank or 8
@@ -8673,7 +8688,8 @@ task.spawn(function()
                     
                     -- ตรวจสอบว่าปลดล็อคระบบ Trait (บัฟ) ในต้นไม้ทักษะแล้วหรือไม่ ("Traits" / "traits")
                     if not IsFeatureUnlocked("Traits", "traits") then
-                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด; return
+                        waitAfter = 6.0
+                        return
                     end
                     
                     local targetRank = CFG.TargetTraitRank or 6
@@ -8989,6 +9005,7 @@ getgenv().PetDiceStartTower = function(towerId)
     local targetId = ResolveTowerId(towerId or CFG.SelectedTower); return SwitchOrStartTower(targetId, true)
 end
 
+isUIInitializing = false
 getgenv().PetDiceScriptLoaded = true
 getgenv().PetDiceScriptStarting = nil
 getgenv().PetDiceNotify = Notify
