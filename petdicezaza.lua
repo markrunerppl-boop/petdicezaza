@@ -15,7 +15,7 @@ end
 getgenv().PetDiceScriptStarting = tick()
 
 -- 1. ป้องกันการรันบนหน้า Desktop App Lobby / Home Screen (PlaceId == 0) หรือเกมอื่น
-if not game.PlaceId or game.PlaceId == 0 then; return
+if not game.PlaceId or game.PlaceId == 0 then return
 end
 
 local Players = game:GetService("Players")
@@ -137,7 +137,7 @@ pcall(function()
     task.spawn(function()
         while true do
             task.wait(math.random(480, 720))
-            if getgenv().PetDiceAntiAFKConn == nil then; break end
+            if getgenv().PetDiceAntiAFKConn == nil then break end
             pcall(function()
                 VirtualUser:CaptureController()
                 VirtualUser:ClickButton2(GetNaturalViewportClickPos())
@@ -576,7 +576,7 @@ end
 
 local function IsWorldBossActive()
     local cfg = CFG or getgenv().CFG or {}
-    if cfg.AutoWorldBoss == false or cfg.PauseTowerForBoss == false then; return false
+    if cfg.AutoWorldBoss == false or cfg.PauseTowerForBoss == false then return false
     end
     
     -- 1. ตัวละครกำลังอยู่ในบอสโลก กำลังเดินเข้าประตู หรืออยู่ในรอบต่อสู้
@@ -866,7 +866,7 @@ IsFeatureUnlocked = function(featureName, idName)
 end
 
 local function FlushTradeDeferredQueue()
-    if isFlushingTradeQueue or #TradeDeferredQueue == 0 then; return end
+    if isFlushingTradeQueue or #TradeDeferredQueue == 0 then return end
     isFlushingTradeQueue = true
     task.spawn(function()
         pcall(function()
@@ -971,13 +971,13 @@ Fire = function(...)
     end
 
     -- 2. ป้องกันฟีเจอร์ที่ยังไม่ปลดล็อค 100% (ป้องกัน Error 267 จากการส่งคำสั่งที่เซิร์ฟเวอร์ปฏิเสธ)
-    if action == "RollGrade" and not IsFeatureUnlocked("Grades", "grades") then; return
+    if action == "RollGrade" and not IsFeatureUnlocked("Grades", "grades") then return
     end
-    if action == "RollTrait" and not IsFeatureUnlocked("Traits", "traits") then; return
+    if action == "RollTrait" and not IsFeatureUnlocked("Traits", "traits") then return
     end
-    if (action == "UpgradePet" or action == "UpgradePetLevels") and not IsFeatureUnlocked("PetUpgrades", "petup") then; return
+    if (action == "UpgradePet" or action == "UpgradePetLevels") and not IsFeatureUnlocked("PetUpgrades", "petup") then return
     end
-    if (action == "SendExpedition" or action == "ClaimExpedition") and not IsFeatureUnlocked("Expeditions", "expeditions") then; return
+    if (action == "SendExpedition" or action == "ClaimExpedition") and not IsFeatureUnlocked("Expeditions", "expeditions") then return
     end
     if action == "TowerStart" then
         if not IsFeatureUnlocked("Towers", "towers") then
@@ -985,7 +985,7 @@ Fire = function(...)
         end
         local towerId = args[2]
         local team = args[3]
-        if not towerId or not team or type(team) ~= "table" or #team == 0 then; return -- ไม่มีหอคอยหรือไม่มีสัตว์เลี้ยงในทีม ไม่ส่งเด็ดขาด ป้องกัน Error 267
+        if not towerId or not team or type(team) ~= "table" or #team == 0 then return -- ไม่มีหอคอยหรือไม่มีสัตว์เลี้ยงในทีม ไม่ส่งเด็ดขาด ป้องกัน Error 267
         end
         if IsHalloweenActive() then
             return -- ห้ามเริ่มหอคอยเด็ดขาดหากกิจกรรมฮาโลวีนหรือพายุลูกกวาดกำลังทำงาน (Priority 3 เหนือกว่า Priority 4)
@@ -993,7 +993,7 @@ Fire = function(...)
         if IsWorldBossActive and IsWorldBossActive() then
             return -- ป้องกันการเริ่มหอคอยระหว่างศึกบอสโลก (Priority 2 เหนือกว่า Priority 4)
         end
-        if (LiveTower and LiveTower.Active == true and not LiveTower.Starting) then; return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
+        if (LiveTower and LiveTower.Active == true and not LiveTower.Starting) then return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
         end
         if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.0) then
             return -- หน่วง 3.0 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
@@ -1071,11 +1071,11 @@ Fire = function(...)
             if not hrp or hrp.AssemblyLinearVelocity.Magnitude > 0.5 then return end
         end
     end
-    if action == "Teleport" and args[2] == "Portal" and not IsFeatureUnlocked("WorldBoss", "worldboss") then; return
+    if action == "Teleport" and args[2] == "Portal" and not IsFeatureUnlocked("WorldBoss", "worldboss") then return
     end
-    if action == "BuyUpgrade" and args[2] == "worldboss" and not IsFeatureUnlocked("PetUpgrades", "petup") then; return
+    if action == "BuyUpgrade" and args[2] == "worldboss" and not IsFeatureUnlocked("PetUpgrades", "petup") then return
     end
-    if (action == "MarketBuyAll" or action == "MarketBuy") and not IsFeatureUnlocked("Market", "market") then; return
+    if (action == "MarketBuyAll" or action == "MarketBuy") and not IsFeatureUnlocked("Market", "market") then return
     end
 
     -- 3. ตรวจสอบความสมบูรณ์ของพารามิเตอร์และการมีอยู่จริงของไอเทม / ทรัพยากร (Sanity Drop ป้องกันเตะ)
@@ -1215,7 +1215,7 @@ Fire = function(...)
         if IsTowerInArena and IsTowerInArena() then return end
         if IsHalloweenActive() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then; return end
+        if isBoss or IsEnteringBossPortal == true then return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
         if isZoneTransitionLocked then return end
         if isAutoSellingActive or isPetEnhanceRolling then return end
@@ -1224,18 +1224,18 @@ Fire = function(...)
         if IsTowerInArena and IsTowerInArena() then return end
         if IsHalloweenActive() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then; return end
+        if isBoss or IsEnteringBossPortal == true then return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
         if isZoneTransitionLocked then return end
         local diceId = args[2]
         if not diceId or not data or not data.OwnedDice then return end
         if not data.OwnedDice[diceId] then return end -- ยังไม่ได้เป็นเจ้าของ ห้ามส่งคำสั่ง
-        if data.Dice == diceId then; return end -- สวมใส่อยู่แล้ว ไม่ส่งซ้ำ
+        if data.Dice == diceId then return end -- สวมใส่อยู่แล้ว ไม่ส่งซ้ำ
     end
     if action == "SellKeys" then
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
         local keys = args[2]
-        if not keys or type(keys) ~= "table" or #keys == 0 then; return end
+        if not keys or type(keys) ~= "table" or #keys == 0 then return end
     end
     if action == "UsePotion" then
         local potKey = args[2]
@@ -1247,7 +1247,7 @@ Fire = function(...)
         if IsTowerInArena and IsTowerInArena() then return end
         if IsHalloweenActive() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then; return end
+        if isBoss or IsEnteringBossPortal == true then return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
         if isZoneTransitionLocked then return end
         local cost = Stats and Stats.RebirthCost and Stats.RebirthCost(data)
@@ -1262,13 +1262,13 @@ Fire = function(...)
         if State.Rolling and (nowRoll - lastRoll < 1.2) then return end
         if IsTowerInArena and IsTowerInArena() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then; return end
+        if isBoss or IsEnteringBossPortal == true then return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
     end
     if action == "SetAuto" then
         local val = args[2]
         if type(val) ~= "boolean" then return end
-        if State.Auto == val then; return end
+        if State.Auto == val then return end
     end
     if action == "SetSetting" then
         local sKey = args[2]
@@ -1281,7 +1281,7 @@ Fire = function(...)
             return -- ห้ามส่งคำสั่ง Teleport เด็ดขาดขณะอยู่ในระบบหอคอยหรืออารีน่าหอคอย ป้องกัน Error 267
         end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then; return -- ห้ามส่งคำสั่ง Teleport ขณะกำลังสู้บอสโลก ป้องกัน Error 267
+        if isBoss or IsEnteringBossPortal == true then return -- ห้ามส่งคำสั่ง Teleport ขณะกำลังสู้บอสโลก ป้องกัน Error 267
         end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then
             return -- ห้ามส่งคำสั่ง Teleport ระหว่างเทรด
@@ -1298,9 +1298,9 @@ Fire = function(...)
         end
         
         local mag = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude
-        if dest == "Hub" and mag < 120 then; return -- อยู่ในลานพลาซ่า/ฮับศูนย์กลางอยู่แล้ว ห้ามส่ง Teleport Hub ซ้ำ ป้องกัน Error 267
+        if dest == "Hub" and mag < 120 then return -- อยู่ในลานพลาซ่า/ฮับศูนย์กลางอยู่แล้ว ห้ามส่ง Teleport Hub ซ้ำ ป้องกัน Error 267
         end
-        if dest == "Home" and IsPlayerAtHomePlot() and not (IsTowerRunning and IsTowerRunning()) then; return -- อยู่ในพื้นที่บ้าน (Home Plot) ของตัวเองอยู่แล้ว ไม่ต้องส่ง Teleport Home ซ้ำ ป้องกัน Error 267
+        if dest == "Home" and IsPlayerAtHomePlot() and not (IsTowerRunning and IsTowerRunning()) then return -- อยู่ในพื้นที่บ้าน (Home Plot) ของตัวเองอยู่แล้ว ไม่ต้องส่ง Teleport Home ซ้ำ ป้องกัน Error 267
         end
     end
     if action == "SendExpedition" then
@@ -1308,7 +1308,7 @@ Fire = function(...)
         if not IsFeatureUnlocked or not IsFeatureUnlocked("Expeditions", "expeditions") then return end
         local diffId = args[2]
         local pets = args[3]
-        if not diffId or not pets or type(pets) ~= "table" or #pets == 0 then; return end
+        if not diffId or not pets or type(pets) ~= "table" or #pets == 0 then return end
         if not data or not data.Pets or not data.Expeditions then return end
         local maxSlots = Expeditions and Expeditions.Slots and Expeditions.Slots(data) or 3
         local activeCount = #(data.Expeditions.Active or {})
@@ -1343,7 +1343,7 @@ Fire = function(...)
             if not p then return end
             if onExp[sUid] or equipped[sUid] then return end
             local def = PetData and PetData.ById and PetData.ById[p.Id]
-            if def and (def.Limited == true or def.Rarity == "Limited") then; return end
+            if def and (def.Limited == true or def.Rarity == "Limited") then return end
             local pwr = 0
             pcall(function()
                 pwr = Expeditions.PetPower(data, p, State.Mods and State.Mods() or {}, State.Now and State.Now() or os.time())
@@ -1424,7 +1424,7 @@ Fire = function(...)
     if action == "TradeRequest" then
         local targetUserId = tonumber(args[2])
         if not targetUserId then return end
-        if targetUserId == LocalPlayer.UserId then; return end
+        if targetUserId == LocalPlayer.UserId then return end
         
         local targetPlayer = Players:GetPlayerByUserId(targetUserId)
         if not targetPlayer or targetPlayer.Parent ~= Players then return end
@@ -1436,7 +1436,7 @@ Fire = function(...)
         if getgenv().CurrentTradeSession ~= nil or (GetTradeWindow and GetTradeWindow() ~= nil) then return end
         if IsTowerInArena and IsTowerInArena() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then; return end
+        if isBoss or IsEnteringBossPortal == true then return end
         if isZoneTransitionLocked then return end
         
         -- ป้องกันการยิง TradeRequest ซ้ำรัวๆ ภายใน 3 วินาที
@@ -1453,7 +1453,7 @@ Fire = function(...)
             if getgenv().CurrentTradeSession ~= nil or (GetTradeWindow and GetTradeWindow() ~= nil) then return end
             if IsTowerInArena and IsTowerInArena() then return end
             local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-            if isBoss or IsEnteringBossPortal == true then; return end
+            if isBoss or IsEnteringBossPortal == true then return end
             if isZoneTransitionLocked then return end
         end
     end
@@ -1462,7 +1462,7 @@ Fire = function(...)
         local session = getgenv().CurrentTradeSession
         if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
         if session and session.You then
-            if readyState == true and session.You.Ready == true then; return end
+            if readyState == true and session.You.Ready == true then return end
             if getgenv().TradeLockedUntil and tick() < getgenv().TradeLockedUntil then return end
         end
         local _, btnText = GetTradeReadyButton()
@@ -1484,7 +1484,7 @@ Fire = function(...)
         local petUids = args[2]
         local session = getgenv().CurrentTradeSession
         if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
-        if not petUids or type(petUids) ~= "table" or #petUids == 0 then; return end
+        if not petUids or type(petUids) ~= "table" or #petUids == 0 then return end
         if not data or not data.Pets then return end
         
         local currentPetsCount = 0
@@ -1515,14 +1515,14 @@ Fire = function(...)
             if equipped[sUid] or onExp[sUid] then return end
             if (data.Locked and data.Locked[sUid]) or p.Locked then return end
             local def = PetData and PetData.ById and PetData.ById[p.Id]
-            if def and (def.Limited == true or def.Rarity == "Limited") then; return end
+            if def and (def.Limited == true or def.Rarity == "Limited") then return end
         end
     end
     if action == "TradeRemovePets" then
         local petUids = args[2]
         local session = getgenv().CurrentTradeSession
         if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
-        if not petUids or type(petUids) ~= "table" or #petUids == 0 then; return end
+        if not petUids or type(petUids) ~= "table" or #petUids == 0 then return end
         if session and session.You and session.You.Pets then
             local validRemove = false
             for _, uid in ipairs(petUids) do
@@ -2102,9 +2102,9 @@ local function IsPetEligibleForEnhance(pet)
     
     -- กรองสัตว์เลี้ยงประเภท Limited / Copy / Exclusive ทั้งหมด
     -- (เซิร์ฟเวอร์ปฏิเสธการอัปเลเวล / สุ่มเกรด / สุ่มเทรตสัตว์เลี้ยงเหล่านี้เด็ดขาด)
-    if def.Limited == true or def.Rarity == "Limited" then; return false
+    if def.Limited == true or def.Rarity == "Limited" then return false
     end
-    if def.Copy == true or def.Copies == true then; return false
+    if def.Copy == true or def.Copies == true then return false
     end
     -- สัตว์เลี้ยงที่เป็นตัวก๊อปปี้สเตตัส (มีฟิลด์ R อ้างอิงตัวอื่น และไม่มีฟิลด์เลเวล/เกรดแท้จริง)
     if pet.R and typeof(pet.R) == "string" and not pet.G and not pet.L then
@@ -2745,7 +2745,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
     targetKeep = math.max(1, math.floor(tonumber(targetKeep) or 100))
     
     local stacks = State.Stacks()
-    if not stacks or #stacks == 0 then; return false, "ไม่พบรายการสัตว์เลี้ยงในกระเป๋า" end
+    if not stacks or #stacks == 0 then return false, "ไม่พบรายการสัตว์เลี้ยงในกระเป๋า" end
     
     isAutoSellingActive = true
     isPetOperationMutex = true
@@ -2856,7 +2856,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
             table.insert(sellBatches, { keys = currentBatchKeys, amounts = currentBatchAmounts })
         end
         
-        if toSell == 0 or #sellBatches == 0 then; return 0, kept
+        if toSell == 0 or #sellBatches == 0 then return 0, kept
         end
         
         -- ส่งคำสั่งขายแบบ Humanized Batch (ป้องกัน Anti-Cheat / Rate Limit 100%)
@@ -3642,7 +3642,7 @@ isSwitchingTower = false
 -- lastLoopStartAttempt forward declared
 
 ResolveTowerId = function(val)
-    if not val or val == "" then; return "Infinity" end
+    if not val or val == "" then return "Infinity" end
     if Towers and Towers.ById and Towers.ById[val] then return val end
     if towerIdByOption and towerIdByOption[val] then return towerIdByOption[val] end
     if typeof(val) == "string" then
@@ -5383,7 +5383,7 @@ GetBestExpeditionPets = function(maxCount, excludeUids)
         end
     end
     
-    if #availablePets == 0 then; return nil, {} end
+    if #availablePets == 0 then return nil, {} end
     -- เรียงจากพลังสูงสุดไปต่ำสุด เพื่อให้โอกาสสำเร็จสูงสุด (Max Success Chance)
     table.sort(availablePets, function(a, b) return a.Power > b.Power end)
     
@@ -6119,7 +6119,7 @@ SafeCollectPlazaCandies = function(isManual)
             if IsInTrade() or getgenv().TradeActiveSession then break end
             if IsTowerInArena() then break end
             local bossNow = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-            if bossNow or IsEnteringBossPortal == true then; break end
+            if bossNow or IsEnteringBossPortal == true then break end
             
             char = LocalPlayer.Character or Character
             hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -6720,7 +6720,7 @@ end
 IsAllowedTradeSender = function(senderId, senderName)
     if not senderId and not senderName then return false end
     -- หากเป็นค่าเริ่มต้น หรือเลือกทุกคนในห้อง หรือไม่มีการล็อคไอดี -> ยอมรับทุกคน
-    if not CFG.TradeTarget or CFG.TradeTarget == "[ เลือกทุกคนในห้อง ]" or CFG.TradeTargetId == nil then; return true
+    if not CFG.TradeTarget or CFG.TradeTarget == "[ เลือกทุกคนในห้อง ]" or CFG.TradeTargetId == nil then return true
     end
     -- เช็คความตรงกันของ UserId (แปลงเป็นตัวเลขป้องกัน type mismatch)
     if CFG.TradeTargetId and senderId and tonumber(senderId) == tonumber(CFG.TradeTargetId) then
@@ -6730,7 +6730,7 @@ IsAllowedTradeSender = function(senderId, senderName)
     if senderName and CFG.TradeTarget then
         local sLower = tostring(senderName):lower()
         local tLower = tostring(CFG.TradeTarget):lower()
-        if sLower == tLower then; return true
+        if sLower == tLower then return true
         end
         local targetPlr = Players:GetPlayerByUserId(tonumber(CFG.TradeTargetId) or 0)
         if targetPlr then
@@ -7475,7 +7475,7 @@ task.spawn(function()
                     if not owned or not diceId then return false end
                     if owned[diceId] == true then return true end
                     for _, v in pairs(owned) do
-                        if v == diceId then; return true end
+                        if v == diceId then return true end
                     end
                     return false
                 end
