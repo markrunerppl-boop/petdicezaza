@@ -15,8 +15,7 @@ end
 getgenv().PetDiceScriptStarting = tick()
 
 -- 1. ป้องกันการรันบนหน้า Desktop App Lobby / Home Screen (PlaceId == 0) หรือเกมอื่น
-if not game.PlaceId or game.PlaceId == 0 then
-    return
+if not game.PlaceId or game.PlaceId == 0 then; return
 end
 
 local Players = game:GetService("Players")
@@ -125,8 +124,7 @@ pcall(function()
         local cam = workspace.CurrentCamera
         local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
         local rx = math.clamp(math.random(math.floor(vp.X * 0.15), math.floor(vp.X * 0.45)), 20, 600)
-        local ry = math.clamp(math.random(math.floor(vp.Y * 0.15), math.floor(vp.Y * 0.45)), 20, 400)
-        return Vector2.new(rx, ry)
+        local ry = math.clamp(math.random(math.floor(vp.Y * 0.15), math.floor(vp.Y * 0.45)), 20, 400); return Vector2.new(rx, ry)
     end
     getgenv().PetDiceAntiAFKConn = LocalPlayer.Idled:Connect(function()
         pcall(function()
@@ -139,7 +137,7 @@ pcall(function()
     task.spawn(function()
         while true do
             task.wait(math.random(480, 720))
-            if getgenv().PetDiceAntiAFKConn == nil then break end
+            if getgenv().PetDiceAntiAFKConn == nil then; break end
             pcall(function()
                 VirtualUser:CaptureController()
                 VirtualUser:ClickButton2(GetNaturalViewportClickPos())
@@ -300,8 +298,7 @@ end)
 local function CheckGamePatch()
     local curVersion = game.PlaceVersion
     getgenv().EmergencyPatchHalt = false
-    getgenv().SecurityStatusMessage = string.format("ระบบปลอดภัย Game Patch v%d", curVersion)
-    return true
+    getgenv().SecurityStatusMessage = string.format("ระบบปลอดภัย Game Patch v%d", curVersion); return true
 end
 
 -- 3. Cloud Remote Kill-Switch (อ่านคำสั่งควบคุมความปลอดภัยจาก GitHub แบบเรียลไทม์)
@@ -319,7 +316,7 @@ local function CheckCloudSecurity()
         end
         
         if raw and type(raw) == "string" and raw:find("{") then
-            local ok, cfg = pcall(function() return HS:JSONDecode(raw) end)
+            local ok, cfg = pcall(function(); return HS:JSONDecode(raw) end)
             if ok and cfg then
                 if cfg.kill_switch_active == true or cfg.safe == false then
                     getgenv().EmergencyCloudHalt = true
@@ -349,8 +346,7 @@ local function CheckStructuralIntegrity()
             return true
         end
         getgenv().EmergencyStructuralHalt = true
-        getgenv().SecurityStatusMessage = "โครงสร้างโมดูลเกมเปลี่ยนแปลง - หยุดส่งคำสั่งฉุกเฉิน"
-        return false
+        getgenv().SecurityStatusMessage = "โครงสร้างโมดูลเกมเปลี่ยนแปลง - หยุดส่งคำสั่งฉุกเฉิน"; return false
     else
         getgenv().EmergencyStructuralHalt = false
     end
@@ -504,8 +500,7 @@ end
 
 function Humanizer.Jitter(val, pct)
     pct = pct or 0.15
-    local diff = val * pct
-    return val + (math.random() * (diff * 2) - diff)
+    local diff = val * pct; return val + (math.random() * (diff * 2) - diff)
 end
 
 local function GetRealItemCount(itemName)
@@ -515,8 +510,7 @@ local function GetRealItemCount(itemName)
     if itemCfg and Stats and Stats.TradeItemCount then
         local count = Stats.TradeItemCount(data, itemCfg)
         if itemName == "SuperRolls" then count = count - (State.SuperQueued or 0)
-        elseif itemName == "JackpotRolls" then count = count - (State.JackpotQueued or 0) end
-        return math.max(0, count)
+        elseif itemName == "JackpotRolls" then count = count - (State.JackpotQueued or 0) end; return math.max(0, count)
     end
     if type(data[itemName]) == "number" then return data[itemName] end
     if data.Inventory and type(data.Inventory[itemName]) == "number" then return data.Inventory[itemName] end
@@ -582,8 +576,7 @@ end
 
 local function IsWorldBossActive()
     local cfg = CFG or getgenv().CFG or {}
-    if cfg.AutoWorldBoss == false or cfg.PauseTowerForBoss == false then
-        return false
+    if cfg.AutoWorldBoss == false or cfg.PauseTowerForBoss == false then; return false
     end
     
     -- 1. ตัวละครกำลังอยู่ในบอสโลก กำลังเดินเข้าประตู หรืออยู่ในรอบต่อสู้
@@ -672,8 +665,7 @@ local function GetTradeReadyButton()
     local readyFrame = tp:FindFirstChild("Ready", true)
     if not readyFrame then return nil, "" end
     local face = readyFrame:FindFirstChild("Face") or readyFrame:FindFirstChildWhichIsA("TextButton", true)
-    local lbl = readyFrame:FindFirstChildWhichIsA("TextLabel", true)
-    return face, (lbl and lbl.Text or "")
+    local lbl = readyFrame:FindFirstChildWhichIsA("TextLabel", true); return face, (lbl and lbl.Text or "")
 end
 
 local LastRemoteFire = {}
@@ -867,15 +859,14 @@ IsFeatureUnlocked = function(featureName, idName)
     if not u then return false end
     local openByFunc = false
     if Upgrades and Upgrades.IsOpen then
-        local ok, res = pcall(function() return Upgrades.IsOpen(u, featureName) end)
+        local ok, res = pcall(function(); return Upgrades.IsOpen(u, featureName) end)
         if ok and res == true then openByFunc = true end
     end
-    local openById = (u[idName] or 0) > 0 or (u[featureName] or 0) > 0
-    return openByFunc == true or openById == true
+    local openById = (u[idName] or 0) > 0 or (u[featureName] or 0) > 0; return openByFunc == true or openById == true
 end
 
 local function FlushTradeDeferredQueue()
-    if isFlushingTradeQueue or #TradeDeferredQueue == 0 then return end
+    if isFlushingTradeQueue or #TradeDeferredQueue == 0 then; return end
     isFlushingTradeQueue = true
     task.spawn(function()
         pcall(function()
@@ -980,17 +971,13 @@ Fire = function(...)
     end
 
     -- 2. ป้องกันฟีเจอร์ที่ยังไม่ปลดล็อค 100% (ป้องกัน Error 267 จากการส่งคำสั่งที่เซิร์ฟเวอร์ปฏิเสธ)
-    if action == "RollGrade" and not IsFeatureUnlocked("Grades", "grades") then
-        return
+    if action == "RollGrade" and not IsFeatureUnlocked("Grades", "grades") then; return
     end
-    if action == "RollTrait" and not IsFeatureUnlocked("Traits", "traits") then
-        return
+    if action == "RollTrait" and not IsFeatureUnlocked("Traits", "traits") then; return
     end
-    if (action == "UpgradePet" or action == "UpgradePetLevels") and not IsFeatureUnlocked("PetUpgrades", "petup") then
-        return
+    if (action == "UpgradePet" or action == "UpgradePetLevels") and not IsFeatureUnlocked("PetUpgrades", "petup") then; return
     end
-    if (action == "SendExpedition" or action == "ClaimExpedition") and not IsFeatureUnlocked("Expeditions", "expeditions") then
-        return
+    if (action == "SendExpedition" or action == "ClaimExpedition") and not IsFeatureUnlocked("Expeditions", "expeditions") then; return
     end
     if action == "TowerStart" then
         if not IsFeatureUnlocked("Towers", "towers") then
@@ -998,8 +985,7 @@ Fire = function(...)
         end
         local towerId = args[2]
         local team = args[3]
-        if not towerId or not team or type(team) ~= "table" or #team == 0 then
-            return -- ไม่มีหอคอยหรือไม่มีสัตว์เลี้ยงในทีม ไม่ส่งเด็ดขาด ป้องกัน Error 267
+        if not towerId or not team or type(team) ~= "table" or #team == 0 then; return -- ไม่มีหอคอยหรือไม่มีสัตว์เลี้ยงในทีม ไม่ส่งเด็ดขาด ป้องกัน Error 267
         end
         if IsHalloweenActive() then
             return -- ห้ามเริ่มหอคอยเด็ดขาดหากกิจกรรมฮาโลวีนหรือพายุลูกกวาดกำลังทำงาน (Priority 3 เหนือกว่า Priority 4)
@@ -1007,8 +993,7 @@ Fire = function(...)
         if IsWorldBossActive and IsWorldBossActive() then
             return -- ป้องกันการเริ่มหอคอยระหว่างศึกบอสโลก (Priority 2 เหนือกว่า Priority 4)
         end
-        if (LiveTower and LiveTower.Active == true and not LiveTower.Starting) then
-            return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
+        if (LiveTower and LiveTower.Active == true and not LiveTower.Starting) then; return -- ป้องกันการยิง TowerStart ซ้ำซ้อนขณะที่อยู่ในหอคอยอยู่แล้ว (ป้องกัน Error 267)
         end
         if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 3.0) then
             return -- หน่วง 3.0 วินาทีหลังออกจากหอคอย ให้เซิร์ฟเวอร์เคลียร์สถานะอย่างสมบูรณ์
@@ -1086,14 +1071,11 @@ Fire = function(...)
             if not hrp or hrp.AssemblyLinearVelocity.Magnitude > 0.5 then return end
         end
     end
-    if action == "Teleport" and args[2] == "Portal" and not IsFeatureUnlocked("WorldBoss", "worldboss") then
-        return
+    if action == "Teleport" and args[2] == "Portal" and not IsFeatureUnlocked("WorldBoss", "worldboss") then; return
     end
-    if action == "BuyUpgrade" and args[2] == "worldboss" and not IsFeatureUnlocked("PetUpgrades", "petup") then
-        return
+    if action == "BuyUpgrade" and args[2] == "worldboss" and not IsFeatureUnlocked("PetUpgrades", "petup") then; return
     end
-    if (action == "MarketBuyAll" or action == "MarketBuy") and not IsFeatureUnlocked("Market", "market") then
-        return
+    if (action == "MarketBuyAll" or action == "MarketBuy") and not IsFeatureUnlocked("Market", "market") then; return
     end
 
     -- 3. ตรวจสอบความสมบูรณ์ของพารามิเตอร์และการมีอยู่จริงของไอเทม / ทรัพยากร (Sanity Drop ป้องกันเตะ)
@@ -1179,7 +1161,7 @@ Fire = function(...)
         if data.OwnedDice[diceId] == true then return end -- มีอยู่แล้ว ไม่ซื้อซ้ำ
         local diceDef = nil
         for _, d in ipairs(Config.Dice) do
-            if d.Id == diceId then diceDef = d break end
+            if d.Id == diceId then diceDef = d; break end
         end
         if not diceDef or (data.Money or 0) < (diceDef.Cost or 0) then return end
     end
@@ -1233,7 +1215,7 @@ Fire = function(...)
         if IsTowerInArena and IsTowerInArena() then return end
         if IsHalloweenActive() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then return end
+        if isBoss or IsEnteringBossPortal == true then; return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
         if isZoneTransitionLocked then return end
         if isAutoSellingActive or isPetEnhanceRolling then return end
@@ -1242,18 +1224,18 @@ Fire = function(...)
         if IsTowerInArena and IsTowerInArena() then return end
         if IsHalloweenActive() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then return end
+        if isBoss or IsEnteringBossPortal == true then; return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
         if isZoneTransitionLocked then return end
         local diceId = args[2]
         if not diceId or not data or not data.OwnedDice then return end
         if not data.OwnedDice[diceId] then return end -- ยังไม่ได้เป็นเจ้าของ ห้ามส่งคำสั่ง
-        if data.Dice == diceId then return end -- สวมใส่อยู่แล้ว ไม่ส่งซ้ำ
+        if data.Dice == diceId then; return end -- สวมใส่อยู่แล้ว ไม่ส่งซ้ำ
     end
     if action == "SellKeys" then
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
         local keys = args[2]
-        if not keys or type(keys) ~= "table" or #keys == 0 then return end
+        if not keys or type(keys) ~= "table" or #keys == 0 then; return end
     end
     if action == "UsePotion" then
         local potKey = args[2]
@@ -1265,7 +1247,7 @@ Fire = function(...)
         if IsTowerInArena and IsTowerInArena() then return end
         if IsHalloweenActive() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then return end
+        if isBoss or IsEnteringBossPortal == true then; return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
         if isZoneTransitionLocked then return end
         local cost = Stats and Stats.RebirthCost and Stats.RebirthCost(data)
@@ -1280,13 +1262,13 @@ Fire = function(...)
         if State.Rolling and (nowRoll - lastRoll < 1.2) then return end
         if IsTowerInArena and IsTowerInArena() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then return end
+        if isBoss or IsEnteringBossPortal == true then; return end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then return end
     end
     if action == "SetAuto" then
         local val = args[2]
         if type(val) ~= "boolean" then return end
-        if State.Auto == val then return end
+        if State.Auto == val then; return end
     end
     if action == "SetSetting" then
         local sKey = args[2]
@@ -1299,8 +1281,7 @@ Fire = function(...)
             return -- ห้ามส่งคำสั่ง Teleport เด็ดขาดขณะอยู่ในระบบหอคอยหรืออารีน่าหอคอย ป้องกัน Error 267
         end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then
-            return -- ห้ามส่งคำสั่ง Teleport ขณะกำลังสู้บอสโลก ป้องกัน Error 267
+        if isBoss or IsEnteringBossPortal == true then; return -- ห้ามส่งคำสั่ง Teleport ขณะกำลังสู้บอสโลก ป้องกัน Error 267
         end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then
             return -- ห้ามส่งคำสั่ง Teleport ระหว่างเทรด
@@ -1317,11 +1298,9 @@ Fire = function(...)
         end
         
         local mag = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude
-        if dest == "Hub" and mag < 120 then
-            return -- อยู่ในลานพลาซ่า/ฮับศูนย์กลางอยู่แล้ว ห้ามส่ง Teleport Hub ซ้ำ ป้องกัน Error 267
+        if dest == "Hub" and mag < 120 then; return -- อยู่ในลานพลาซ่า/ฮับศูนย์กลางอยู่แล้ว ห้ามส่ง Teleport Hub ซ้ำ ป้องกัน Error 267
         end
-        if dest == "Home" and IsPlayerAtHomePlot() and not (IsTowerRunning and IsTowerRunning()) then
-            return -- อยู่ในพื้นที่บ้าน (Home Plot) ของตัวเองอยู่แล้ว ไม่ต้องส่ง Teleport Home ซ้ำ ป้องกัน Error 267
+        if dest == "Home" and IsPlayerAtHomePlot() and not (IsTowerRunning and IsTowerRunning()) then; return -- อยู่ในพื้นที่บ้าน (Home Plot) ของตัวเองอยู่แล้ว ไม่ต้องส่ง Teleport Home ซ้ำ ป้องกัน Error 267
         end
     end
     if action == "SendExpedition" then
@@ -1329,7 +1308,7 @@ Fire = function(...)
         if not IsFeatureUnlocked or not IsFeatureUnlocked("Expeditions", "expeditions") then return end
         local diffId = args[2]
         local pets = args[3]
-        if not diffId or not pets or type(pets) ~= "table" or #pets == 0 then return end
+        if not diffId or not pets or type(pets) ~= "table" or #pets == 0 then; return end
         if not data or not data.Pets or not data.Expeditions then return end
         local maxSlots = Expeditions and Expeditions.Slots and Expeditions.Slots(data) or 3
         local activeCount = #(data.Expeditions.Active or {})
@@ -1339,8 +1318,7 @@ Fire = function(...)
         if ExpeditionConfig and ExpeditionConfig.Difficulties then
             for _, d in ipairs(ExpeditionConfig.Difficulties) do
                 if d.Id == diffId then
-                    foundDiff = d
-                    break
+                    foundDiff = d; break
                 end
             end
         end
@@ -1365,7 +1343,7 @@ Fire = function(...)
             if not p then return end
             if onExp[sUid] or equipped[sUid] then return end
             local def = PetData and PetData.ById and PetData.ById[p.Id]
-            if def and (def.Limited == true or def.Rarity == "Limited") then return end
+            if def and (def.Limited == true or def.Rarity == "Limited") then; return end
             local pwr = 0
             pcall(function()
                 pwr = Expeditions.PetPower(data, p, State.Mods and State.Mods() or {}, State.Now and State.Now() or os.time())
@@ -1380,8 +1358,7 @@ Fire = function(...)
         local foundExp = nil
         for _, exp in ipairs(data.Expeditions.Active) do
             if exp.Id == expId then
-                foundExp = exp
-                break
+                foundExp = exp; break
             end
         end
         if not foundExp then return end
@@ -1408,7 +1385,7 @@ Fire = function(...)
         local gDef = nil
         if QuestsLogic and QuestsLogic.Goals then
             for _, gd in ipairs(QuestsLogic.Goals) do
-                if gd.Id == gId then gDef = gd break end
+                if gd.Id == gId then gDef = gd; break end
             end
         end
         if not gDef then return end
@@ -1447,7 +1424,7 @@ Fire = function(...)
     if action == "TradeRequest" then
         local targetUserId = tonumber(args[2])
         if not targetUserId then return end
-        if targetUserId == LocalPlayer.UserId then return end
+        if targetUserId == LocalPlayer.UserId then; return end
         
         local targetPlayer = Players:GetPlayerByUserId(targetUserId)
         if not targetPlayer or targetPlayer.Parent ~= Players then return end
@@ -1459,7 +1436,7 @@ Fire = function(...)
         if getgenv().CurrentTradeSession ~= nil or (GetTradeWindow and GetTradeWindow() ~= nil) then return end
         if IsTowerInArena and IsTowerInArena() then return end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then return end
+        if isBoss or IsEnteringBossPortal == true then; return end
         if isZoneTransitionLocked then return end
         
         -- ป้องกันการยิง TradeRequest ซ้ำรัวๆ ภายใน 3 วินาที
@@ -1476,7 +1453,7 @@ Fire = function(...)
             if getgenv().CurrentTradeSession ~= nil or (GetTradeWindow and GetTradeWindow() ~= nil) then return end
             if IsTowerInArena and IsTowerInArena() then return end
             local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-            if isBoss or IsEnteringBossPortal == true then return end
+            if isBoss or IsEnteringBossPortal == true then; return end
             if isZoneTransitionLocked then return end
         end
     end
@@ -1485,7 +1462,7 @@ Fire = function(...)
         local session = getgenv().CurrentTradeSession
         if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
         if session and session.You then
-            if readyState == true and session.You.Ready == true then return end
+            if readyState == true and session.You.Ready == true then; return end
             if getgenv().TradeLockedUntil and tick() < getgenv().TradeLockedUntil then return end
         end
         local _, btnText = GetTradeReadyButton()
@@ -1507,7 +1484,7 @@ Fire = function(...)
         local petUids = args[2]
         local session = getgenv().CurrentTradeSession
         if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
-        if not petUids or type(petUids) ~= "table" or #petUids == 0 then return end
+        if not petUids or type(petUids) ~= "table" or #petUids == 0 then; return end
         if not data or not data.Pets then return end
         
         local currentPetsCount = 0
@@ -1538,20 +1515,19 @@ Fire = function(...)
             if equipped[sUid] or onExp[sUid] then return end
             if (data.Locked and data.Locked[sUid]) or p.Locked then return end
             local def = PetData and PetData.ById and PetData.ById[p.Id]
-            if def and (def.Limited == true or def.Rarity == "Limited") then return end
+            if def and (def.Limited == true or def.Rarity == "Limited") then; return end
         end
     end
     if action == "TradeRemovePets" then
         local petUids = args[2]
         local session = getgenv().CurrentTradeSession
         if not session and (not GetTradeWindow or not GetTradeWindow()) then return end
-        if not petUids or type(petUids) ~= "table" or #petUids == 0 then return end
+        if not petUids or type(petUids) ~= "table" or #petUids == 0 then; return end
         if session and session.You and session.You.Pets then
             local validRemove = false
             for _, uid in ipairs(petUids) do
                 if session.You.Pets[tostring(uid)] or session.You.Pets[tonumber(uid)] then
-                    validRemove = true
-                    break
+                    validRemove = true; break
                 end
             end
             if not validRemove then return end
@@ -1674,8 +1650,7 @@ end
 
 function Humanizer.Jitter(val, pct)
     pct = pct or 0.15
-    local diff = val * pct
-    return val + (math.random() * (diff * 2) - diff)
+    local diff = val * pct; return val + (math.random() * (diff * 2) - diff)
 end
 
 -- Human Activity & Mobile Heuristic Simulator (UGPhone & 24/7 Cloud Bot Protection)
@@ -1790,8 +1765,7 @@ local function WalkAlongPath(destination, maxTime)
             if not hum or not hrp or hum.Health <= 0 then break end
         end
         char = LocalPlayer.Character or Character
-        hrp = char and char:FindFirstChild("HumanoidRootPart")
-        return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(destination.X, 0, destination.Z)).Magnitude <= 8
+        hrp = char and char:FindFirstChild("HumanoidRootPart"); return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(destination.X, 0, destination.Z)).Magnitude <= 8
     end
     
     local waypoints = path:GetWaypoints()
@@ -1822,15 +1796,14 @@ local function WalkAlongPath(destination, maxTime)
     end
     
     char = LocalPlayer.Character or Character
-    hrp = char and char:FindFirstChild("HumanoidRootPart")
-    return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(destination.X, 0, destination.Z)).Magnitude <= 10
+    hrp = char and char:FindFirstChild("HumanoidRootPart"); return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(destination.X, 0, destination.Z)).Magnitude <= 10
 end
 
 -- ==============================================================================
 -- 🎃 HALLOWEEN HELPER FUNCTIONS (Pawcula & Candy Storm Engine)
 -- ==============================================================================
 local function GetCurrentTimestamp()
-    local ok, t = pcall(function() return workspace:GetServerTimeNow() end)
+    local ok, t = pcall(function(); return workspace:GetServerTimeNow() end)
     if ok and t then return t end
     return os.time()
 end
@@ -1970,8 +1943,7 @@ GetSecondsUntilNextStorm = function()
         return secCs
     end
     
-    local mod = now % 600
-    return math.max(0, 600 - mod)
+    local mod = now % 600; return math.max(0, 600 - mod)
 end
 
 GetAvailableCandies = function()
@@ -2060,8 +2032,7 @@ local function SafeWalkTo(targetPos, maxWait)
     end
     
     char = LocalPlayer.Character or Character
-    hrp = char and char:FindFirstChild("HumanoidRootPart")
-    return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude <= 8
+    hrp = char and char:FindFirstChild("HumanoidRootPart"); return hrp and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude <= 8
 end
 
 local function GetStallCFrame(stallName)
@@ -2131,11 +2102,9 @@ local function IsPetEligibleForEnhance(pet)
     
     -- กรองสัตว์เลี้ยงประเภท Limited / Copy / Exclusive ทั้งหมด
     -- (เซิร์ฟเวอร์ปฏิเสธการอัปเลเวล / สุ่มเกรด / สุ่มเทรตสัตว์เลี้ยงเหล่านี้เด็ดขาด)
-    if def.Limited == true or def.Rarity == "Limited" then
-        return false
+    if def.Limited == true or def.Rarity == "Limited" then; return false
     end
-    if def.Copy == true or def.Copies == true then
-        return false
+    if def.Copy == true or def.Copies == true then; return false
     end
     -- สัตว์เลี้ยงที่เป็นตัวก๊อปปี้สเตตัส (มีฟิลด์ R อ้างอิงตัวอื่น และไม่มีฟิลด์เลเวล/เกรดแท้จริง)
     if pet.R and typeof(pet.R) == "string" and not pet.G and not pet.L then
@@ -2156,14 +2125,12 @@ end
 
 local function IsPetGradeLocked(pet, targetRank)
     if not IsPetEligibleForEnhance(pet) then return true end -- สัตว์เลี้ยงประเภทพิเศษไม่สามารถสุ่มเกรดได้ ให้ถือว่าล็อคข้ามเสมอ
-    targetRank = targetRank or (getgenv().CFG and getgenv().CFG.TargetGradeRank) or 8
-    return GetPetGradeRank(pet) <= targetRank
+    targetRank = targetRank or (getgenv().CFG and getgenv().CFG.TargetGradeRank) or 8; return GetPetGradeRank(pet) <= targetRank
 end
 
 local function IsPetTraitLocked(pet, targetRank)
     if not IsPetEligibleForEnhance(pet) then return true end -- สัตว์เลี้ยงประเภทพิเศษไม่สามารถสุ่มเทรตได้ ให้ถือว่าล็อคข้ามเสมอ
-    targetRank = targetRank or (getgenv().CFG and getgenv().CFG.TargetTraitRank) or 6
-    return GetPetTraitRank(pet) <= targetRank
+    targetRank = targetRank or (getgenv().CFG and getgenv().CFG.TargetTraitRank) or 6; return GetPetTraitRank(pet) <= targetRank
 end
 
 local function FindAffordableLevels(pet, upgrades, money, maxCount)
@@ -2365,7 +2332,7 @@ pcall(function()
     if isfile and readfile and isfile("fluent.lua") then
         local localSrc = readfile("fluent.lua")
         if localSrc and #localSrc > 1000 then
-            local ok, res = pcall(function() return loadstring(localSrc)() end)
+            local ok, res = pcall(function(); return loadstring(localSrc)() end)
             if ok and res and type(res) == "table" and res.CreateWindow then
                 Fluent = res
             end
@@ -2402,7 +2369,7 @@ if not Fluent then
     for _, url in ipairs(fluentUrls) do
         local src = FetchFluentSource(url)
         if src and #src > 1000 then
-            local ok, res = pcall(function() return loadstring(src)() end)
+            local ok, res = pcall(function(); return loadstring(src)() end)
             if ok and res and type(res) == "table" and res.CreateWindow then
                 Fluent = res
                 pcall(function()
@@ -2746,8 +2713,7 @@ Tabs.Overview:AddButton({
     Callback = function()
         if isPetOperationMutex or isAutoSellingActive or isPetEnhanceRolling or getgenv().PetOperationMutex then
             Notify("⚠️ กำลังทำรายการอื่น", "กำลังจัดการสัตว์เลี้ยงอยู่ จะสวมใส่ให้อัตโนมัติเมื่อพร้อม...", 2)
-            getgenv().NeedEquipBest = true
-            return
+            getgenv().NeedEquipBest = true; return
         end
         getgenv().NeedEquipBest = true
         Notify("⭐ สวมใส่สัตว์เลี้ยง", "ส่งคำขอสวมใส่ทีมที่ดีที่สุดเรียบร้อย!", 2)
@@ -2779,7 +2745,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
     targetKeep = math.max(1, math.floor(tonumber(targetKeep) or 100))
     
     local stacks = State.Stacks()
-    if not stacks or #stacks == 0 then return false, "ไม่พบรายการสัตว์เลี้ยงในกระเป๋า" end
+    if not stacks or #stacks == 0 then; return false, "ไม่พบรายการสัตว์เลี้ยงในกระเป๋า" end
     
     isAutoSellingActive = true
     isPetOperationMutex = true
@@ -2890,8 +2856,7 @@ local function ExecuteAutoSellPets(targetCountOverride)
             table.insert(sellBatches, { keys = currentBatchKeys, amounts = currentBatchAmounts })
         end
         
-        if toSell == 0 or #sellBatches == 0 then
-            return 0, kept
+        if toSell == 0 or #sellBatches == 0 then; return 0, kept
         end
         
         -- ส่งคำสั่งขายแบบ Humanized Batch (ป้องกัน Anti-Cheat / Rate Limit 100%)
@@ -3442,13 +3407,11 @@ Tabs.Enhance:AddButton({
             local data = State.Data
             if not data or not data.Pets or not data.Money or data.Money <= 0 then 
                 Notify("⚠️ เงินไม่พอ", "คุณมีเงินไม่พอสำหรับการอัปเลเวล", 3)
-                isManualUpgrading = false
-                return 
+                isManualUpgrading = false; return 
             end
             if not IsFeatureUnlocked("PetUpgrades", "petup") then
                 Notify("⚠️ ยังไม่ปลดล็อค", "กรุณาปลดล็อค Pet Upgrades ในต้นไม้ทักษะก่อนใช้งาน", 3)
-                isManualUpgrading = false
-                return
+                isManualUpgrading = false; return
             end
             local cap = Stats.PetLevelCap(data.Upgrades)
             local targetLvl = math.min(CFG.TargetPetLevel or cap, cap)
@@ -3505,13 +3468,11 @@ Tabs.Enhance:AddButton({
             local data = State.Data
             if not data or not data.Pets or not data.Gems or data.Gems < 1 then
                 Notify("⚠️ เพชรไม่พอ (Gems)", "คุณมีเพชรไม่พอสำหรับการสุ่มเกรด", 3)
-                isManualRollingGrade = false
-                return
+                isManualRollingGrade = false; return
             end
             if not IsFeatureUnlocked("Grades", "grades") then
                 Notify("⚠️ ยังไม่ปลดล็อค", "กรุณาปลดล็อค Grades ในต้นไม้ทักษะก่อนใช้งาน", 3)
-                isManualRollingGrade = false
-                return
+                isManualRollingGrade = false; return
             end
             local targetRank = CFG.TargetGradeRank or 8
             local uids = GetTopBestPets(CFG.EnhancePetCount or 4)
@@ -3553,13 +3514,11 @@ Tabs.Enhance:AddButton({
             local data = State.Data
             if not data or not data.Pets or not data.Shards or data.Shards < 1 then
                 Notify("⚠️ ชาร์ดไม่พอ (Shards)", "คุณมี Shards ไม่พอสำหรับการสุ่มคุณสมบัติ", 3)
-                isManualRollingTrait = false
-                return
+                isManualRollingTrait = false; return
             end
             if not IsFeatureUnlocked("Traits", "traits") then
                 Notify("⚠️ ยังไม่ปลดล็อค", "กรุณาปลดล็อค Traits ในต้นไม้ทักษะก่อนใช้งาน", 3)
-                isManualRollingTrait = false
-                return
+                isManualRollingTrait = false; return
             end
             local targetRank = CFG.TargetTraitRank or 6
             local uids = GetTopBestPets(CFG.EnhancePetCount or 4)
@@ -3683,7 +3642,7 @@ isSwitchingTower = false
 -- lastLoopStartAttempt forward declared
 
 ResolveTowerId = function(val)
-    if not val or val == "" then return "Infinity" end
+    if not val or val == "" then; return "Infinity" end
     if Towers and Towers.ById and Towers.ById[val] then return val end
     if towerIdByOption and towerIdByOption[val] then return towerIdByOption[val] end
     if typeof(val) == "string" then
@@ -3801,8 +3760,7 @@ local function SyncLiveTowerFromGame()
         LiveTower.Starting = false
         LiveTower.TowerId = nil
         LiveTower.InArena = false
-        LiveTower.Away = false
-        return
+        LiveTower.Away = false; return
     end
     
     -- ตรวจสอบและปิดป๊อปอัปผลรางวัล LootBag ที่ค้างอยู่บนหน้าจออัตโนมัติ
@@ -3854,8 +3812,7 @@ local function SyncLiveTowerFromGame()
         LiveTower.Starting = false
         LiveTower.TowerId = nil
         LiveTower.InArena = false
-        LiveTower.Away = false
-        return
+        LiveTower.Away = false; return
     end
     
     -- หากกำลังอยู่ในช่วงเปลี่ยนผ่านระหว่างชั้น (VICTORY, NEXT RUN IN, STARTING...)
@@ -3864,8 +3821,7 @@ local function SyncLiveTowerFromGame()
         LiveTower.Active = true
         LiveTower.InArena = isArena
         LiveTower.Away = isAway
-        LiveTower.LastEventTime = tick()
-        return
+        LiveTower.LastEventTime = tick(); return
     end
     
     -- 1. ดึงข้อมูลจาก UI จริงของตัวเกม (TowerTracker บน HUD หรือ Battle ในอารีน่า)
@@ -3890,8 +3846,7 @@ local function SyncLiveTowerFromGame()
                 -- ห้ามเช็ค t.Id เดี่ยวๆ เช่น "STORM" เพราะจะชนกับชื่อมอนสเตอร์/ธาตุจนทำให้ระบุหอคอยผิดพลาด
                 for _, t in ipairs(Towers.List or {}) do
                     if txt:find(t.Name:upper(), 1, true) or txt:find(t.Id:upper() .. " TOWER", 1, true) then
-                        LiveTower.TowerId = t.Id
-                        break
+                        LiveTower.TowerId = t.Id; break
                     end
                 end
                 local f = txt:match("FLOOR%s+(%d+)") or txt:match("STAGE%s+(%d+)") or txt:match("ชั้น%s*(%d+)")
@@ -3903,8 +3858,7 @@ local function SyncLiveTowerFromGame()
         if not LiveTower.TowerId then
             LiveTower.TowerId = GetSelectedTowerId() or "Infinity"
         end
-        LiveTower.LastEventTime = tick()
-        return
+        LiveTower.LastEventTime = tick(); return
     end
     
     -- 2. ระบบรอช่วงเริ่มหอคอยหรือช่วงเปลี่ยนผ่านชั้น (Grace Period ป้องกันการหลุดระหว่างชั้น)
@@ -3934,8 +3888,7 @@ end
 IsTowerRunning = function()
     if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then
         LiveTower.Active = false
-        LiveTower.Starting = false
-        return false
+        LiveTower.Starting = false; return false
     end
     SyncLiveTowerFromGame()
     return LiveTower.Active == true
@@ -3943,8 +3896,7 @@ end
 
 IsTowerInArena = function()
     if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then
-        LiveTower.InArena = false
-        return false
+        LiveTower.InArena = false; return false
     end
     SyncLiveTowerFromGame()
     return LiveTower.Active == true and LiveTower.InArena == true
@@ -4192,8 +4144,7 @@ SafeWalkToBossPortal = function()
         end
         return false
     end)
-    IsEnteringBossPortal = false
-    return ok and res == true
+    IsEnteringBossPortal = false; return ok and res == true
 end
 
 local lastTowerStartTick = 0
@@ -4252,8 +4203,7 @@ local function StartTowerDirect(targetTowerId)
     
     if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then
         LiveTower.Active = false
-        LiveTower.Starting = false
-        return false, "Towers not unlocked in tree"
+        LiveTower.Starting = false; return false, "Towers not unlocked in tree"
     end
     
     if IsWorldBossActive() then
@@ -4309,8 +4259,7 @@ SwitchOrStartTower = function(targetTowerId, force)
     
     if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then
         LiveTower.Active = false
-        LiveTower.Starting = false
-        return false, "Towers not unlocked in tree"
+        LiveTower.Starting = false; return false, "Towers not unlocked in tree"
     end
     
     if IsWorldBossActive() then
@@ -5067,8 +5016,7 @@ UpdatePotionStatus = function()
             if not numEnd or numEnd <= now then return "❌ หมดอายุแล้ว" end
             local left = math.floor(numEnd - now)
             local mins = math.floor(left / 60)
-            local secs = left % 60
-            return string.format("✅ เหลืออีก %d:%02d นาที", mins, secs)
+            local secs = left % 60; return string.format("✅ เหลืออีก %d:%02d นาที", mins, secs)
         end
         
         local luckCount = tonumber(potions.Luck) or 0
@@ -5106,14 +5054,14 @@ UpdateMarketStatus = function()
         local restockStr = string.format("%d:%02d นาที", restockMin, restockRemainderSec)
         
         local bought = data.Market and (data.Market.Window ~= currentWindow and {} or data.Market.Bought) or {}
-        local _, canBuyCount, totalCost, totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
+        local _, canBuyCount, totalCost, _totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
         
         local unlockStr = isUnlocked and "✅ ปลดล็อกแล้ว (พร้อมซื้อ)" or "🔒 ล็อกอยู่ (ต้องปลดล็อกที่ต้นไม้อัปเกรด)"
         local costStr = Format and Format.Money and Format.Money(totalCost or 0) or tostring(totalCost or 0)
         local moneyStr = Format and Format.Money and Format.Money(data.Money or 0) or tostring(data.Money or 0)
         
         local desc = string.format("🏪 สถานะตลาด: %s\n⏳ รีสต็อกสินค้าใหม่ในอีก: %s\n📦 สินค้าที่ซื้อได้: %d ชิ้น (คงเหลือในสต็อก %d ชิ้น)\n💰 ราคารวมทั้งหมด: %s (ยอดเงินของคุณ: %s)",
-            unlockStr, restockStr, canBuyCount or 0, totalLeft or 0, costStr, moneyStr
+            unlockStr, restockStr, canBuyCount or 0, _totalLeft or 0, costStr, moneyStr
         )
         
         SafeUpdatePara(MarketStatusPara, "🛒 ข้อมูลตลาดสดและเวลารีสต็อก (Market Realtime)", desc)
@@ -5232,10 +5180,10 @@ Tabs.Items:AddButton({
         local now = State.Now and State.Now() or os.time()
         local currentWindow = Market.Window(now)
         local bought = data.Market and (data.Market.Window ~= currentWindow and {} or data.Market.Bought) or {}
-        local _, canBuyCount, totalCost, totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
+        local _, canBuyCount, totalCost, _totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
         
         if (canBuyCount or 0) <= 0 then
-            if (totalLeft or 0) <= 0 then
+            if (_totalLeft or 0) <= 0 then
                 Notify("ℹ️ สินค้าหมด", "สินค้าในรอบนี้ถูกซื้อหมดแล้ว (SOLD OUT) กรุณารอรอบรีสต็อกถัดไป", 3)
             else
                 Notify("⚠️ เงินไม่พอ", "เงินของคุณไม่พอสำหรับซื้อสินค้าที่เหลือในรอบนี้", 3)
@@ -5435,7 +5383,7 @@ GetBestExpeditionPets = function(maxCount, excludeUids)
         end
     end
     
-    if #availablePets == 0 then return nil, {} end
+    if #availablePets == 0 then; return nil, {} end
     -- เรียงจากพลังสูงสุดไปต่ำสุด เพื่อให้โอกาสสำเร็จสูงสุด (Max Success Chance)
     table.sort(availablePets, function(a, b) return a.Power > b.Power end)
     
@@ -5473,8 +5421,7 @@ GetBestExpeditionPets = function(maxCount, excludeUids)
 end
 
 local function GetNightmarePets(maxCount, excludeUids)
-    local _, pets = GetBestExpeditionPets(maxCount, excludeUids)
-    return pets or {}
+    local _, pets = GetBestExpeditionPets(maxCount, excludeUids); return pets or {}
 end
 
 ClaimAllDoneExpeditions = function()
@@ -5637,8 +5584,7 @@ local function ClaimAllRewardsManual()
                     local claimed = (data.Playtime.Claimed or {})[tostring(i)] == true
                     local reached = (v.Minutes * 60) <= played
                     if not claimed and reached then
-                        canPlaytime = true
-                        break
+                        canPlaytime = true; break
                     end
                 end
             end
@@ -5760,8 +5706,7 @@ CanTrickOrTreat = function()
         return entry.TreatDay < currentDay
     end
     
-    local nowDay = math.floor(now / 86400)
-    return entry.TreatDay < nowDay
+    local nowDay = math.floor(now / 86400); return entry.TreatDay < nowDay
 end
 
 local HalloweenStatusPara = Tabs.Halloween:AddParagraph({
@@ -6160,8 +6105,7 @@ SafeCollectPlazaCandies = function(isManual)
             Humanizer.Wait(1.5, 2.0)
             Fire("Teleport", "Home")
             Humanizer.Wait(3.0, 4.0)
-            LastZoneTransitionTime = tick()
-            return
+            LastZoneTransitionTime = tick(); return
         end
         
         Notify("🍬 เริ่มเก็บแคนดี้", "เริ่มกวาดเก็บแคนดี้ทั่วทั้งพลาซ่าแบบ Real-Time และปลอดภัย 100%...", 3)
@@ -6175,7 +6119,7 @@ SafeCollectPlazaCandies = function(isManual)
             if IsInTrade() or getgenv().TradeActiveSession then break end
             if IsTowerInArena() then break end
             local bossNow = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-            if bossNow or IsEnteringBossPortal == true then break end
+            if bossNow or IsEnteringBossPortal == true then; break end
             
             char = LocalPlayer.Character or Character
             hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -6194,16 +6138,14 @@ SafeCollectPlazaCandies = function(isManual)
                     if (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(0, 0, 0)).Magnitude > 12 then
                         hum:MoveTo(centerPos)
                     end
-                    task.wait(0.35)
-                    continue
+                    task.wait(0.35); continue
                 else
                     -- พายุจบลงจริง 100% แล้ว และไม่มีลูกอมเหลืออยู่บนพื้น
                     -- รอเคลียร์เผื่อลูกอมลูกสุดท้ายอีก 4.0 วินาที
                     if tick() - lastCandySeen > 4.0 then
                         break
                     end
-                    task.wait(0.35)
-                    continue
+                    task.wait(0.35); continue
                 end
             end
             
@@ -6265,12 +6207,10 @@ SafeCollectPlazaCandies = function(isManual)
                     
                     -- ตรวจสอบว่าแคนดี้ถูกเซิร์ฟเวอร์เก็บไปแล้วหรือไม่
                     if targetCandy.Id and not ActiveCandies[targetCandy.Id] then
-                        isCollected = true
-                        break
+                        isCollected = true; break
                     end
                     if targetCandy.Model and not targetCandy.Model.Parent then
-                        isCollected = true
-                        break
+                        isCollected = true; break
                     end
                     
                     local curDist = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
@@ -6445,8 +6385,7 @@ local DropdownTrade = Tabs.Trade:AddDropdown("DropTradeTarget", {
                 local sLow = tostring(selection):lower()
                 for _, p in ipairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer and (p.Name:lower() == sLow or (p.DisplayName and p.DisplayName:lower() == sLow)) then
-                        t = p
-                        break
+                        t = p; break
                     end
                 end
             end
@@ -6781,8 +6720,7 @@ end
 IsAllowedTradeSender = function(senderId, senderName)
     if not senderId and not senderName then return false end
     -- หากเป็นค่าเริ่มต้น หรือเลือกทุกคนในห้อง หรือไม่มีการล็อคไอดี -> ยอมรับทุกคน
-    if not CFG.TradeTarget or CFG.TradeTarget == "[ เลือกทุกคนในห้อง ]" or CFG.TradeTargetId == nil then
-        return true
+    if not CFG.TradeTarget or CFG.TradeTarget == "[ เลือกทุกคนในห้อง ]" or CFG.TradeTargetId == nil then; return true
     end
     -- เช็คความตรงกันของ UserId (แปลงเป็นตัวเลขป้องกัน type mismatch)
     if CFG.TradeTargetId and senderId and tonumber(senderId) == tonumber(CFG.TradeTargetId) then
@@ -6792,8 +6730,7 @@ IsAllowedTradeSender = function(senderId, senderName)
     if senderName and CFG.TradeTarget then
         local sLower = tostring(senderName):lower()
         local tLower = tostring(CFG.TradeTarget):lower()
-        if sLower == tLower then
-            return true
+        if sLower == tLower then; return true
         end
         local targetPlr = Players:GetPlayerByUserId(tonumber(CFG.TradeTargetId) or 0)
         if targetPlr then
@@ -6825,8 +6762,7 @@ RespondAcceptTrade = function(senderId, senderName)
         if inWBoss then
             Notify("⚠️ ปฏิเสธการเทรด", "อยู่ใน World Boss ยังไม่สามารถตอบรับคำขอเทรดได้ในขณะนี้", 3)
             Fire("TradeRespond", senderId, false)
-            getgenv().TradeActiveSession = false
-            return
+            getgenv().TradeActiveSession = false; return
         end
 
         -- ถ้ากำลังอยู่ใน Arena (3D Scene) ให้ออกจาก Arena มาเป็น Away Mode ชั่วคราว
@@ -6986,12 +6922,10 @@ Tabs.Settings:AddButton({
         Notify("🔄 กำลังตรวจสอบอัปเดต...", "กำลังดาวน์โหลดโค้ดล่าสุดจาก GitHub...", 4)
         task.spawn(function()
             local success, newCode = pcall(function()
-                local url = "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua?t=" .. tostring(tick())
-                return game:HttpGet(url)
+                local url = "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua?t=" .. tostring(tick()); return game:HttpGet(url)
             end)
             if not success or not newCode or #newCode < 1000 then
-                success, newCode = pcall(function()
-                    return game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua")
+                success, newCode = pcall(function(); return game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua")
                 end)
             end
             if success and newCode and #newCode > 1000 then
@@ -7077,8 +7011,7 @@ SendDiscordInventoryReport = function(isManual)
     end
 
     local function fmtComma(n)
-        local s = tostring(math.floor(tonumber(n) or 0))
-        return (s:reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", ""))
+        local s = tostring(math.floor(tonumber(n) or 0)); return (s:reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", ""))
     end
     
     local playHours = math.floor((data.PlaySeconds or 0) / 3600)
@@ -7298,8 +7231,7 @@ SendDiscordInventoryReport = function(isManual)
     end
     
     task.spawn(function()
-        local ok, res = pcall(function()
-            return req({
+        local ok, res = pcall(function(); return req({
                 Url = webhookUrl,
                 Method = "POST",
                 Headers = {
@@ -7493,10 +7425,10 @@ task.spawn(function()
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         LoopHeartbeats["Loop1_AutoRoll"] = tick()
-        if not CanRunGeneralFarm() then task.wait(2.0) continue end
+        if not CanRunGeneralFarm() then task.wait(2.0); continue end
         local char = LocalPlayer.Character or Character
         local hum = char and (char:FindFirstChildOfClass("Humanoid") or Humanoid)
-        if not char or not hum or hum.Health <= 0 then task.wait(2.0) continue end
+        if not char or not hum or hum.Health <= 0 then task.wait(2.0); continue end
         
         if CFG.AutoPlay then
             pcall(function()
@@ -7532,7 +7464,7 @@ task.spawn(function()
         task.wait(3.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         LoopHeartbeats["Loop2_AutoBuyDice"] = tick()
-        if not CanRunGeneralFarm() then task.wait(2.0) continue end
+        if not CanRunGeneralFarm() then task.wait(2.0); continue end
         
         if CFG.AutoBuyDice then
             pcall(function()
@@ -7543,7 +7475,7 @@ task.spawn(function()
                     if not owned or not diceId then return false end
                     if owned[diceId] == true then return true end
                     for _, v in pairs(owned) do
-                        if v == diceId then return true end
+                        if v == diceId then; return true end
                     end
                     return false
                 end
@@ -7612,8 +7544,7 @@ task.spawn(function()
             
             if not CanRunTower() then
                 LiveTower.Active = false
-                LiveTower.Starting = false
-                return
+                LiveTower.Starting = false; return
             end
             
             local char = LocalPlayer.Character or Character
@@ -7719,10 +7650,10 @@ task.spawn(function()
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         LoopHeartbeats["Loop3_WorldBoss"] = tick()
-        if not CanRunWorldBoss() then task.wait(2.0) continue end
+        if not CanRunWorldBoss() then task.wait(2.0); continue end
         local char = LocalPlayer.Character or Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if not char or not hum or hum.Health <= 0 then task.wait(2.0) continue end
+        if not char or not hum or hum.Health <= 0 then task.wait(2.0); continue end
         
         local wbState = RS:GetAttribute("WorldBossState") or "Idle"
         local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
@@ -7833,26 +7764,24 @@ task.spawn(function()
     while true do
         task.wait(3.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if not CanRunGeneralFarm() then task.wait(2.0) continue end
-        if IsTowerInArena and IsTowerInArena() then task.wait(2.0) continue end
+        if not CanRunGeneralFarm() then task.wait(2.0); continue end
+        if IsTowerInArena and IsTowerInArena() then task.wait(2.0); continue end
         
         if CFG.AutoRebirth then
             local data = State.Data
-            if not data then task.wait(1.5) continue end
+            if not data then task.wait(1.5); continue end
             
             -- ตรวจสอบเป้าหมาย Rebirth (ถ้าตั้งไว้ และถึงเป้าหมายแล้ว ให้หยุดเกิดใหม่)
             local currentRebirths = data.Rebirths or 0
             local targetRebirths = tonumber(CFG.TargetRebirths) or 0
             if targetRebirths > 0 and currentRebirths >= targetRebirths then
-                task.wait(4.0)
-                continue
+                task.wait(4.0); continue
             end
             
             local cost = Stats and Stats.RebirthCost and Stats.RebirthCost(data)
             if cost and (data.Money or 0) >= cost then
                 if isEconomyActionMutex or getgenv().EconomyActionMutex or isZoneTransitionLocked then
-                    task.wait(1.0)
-                    continue
+                    task.wait(1.0); continue
                 end
                 
                 isEconomyActionMutex = true
@@ -7884,10 +7813,10 @@ task.spawn(function()
         local delayTime = math.max(3.0, CFG.UpgradeTreeDelay or 3)
         task.wait(delayTime)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.UpgradeTree or (IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers")) then
-            if isEconomyActionMutex then task.wait(1.5) continue end
+            if isEconomyActionMutex then task.wait(1.5); continue end
             isEconomyActionMutex = true
             getgenv().EconomyActionMutex = true
             getgenv().LastEconomyActionStartTime = tick()
@@ -7926,7 +7855,7 @@ task.spawn(function()
     while true do
         task.wait(1.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.AutoEquipBest then
             CircuitBreaker.Execute("AutoEquipBest", function()
@@ -8017,7 +7946,7 @@ task.spawn(function()
     while true do
         task.wait(8.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.AutoExpedition then
             CircuitBreaker.Execute("AutoExpedition", function()
@@ -8123,8 +8052,7 @@ task.spawn(function()
         -- Priority 3 Check: Trade(1) or World Boss(2) takes precedence!
         local canH, blockReason = CanRunHalloween()
         if not canH then
-            task.wait(2.0)
-            continue
+            task.wait(2.0); continue
         end
         
         CircuitBreaker.Execute("AutoHalloween", function()
@@ -8285,15 +8213,13 @@ task.spawn(function()
         end
         
         if not CFG.HalloweenAutoCollectCandy then
-            task.wait(2.0)
-            continue
+            task.wait(2.0); continue
         end
         
         -- Priority 3 Check: Trade(1) or World Boss(2) takes precedence!
         local canH = CanRunHalloween()
         if not canH then
-            task.wait(2.0)
-            continue
+            task.wait(2.0); continue
         end
         
         local isStormActive = IsCandyStormActive and IsCandyStormActive()
@@ -8316,8 +8242,7 @@ task.spawn(function()
         local data = State.Data
         local canTrade = data and Config.TradeUnlocked and Config.TradeUnlocked(data)
         if not canTrade then
-            task.wait(5.0)
-            continue
+            task.wait(5.0); continue
         end
         
         -- ตรวจสอบการตั้งค่าเปิดรับคำขอเทรดในเกม (TradeRequests Setting)
@@ -8337,8 +8262,7 @@ task.spawn(function()
                         local sLow = tostring(CFG.TradeTarget):lower()
                         for _, pl in ipairs(Players:GetPlayers()) do
                             if pl ~= LocalPlayer and (pl.Name:lower() == sLow or (pl.DisplayName and pl.DisplayName:lower() == sLow)) then
-                                p = pl
-                                break
+                                p = pl; break
                             end
                         end
                     end
@@ -8402,8 +8326,7 @@ task.spawn(function()
                         if reqSenderName then
                             for _, p in ipairs(Players:GetPlayers()) do
                                 if p.Name:upper() == reqSenderName:upper() or (p.DisplayName and p.DisplayName:upper() == reqSenderName:upper()) then
-                                    reqSenderPlayer = p
-                                    break
+                                    reqSenderPlayer = p; break
                                 end
                             end
                         end
@@ -8515,8 +8438,7 @@ task.spawn(function()
                             elseif them.Items then
                                 for _, itCount in pairs(them.Items) do
                                     if type(itCount) == "number" and itCount > 0 then
-                                        themHasItems = true
-                                        break
+                                        themHasItems = true; break
                                     end
                                 end
                             end
@@ -8563,12 +8485,11 @@ task.spawn(function()
     while true do
         task.wait(2.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.AutoUpgradePetLevel then
             if isPetOperationMutex or isAutoSellingActive or getgenv().IsEquipBestPending then
-                task.wait(0.3)
-                continue
+                task.wait(0.3); continue
             end
             isPetOperationMutex = true
             getgenv().PetOperationMutex = true
@@ -8579,18 +8500,16 @@ task.spawn(function()
                 CircuitBreaker.Execute("AutoUpgradePetLevel", function()
                     local data = State.Data
                     if not data or not data.Pets or not data.Money or data.Money <= 0 then 
-                        waitAfter = 3.0
-                        return 
+                        waitAfter = 3.0; return 
                     end
                     
                     -- ตรวจสอบว่าปลดล็อคระบบอัปเลเวลในต้นไม้ทักษะแล้วหรือไม่ ("PetUpgrades" / "petup")
                     if not IsFeatureUnlocked("PetUpgrades", "petup") then
-                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
-                        return
+                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด; return
                     end
                     
                     local cap = Stats.PetLevelCap(data.Upgrades)
-                    if not cap or cap <= 0 then waitAfter = 3.0 return end
+                    if not cap or cap <= 0 then waitAfter = 3.0; return end
                     
                     local targetLvl = math.min(CFG.TargetPetLevel or cap, cap)
                     local step = CFG.UpgradeLevelStep or 1
@@ -8653,12 +8572,11 @@ task.spawn(function()
     while true do
         task.wait(0.35)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.AutoRollGrade then
             if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive or getgenv().IsEquipBestPending then
-                task.wait(0.25)
-                continue
+                task.wait(0.25); continue
             end
             isPetOperationMutex = true
             isPetEnhanceRolling = true
@@ -8669,14 +8587,12 @@ task.spawn(function()
                 CircuitBreaker.Execute("AutoRollGrade", function()
                     local data = State.Data
                     if not data or not data.Pets or not data.Gems or data.Gems < 1 then
-                        waitAfter = 3.0
-                        return
+                        waitAfter = 3.0; return
                     end
                     
                     -- ตรวจสอบว่าปลดล็อคระบบเกรดในต้นไม้ทักษะแล้วหรือไม่ ("Grades" / "grades")
                     if not IsFeatureUnlocked("Grades", "grades") then
-                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
-                        return
+                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด; return
                     end
                     
                     local targetRank = CFG.TargetGradeRank or 8
@@ -8737,12 +8653,11 @@ task.spawn(function()
     while true do
         task.wait(0.35)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.AutoRollTrait then
             if isPetOperationMutex or isPetEnhanceRolling or isAutoSellingActive or getgenv().IsEquipBestPending then
-                task.wait(0.25)
-                continue
+                task.wait(0.25); continue
             end
             isPetOperationMutex = true
             isPetEnhanceRolling = true
@@ -8753,14 +8668,12 @@ task.spawn(function()
                 CircuitBreaker.Execute("AutoRollTrait", function()
                     local data = State.Data
                     if not data or not data.Pets or not data.Shards or data.Shards < 1 then
-                        waitAfter = 3.0
-                        return
+                        waitAfter = 3.0; return
                     end
                     
                     -- ตรวจสอบว่าปลดล็อคระบบ Trait (บัฟ) ในต้นไม้ทักษะแล้วหรือไม่ ("Traits" / "traits")
                     if not IsFeatureUnlocked("Traits", "traits") then
-                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด
-                        return
+                        waitAfter = 6.0 -- ยังไม่ปลดล็อค พักยาว 6 วินาที ไม่ส่งคำสั่งใดๆ เด็ดขาด; return
                     end
                     
                     local targetRank = CFG.TargetTraitRank or 6
@@ -8821,8 +8734,8 @@ task.spawn(function()
     while true do
         task.wait(2.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
-        if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0) continue end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
+        if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0); continue end
         
         CircuitBreaker.Execute("AutoConsumables", function()
             local data = State.Data
@@ -8914,7 +8827,7 @@ task.spawn(function()
     while true do
         task.wait(6.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0) continue end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         CircuitBreaker.Execute("AutoRewardsAndQuests", function()
             local data = State.Data
@@ -8936,7 +8849,7 @@ task.spawn(function()
                         for i, v in ipairs(RewardsConfig.Playtime) do
                             local claimed = (data.Playtime.Claimed or {})[tostring(i)] == true
                             local reached = (v.Minutes * 60) <= played
-                            if not claimed and reached then canPlaytime = true break end
+                            if not claimed and reached then canPlaytime = true; break end
                         end
                     end
                 end)
@@ -8991,11 +8904,11 @@ task.spawn(function()
     while true do
         task.wait(6.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0) continue end
-        if LocalPlayer:GetAttribute("PetDiceLoading") == true then task.wait(2.0) continue end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0); continue end
+        if LocalPlayer:GetAttribute("PetDiceLoading") == true then task.wait(2.0); continue end
         
         if CFG.AutoBuyMarket then
-            if isEconomyActionMutex then task.wait(1.5) continue end
+            if isEconomyActionMutex then task.wait(1.5); continue end
             isEconomyActionMutex = true
             getgenv().EconomyActionMutex = true
             getgenv().LastEconomyActionStartTime = tick()
@@ -9012,7 +8925,7 @@ task.spawn(function()
                     local now = State.Now and State.Now() or os.time()
                     local currentWindow = Market.Window(now)
                     local bought = data.Market and (data.Market.Window ~= currentWindow and {} or data.Market.Bought) or {}
-                    local _, canBuyCount, totalCost, totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
+                    local _, canBuyCount, totalCost, _totalLeft = Market.PlanBuyAll(currentWindow, bought, data.Rebirths or 0, data.Money or 0)
                     
                     if canBuyCount and canBuyCount > 0 and (data.Money or 0) >= (totalCost or 0) then
                         Humanizer.Wait(0.8, 1.5)
@@ -9037,7 +8950,7 @@ task.spawn(function()
     while true do
         task.wait(3.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
-        if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0) continue end
+        if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0); continue end
         
         if CFG.AutoSellPets and not isAutoSellingActive and not isPetOperationMutex and not isPetEnhanceRolling then
             pcall(function()
@@ -9073,8 +8986,7 @@ end)
 
 -- Expose core tower functions to global environment for external access and re-entry
 getgenv().PetDiceStartTower = function(towerId)
-    local targetId = ResolveTowerId(towerId or CFG.SelectedTower)
-    return SwitchOrStartTower(targetId, true)
+    local targetId = ResolveTowerId(towerId or CFG.SelectedTower); return SwitchOrStartTower(targetId, true)
 end
 
 getgenv().PetDiceScriptLoaded = true
