@@ -1036,18 +1036,21 @@ Fire = function(...)
         end
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local p = workspace:FindFirstChild("WorldBossPortal", true)
+        local p = (workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")) or workspace:FindFirstChild("WorldBossPortal", true)
         local spot = p and (p:FindFirstChild("PromptSpot") or p:FindFirstChild("JoinZone"))
         local bossPortalPos = spot and spot.Position or Vector3.new(0, 17.85, -298.0)
-        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 14 then
-            return -- ต้องอยู่ใกล้หน้าประตูบอสโลกไม่เกิน 14 studs (ProximityPrompt 16 studs) ป้องกัน Error 267 / 600
+        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 12 then
+            return -- ต้องอยู่ใกล้หน้าประตูบอสโลกไม่เกิน 12 studs (PromptSpot 16 studs) ป้องกัน Error 267
         end
-        if hrp.AssemblyLinearVelocity.Magnitude > 0.5 then
+        if hrp.AssemblyLinearVelocity.Magnitude > 0.15 then
             local waitStop = tick()
-            while hrp and hrp.AssemblyLinearVelocity.Magnitude > 0.5 and (tick() - waitStop < 1.0) do
+            while hrp and hrp.AssemblyLinearVelocity.Magnitude > 0.15 and (tick() - waitStop < 1.5) do
                 task.wait(0.1)
             end
-            if not hrp or hrp.AssemblyLinearVelocity.Magnitude > 0.5 then return end
+            if not hrp or hrp.AssemblyLinearVelocity.Magnitude > 0.15 then return end
+        end
+        if (tick() - (LastRemoteFire["Teleport"] or 0) < 2.5) then
+            return -- ต้องรอหลังเทเลพอร์ตอย่างน้อย 2.5 วิ ให้เซิร์ฟเวอร์ Sync พิกัดตัวละครให้ตรงกัน 100%
         end
     end
     if action == "WorldBossLeave" then
@@ -1056,26 +1059,15 @@ Fire = function(...)
         if not isJoined then return end
     end
     if action == "PortalRepair" then
-        if not IsFeatureUnlocked("WorldBoss", "worldboss") then return end
-        local d = State.Data
-        if d and d.PortalRepaired then return end
-        local char = LocalPlayer.Character or Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local p = workspace:FindFirstChild("WorldBossPortal", true)
-        local spot = p and (p:FindFirstChild("PromptSpot") or p:FindFirstChild("JoinZone"))
-        local bossPortalPos = spot and spot.Position or Vector3.new(0, 17.85, -298.0)
-        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 14 then
-            return -- ต้องอยู่หน้าประตูบอสโลกจริงขณะซ่อม (Prompt 16 studs) ป้องกัน Error 267 / 600
-        end
-        if hrp.AssemblyLinearVelocity.Magnitude > 0.5 then
-            local waitStop = tick()
-            while hrp and hrp.AssemblyLinearVelocity.Magnitude > 0.5 and (tick() - waitStop < 1.0) do
-                task.wait(0.1)
-            end
-            if not hrp or hrp.AssemblyLinearVelocity.Magnitude > 0.5 then return end
-        end
+        return -- ปิดกั้นการส่งรีโมต PortalRepair เด็ดขาด เนื่องจากตัวเกมแท้ต้องทำเควสต์หยิบ Keystone วิ่งไปส่งหน้าประตูก่อน การยิงรีโมตตรงส่งผลให้เซิร์ฟเวอร์ตรวจพบความผิดปกติและตัดการเชื่อมต่อ Error 267
     end
-    if action == "Teleport" and args[2] == "Portal" and not IsFeatureUnlocked("WorldBoss", "worldboss") then return
+    if action == "Teleport" and args[2] == "Portal" then
+        if not IsFeatureUnlocked("WorldBoss", "worldboss") then return end
+        local wbState = RS:GetAttribute("WorldBossState")
+        if wbState ~= "Joining" and wbState ~= "Fighting" then return end
+        if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 4.0) then
+            return -- ป้องกัน Error 267 จากการสลับโซนเร็วเกินไป (Zone Transition Collision) หลังเพิ่งออกจากหอคอย
+        end
     end
     if action == "BuyUpgrade" and args[2] == "worldboss" and not IsFeatureUnlocked("PetUpgrades", "petup") then return
     end
@@ -3932,12 +3924,7 @@ ExitArenaCleanly = function(reason)
         end
     end)
     pcall(function()
-        if State and type(State.Send) == "function" then
-            State.Send("TowerExit")
-        end
-        if Action then
-            Action:FireServer("TowerExit")
-        end
+        Fire("TowerExit")
     end)
     LastRemoteFire["TowerExit"] = tick()
     LiveTower.InArena = false
@@ -3971,12 +3958,7 @@ LeaveTowerCleanly = function(reason)
     task.spawn(function()
         -- 2. ปิด TowerAutoplay ของระบบเกมแท้ทันที เพื่อไม่ให้เซิร์ฟเวอร์เริ่มชั้นถัดไปอัตโนมัติ
         pcall(function()
-            if State and type(State.Send) == "function" then
-                State.Send("SetSetting", "TowerAutoplay", false)
-            end
-            if Action then
-                Action:FireServer("SetSetting", "TowerAutoplay", false)
-            end
+            Fire("SetSetting", "TowerAutoplay", false)
         end)
 
         -- 3. ตรวจสอบ UI และยิงสัญญาณออกจากหอคอย
@@ -4013,10 +3995,8 @@ LeaveTowerCleanly = function(reason)
         -- ส่งสัญญาณรอบที่ 1
         triggerExitButtons()
         pcall(function()
-            if State and type(State.Send) == "function" then State.Send("TowerLeave") end
-            if Action then Action:FireServer("TowerLeave") end
+            Fire("TowerLeave")
         end)
-        LastRemoteFire["TowerLeave"] = tick()
 
         -- ตรวจสอบและจัดการกรณีเกมสลับจาก Away Mode กลับมายัง Battle Arena
         local waitStart = tick()
@@ -4037,8 +4017,7 @@ LeaveTowerCleanly = function(reason)
             if inArena then
                 triggerExitButtons()
                 pcall(function()
-                    if State and type(State.Send) == "function" then State.Send("TowerLeave") end
-                    if Action then Action:FireServer("TowerLeave") end
+                    Fire("TowerLeave")
                 end)
             end
         end
@@ -4099,27 +4078,37 @@ SafeWalkToBossPortal = function()
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not char or not hum or not hrp or hum.Health <= 0 then return false end
         
-        local portalModel = workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")
-        local promptSpot = portalModel and portalModel:FindFirstChild("PromptSpot")
-        local targetPos = promptSpot and promptSpot.Position or Vector3.new(0, 20.43, -298)
+        -- รอให้เซิร์ฟเวอร์เคลียร์สถานะออกจากหอคอยอย่างสมบูรณ์ก่อนเริ่มเดินทาง (ป้องกัน Zone Collision / Error 267)
+        local timeSinceTowerLeave = tick() - (LastRemoteFire["TowerLeave"] or 0)
+        if timeSinceTowerLeave < 3.5 then
+            task.wait(3.5 - timeSinceTowerLeave)
+        end
         
-        -- หากตัวละครอยู่ไกลเกิน 45 studs ใช้ระบบการเดินทางอย่างเป็นทางการของตัวเกม (Teleport: Portal)
-        -- ซึ่งเซิร์ฟเวอร์ตัวเกมจะนำพาตัวละครมาส่งที่หน้าบันไดพิกัด (0, 5.35, -254) อย่างถูกต้อง 100% ไร้การปรับแต่ง CFrame
-        if (hrp.Position - targetPos).Magnitude > 45 then
-            Humanizer.Wait(0.5, 1.0)
+        local portalModel = (workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")) or workspace:FindFirstChild("WorldBossPortal", true)
+        local promptSpot = portalModel and portalModel:FindFirstChild("PromptSpot")
+        local targetPos = promptSpot and promptSpot.Position or Vector3.new(0, 17.85, -298)
+        
+        char = LocalPlayer.Character or Character
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp then return false end
+        
+        -- หากตัวละครอยู่ไกลเกิน 35 studs ใช้ระบบการเดินทางอย่างเป็นทางการของตัวเกม (Teleport: Portal)
+        if (hrp.Position - targetPos).Magnitude > 35 then
+            Humanizer.Wait(0.6, 1.0)
             Fire("Teleport", "Portal")
             
             local t0 = tick()
-            while tick() - t0 < 3.5 do
+            while tick() - t0 < 4.0 do
                 task.wait(0.1)
                 char = LocalPlayer.Character or Character
                 hrp = char and char:FindFirstChild("HumanoidRootPart")
-                if hrp and (hrp.Position - Vector3.new(0, 5.35, -254)).Magnitude < 15 then
+                if hrp and (hrp.Position - targetPos).Magnitude < 40 then
                     break
                 end
             end
-            -- หน่วงเวลาพักหลังลงจอด เลียนแบบผู้เล่นจริง
-            Humanizer.Wait(0.5, 0.9)
+            -- หน่วงเวลาพักหลังลงจอด เลียนแบบผู้เล่นจริงและรอเซิร์ฟเวอร์ Sync ตำแหน่ง
+            Humanizer.Wait(1.0, 1.5)
         end
         
         char = LocalPlayer.Character or Character
@@ -4127,35 +4116,48 @@ SafeWalkToBossPortal = function()
         hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
         
-        -- เดินก้าวขึ้นบันไดตามความชันจริงด้วย Humanoid:MoveTo ไปยังแท่นชานชาลา TopTile (0, 20.43, -288)
-        if (hrp.Position - Vector3.new(0, 20.43, -288)).Magnitude > 6 then
-            hum:MoveTo(Vector3.new(0, 20.43, -288))
+        -- เดินก้าวขึ้นบันไดตามความชันจริงด้วย Humanoid:MoveTo ไปยังแท่นชานชาลา TopTile (0, 17.85, -288)
+        local midWayPos = Vector3.new(0, 17.85, -288)
+        if (hrp.Position - midWayPos).Magnitude > 6 then
+            hum:MoveTo(midWayPos)
+            local walkStart = tick()
+            while tick() - walkStart < 3.5 do
+                task.wait(0.05)
+                if not hum or not hrp then break end
+                if (hrp.Position - midWayPos).Magnitude <= 4 then
+                    break
+                end
+            end
+        end
+        
+        -- เดินก้าวเท้าเข้าสู่โซนประตู PromptSpot (0, 17.85, -298) อย่างเป็นธรรมชาติ
+        if hum and hrp then
+            hum:MoveTo(targetPos)
             local walkStart = tick()
             while tick() - walkStart < 3.0 do
                 task.wait(0.05)
                 if not hum or not hrp then break end
-                if (hrp.Position - Vector3.new(0, 20.43, -288)).Magnitude <= 5 then
+                if (hrp.Position - targetPos).Magnitude <= 4 then
                     break
                 end
             end
         end
         
-        -- เดินก้าวเท้าเข้าสู่โซนประตู JoinZone / Prompt (0, 20.43, -298) อย่างเป็นธรรมชาติ
-        if hum and hrp then
-            hum:MoveTo(targetPos)
-            local walkStart = tick()
-            while tick() - walkStart < 2.0 do
-                task.wait(0.05)
-                if not hum or not hrp then break end
-                if (hrp.Position - targetPos).Magnitude <= 5 then
-                    break
-                end
-            end
+        -- หยุดเดินให้สนิทและรอความเร็วเป็น 0 เพื่อความสมจริงและป้องกันเซิร์ฟเวอร์ดีดกลับ
+        char = LocalPlayer.Character or Character
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hum then hum:Move(Vector3.zero) end
+        
+        local stopWait = tick()
+        while hrp and hrp.AssemblyLinearVelocity.Magnitude > 0.15 and (tick() - stopWait < 1.5) do
+            task.wait(0.1)
         end
         
         char = LocalPlayer.Character or Character
         hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp and (hrp.Position - targetPos).Magnitude <= 15 then
+        if hrp and (hrp.Position - targetPos).Magnitude <= 10 then
+            Humanizer.Wait(0.6, 1.0) -- ยืนนิ่งหน้าประตูอย่างปลอดภัยก่อนตอบรับ
             return true
         end
         return false
@@ -7666,6 +7668,7 @@ end)
 task.spawn(function()
     local lastBossJoinAttempt = 0
     local wasInBoss = false
+    local hasAttemptedBossJoinThisJoining = false
     local lastWbState = RS:GetAttribute("WorldBossState") or "Idle"
     while true do
         task.wait(1.5)
@@ -7678,6 +7681,10 @@ task.spawn(function()
         
         local wbState = RS:GetAttribute("WorldBossState") or "Idle"
         local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+        
+        if wbState ~= "Joining" then
+            hasAttemptedBossJoinThisJoining = false
+        end
         
         if isJoined or (wbState == "Fighting" and (wasInBoss or DoesWorldBossMatchFilter())) then
             wasInBoss = true
@@ -7713,7 +7720,7 @@ task.spawn(function()
                 local wbElem = RS:GetAttribute("WorldBossElement") or ""
                 local wbDiff = RS:GetAttribute("WorldBossDifficulty") or ""
                 
-                if wbState == "Joining" and not isJoined then
+                if wbState == "Joining" and not isJoined and not hasAttemptedBossJoinThisJoining then
                     -- กรองธาตุ
                     local elemMatch = (not CFG.WorldBossElementFilter) or 
                                      (CFG.WorldBossElementFilter == "[ ตีทุกธาตุ (All Elements) ]") or 
@@ -7728,7 +7735,7 @@ task.spawn(function()
                     
                     if elemMatch and diffMatch then
                         local now = tick()
-                        if now - lastBossJoinAttempt >= 5.0 then
+                        if now - lastBossJoinAttempt >= 6.0 then
                             lastBossJoinAttempt = now
                             CircuitBreaker.Execute("WorldBossJoin", function()
                                 local data = State.Data
@@ -7737,6 +7744,12 @@ task.spawn(function()
                                 -- ถ้ายังไม่ปลดล็อค ไม่ต้องออกจากหอคอย ไม่ต้องเดินไปประตูบอสโลก ให้ฟาร์มหอคอยต่อไปอย่างปลอดภัย 100%
                                 if not isBossUnlocked then return end
                                 
+                                -- ตรวจสอบความสมบูรณ์ของประตูบอสโลก (หากชำรุดแจ้งเตือนให้ผู้เล่นทำเควสต์ ไม่ยิงรีโมตตรงป้องกัน Error 267)
+                                if data and data.PortalRepaired == false then
+                                    Notify("⚠️ ประตูบอสชำรุด", "กรุณานำ Keystone ไปวางที่หน้าประตูบอสโลกก่อน จึงจะสามารถเข้าร่วมได้!", 5)
+                                    return
+                                end
+                                
                                 -- 1. พักหอคอยก่อนเพื่อให้สัตว์เลี้ยงว่างพร้อมตีบอส (Priority 2 เหนือกว่า Priority 4)
                                 if IsTowerRunning and IsTowerRunning() then
                                     Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อให้สัตว์เลี้ยงพร้อมสู้บอสโลก...", 2)
@@ -7744,34 +7757,29 @@ task.spawn(function()
                                         isWorldBossTransitioning = true
                                         Fire("TowerLeave")
                                     end
-                                    LiveTower.Active = false
-                                    LiveTower.Starting = false
-                                    LiveTower.LastEventTime = 0
-                                    LiveTower.TowerId = nil
                                     local leaveWaitStart = tick()
                                     while IsTowerRunning() and (tick() - leaveWaitStart < 4.0) do
                                         task.wait(0.2)
                                     end
+                                    LiveTower.Active = false
+                                    LiveTower.Starting = false
+                                    LiveTower.LastEventTime = 0
+                                    LiveTower.TowerId = nil
                                     isWorldBossTransitioning = false
-                                    Humanizer.Wait(1.5, 2.5)
+                                    Humanizer.Wait(3.0, 4.0)
                                     LastZoneTransitionTime = tick()
                                 end
                                 
                                 -- 2. เดินทางไปหน้าประตูบอสด้วยระบบทางการของตัวเกม และเดินขึ้นบันไดตามธรรมชาติ (ปลอดภัยจากการตรวจจับ 100%)
                                 local arrived = SafeWalkToBossPortal()
                                 
-                                -- ตรวจสอบการซ่อมแซมประตูบอสโลกเมื่อเดินถึงหน้าประตูแล้วเท่านั้น
-                                if arrived and data and not data.PortalRepaired then
-                                    Fire("PortalRepair")
-                                    Humanizer.Wait(1.0, 1.5)
-                                end
-                                
                                 -- 3. Humanizer หน่วงเวลาเล็กน้อย
-                                Humanizer.Wait(0.5, 1.0)
+                                Humanizer.Wait(0.6, 1.2)
                                 if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.AutoWorldBoss then return end
                                 
                                 -- 4. ส่งคำสั่งเข้าร่วมบอสโลก
                                 if arrived then
+                                    hasAttemptedBossJoinThisJoining = true
                                     Fire("WorldBossJoin")
                                     Notify("⚔️ บอสโลก", string.format("เข้าร่วมการตีบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 4)
                                 else
