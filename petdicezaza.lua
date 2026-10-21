@@ -1273,8 +1273,8 @@ Fire = function(...)
         if data and data.Settings and data.Settings[sKey] == sVal then return end
     end
     if action == "Teleport" then
-        if (IsTowerRunning and IsTowerRunning()) or (IsTowerInArena and IsTowerInArena()) then
-            return -- ห้ามส่งคำสั่ง Teleport เด็ดขาดขณะอยู่ในระบบหอคอยหรืออารีน่าหอคอย ป้องกัน Error 267
+        if IsTowerInArena and IsTowerInArena() then
+            return -- ห้ามส่งคำสั่ง Teleport เด็ดขาดขณะอยู่ใน 3D Battle Arena ของหอคอย (ต้องอยู่ใน Away Mode ก่อน) ป้องกัน Error 267
         end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
         if isBoss or IsEnteringBossPortal == true then return -- ห้ามส่งคำสั่ง Teleport ขณะกำลังสู้บอสโลก ป้องกัน Error 267
@@ -1821,10 +1821,14 @@ WalkToPawcula = function()
         return true
     end
     
-    -- หากกำลังอยู่ในอารีน่าหอคอย ให้ออกจากอารีน่าก่อน
+    -- หากกำลังอยู่ในอารีน่าหอคอย ให้ออกจากอารีน่าสู่โหมดเบื้องหลัง (Away Mode) ก่อน
     if IsTowerInArena and IsTowerInArena() then
-        Fire("TowerLeave")
-        Humanizer.Wait(2.5, 3.5)
+        if ExitArenaCleanly then
+            ExitArenaCleanly()
+        else
+            Fire("TowerExit")
+        end
+        Humanizer.Wait(1.5, 2.5)
         char = LocalPlayer.Character or Character
         hum = char and char:FindFirstChildOfClass("Humanoid")
         hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -3911,28 +3915,51 @@ GetCurrentTowerFloor = function()
     return 0
 end
 
+local isExitingArenaCleanly = false
 ExitArenaCleanly = function(reason)
-    pcall(function()
-        local pg = LocalPlayer:FindFirstChild("PlayerGui")
-        local hud = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Hud")
-        local battle = hud and hud:FindFirstChild("Battle")
-        local exitArena = battle and battle:FindFirstChild("ExitArena", true)
-        local exitFace = exitArena and exitArena:FindFirstChild("Face")
-        if exitFace and firesignal then
-            pcall(function() firesignal(exitFace.Activated) end)
-            pcall(function() firesignal(exitFace.MouseButton1Click) end)
+    if isExitingArenaCleanly then return end
+    if not IsTowerInArena or not IsTowerInArena() then return end
+    isExitingArenaCleanly = true
+
+    task.spawn(function()
+        local fired = false
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            local pdUI = pg and pg:FindFirstChild("PetDiceUI")
+            local root = pdUI and pdUI:FindFirstChild("Root")
+            local hud = root and root:FindFirstChild("Hud")
+            local battle = hud and hud:FindFirstChild("Battle")
+            local exitArena = battle and battle:FindFirstChild("ExitArena", true)
+            local exitFace = exitArena and exitArena:FindFirstChild("Face")
+            if exitFace and firesignal then
+                pcall(function() firesignal(exitFace.Activated) end)
+                fired = true
+            end
+        end)
+
+        if not fired then
+            pcall(function()
+                Fire("TowerExit")
+            end)
         end
-    end)
-    pcall(function()
-        Fire("TowerExit")
-    end)
-    LastRemoteFire["TowerExit"] = tick()
-    LiveTower.InArena = false
-    LiveTower.Away = true
-    local msg = reason or "ออกจากอารีน่ามายังโหมดเบื้องหลัง (Away Mode) เรียบร้อย!"
-    Notify("🚪 หอคอย", msg, 2)
-    task.delay(0.2, function()
-        if UpdateTowerStatus then UpdateTowerStatus() end
+
+        LastRemoteFire["TowerExit"] = tick()
+        
+        -- รอการเปลี่ยนผ่านเข้าสู่ Away Mode สูงสุด 3 วินาที
+        local t0 = tick()
+        while tick() - t0 < 3.0 do
+            task.wait(0.2)
+            if not IsTowerInArena or not IsTowerInArena() then break end
+        end
+
+        LiveTower.InArena = false
+        LiveTower.Away = true
+        local msg = reason or "ออกจากอารีน่ามายังโหมดเบื้องหลัง (Away Mode) เรียบร้อย!"
+        Notify("🚪 หอคอย", msg, 2)
+        task.delay(0.2, function()
+            if UpdateTowerStatus then UpdateTowerStatus() end
+        end)
+        isExitingArenaCleanly = false
     end)
 end
 getgenv().ExitArenaCleanly = ExitArenaCleanly
@@ -4171,7 +4198,7 @@ local function GetTowerTeam(towerDef, teamSize)
     local data = State.Data
     if not data or not data.Pets then return {} end
     
-    local targetSize = teamSize or 4
+    local targetSize = teamSize or (Towers and Towers.TeamSize) or 5
     pcall(function()
         if Towers and Towers.TeamSizeFor then
             targetSize = Towers.TeamSizeFor(data) or targetSize
@@ -4313,10 +4340,20 @@ SwitchOrStartTower = function(targetTowerId, force)
     local isRunning = IsTowerRunning()
     local activeTower = GetActiveTowerId()
     
-    -- หากกำลังลงหอคอยนี้อยู่แล้ว และไม่ได้สั่งบังคับ (force) ให้ข้ามคำสั่ง
-    if not force and isRunning and activeTower == resolvedId then
+    -- หากกำลังลงหอคอยนี้อยู่แล้ว ไม่ต้องออกจากหอคอยเด็ดขาด (ป้องกันการเตะตัวเองหลุดชั้นและรีเซ็ตกลับชั้น 1)
+    if isRunning and activeTower == resolvedId then
+        pcall(function()
+            local d = State.Data
+            if d and d.Settings and d.Settings.TowerAutoplay ~= true then
+                Fire("SetSetting", "TowerAutoplay", true)
+            end
+        end)
         if CFG.AutoExitArena and IsTowerInArena() then
-            Fire("TowerExit")
+            if ExitArenaCleanly then
+                ExitArenaCleanly()
+            else
+                Fire("TowerExit")
+            end
         end
         task.delay(0.2, function() if UpdateTowerStatus then UpdateTowerStatus() end end)
         return true
@@ -4327,7 +4364,7 @@ SwitchOrStartTower = function(targetTowerId, force)
     lastTowerStartTick = nowTick
     
     local ok, res = pcall(function()
-        -- หากกำลังลงหอคอยอยู่ ให้สั่งออกจากหอเดิมอย่างสมบูรณ์ก่อน
+        -- หากกำลังลงหอคอยอื่นอยู่ ให้สั่งออกจากหอเดิมอย่างสมบูรณ์ก่อน
         if isRunning then
             local oldDef = Towers.ById and Towers.ById[activeTower]
             local oldName = oldDef and oldDef.Name or activeTower
@@ -4343,7 +4380,8 @@ SwitchOrStartTower = function(targetTowerId, force)
             while tick() - leaveStart < 3.0 do
                 task.wait(0.1)
                 local pg = LocalPlayer:FindFirstChild("PlayerGui")
-                local root = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root")
+                local pdUI = pg and pg:FindFirstChild("PetDiceUI")
+                local root = pdUI and pdUI:FindFirstChild("Root")
                 local hud = root and root:FindFirstChild("Hud")
                 local away = hud and hud:FindFirstChild("TowerTracker") and hud.TowerTracker.Visible == true
                 local arena = hud and hud:FindFirstChild("Battle") and hud.Battle.Visible == true
@@ -4353,7 +4391,9 @@ SwitchOrStartTower = function(targetTowerId, force)
             -- ล้างหน้าต่างผลลัพธ์ BattleResults ทันที
             pcall(function()
                 local pg = LocalPlayer:FindFirstChild("PlayerGui")
-                local br = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Effects") and pg.PetDiceUI.Root.Effects:FindFirstChild("BattleResults")
+                local pdUI = pg and pg:FindFirstChild("PetDiceUI")
+                local root = pdUI and pdUI:FindFirstChild("Root")
+                local br = root and root:FindFirstChild("Effects") and root.Effects:FindFirstChild("BattleResults")
                 if br and br.Visible then br.Visible = false end
             end)
             
@@ -4369,9 +4409,20 @@ SwitchOrStartTower = function(targetTowerId, force)
                 Notify("🏰 หอคอย", "กำลังเริ่มลง [" .. tostring(towerDef.Name or resolvedId) .. "]...", 3)
             end
             if CFG.AutoExitArena then
-                task.delay(4.0, function() 
-                    if getgenv().PetDiceScriptToken == scriptToken and IsTowerInArena() then
-                        Fire("TowerExit") 
+                task.spawn(function()
+                    local waitStart = tick()
+                    while tick() - waitStart < 12.0 do
+                        task.wait(0.5)
+                        if getgenv().PetDiceScriptToken ~= scriptToken then break end
+                        if IsTowerInArena() then
+                            if ExitArenaCleanly then
+                                ExitArenaCleanly()
+                            else
+                                Fire("TowerExit")
+                            end
+                            break
+                        end
+                        if not IsTowerRunning() then break end
                     end
                 end)
             end
@@ -6069,20 +6120,15 @@ SafeCollectPlazaCandies = function(isManual)
     getgenv().IsCandyStormActiveRunning = true
     getgenv().LastCandyStormStartTime = tick()
     
-    -- หากกำลังลงหอคอยอยู่ ให้ออกจากหอคอยชั่วคราว เพื่อไปเก็บแคนดี้ตามความต้องการของผู้ใช้ (และจะกลับมาเริ่มใหม่เมื่อเก็บเสร็จ)
-    if CFG.Tower and IsTowerRunning() then
-        Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อไปเก็บพายุลูกกวาด...", 2)
-        Fire("TowerLeave")
-        LiveTower.Active = false
-        LiveTower.Starting = false
-        LiveTower.LastEventTime = 0
-        LiveTower.TowerId = nil
-        local leaveWaitStart = tick()
-        while IsTowerRunning() and (tick() - leaveWaitStart < 4.0) do
-            task.wait(0.2)
+    -- หากกำลังอยู่ใน 3D Battle Arena ให้ออกจากอารีน่าสู่โหมดเบื้องหลัง (Away Mode) เพื่อให้ตัวละครเดินเก็บแคนดี้ในลานพลาซ่าได้ โดยไม่ต้องยกเลิกหอคอย
+    if IsTowerInArena and IsTowerInArena() then
+        Notify("🏰 หอคอย", "ออกจากอารีน่าสู่โหมดเบื้องหลัง เพื่อเก็บพายุลูกกวาด...", 2)
+        if ExitArenaCleanly then
+            ExitArenaCleanly()
+        else
+            Fire("TowerExit")
         end
-        Humanizer.Wait(2.0, 3.0)
-        LastZoneTransitionTime = tick()
+        Humanizer.Wait(1.5, 2.5)
     end
     
     local collectedThisRound = 0
@@ -7566,8 +7612,11 @@ task.spawn(function()
             end
             
             if not CanRunTower() then
-                LiveTower.Active = false
-                LiveTower.Starting = false; return
+                if not (IsTowerRunning and IsTowerRunning()) then
+                    LiveTower.Active = false
+                    LiveTower.Starting = false
+                end
+                return
             end
             
             local char = LocalPlayer.Character or Character
@@ -8184,9 +8233,13 @@ task.spawn(function()
                     
                     pcall(function()
                         if IsTowerInArena and IsTowerInArena() then
-                            Notify("🏰 หอคอย", "ออกจากอารีน่าหอคอยชั่วคราวเพื่อไปขอขนม...", 2)
-                            Fire("TowerLeave")
-                            Humanizer.Wait(2.5, 3.5)
+                            Notify("🏰 หอคอย", "ออกจากอารีน่าสู่โหมดเบื้องหลังเพื่อไปขอขนม...", 2)
+                            if ExitArenaCleanly then
+                                ExitArenaCleanly()
+                            else
+                                Fire("TowerExit")
+                            end
+                            Humanizer.Wait(1.5, 2.5)
                             LastZoneTransitionTime = tick()
                         end
                         
