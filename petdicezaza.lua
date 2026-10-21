@@ -853,6 +853,32 @@ local function IsPlayerAtHomePlot()
     
     return distCenter >= 140
 end
+
+local function IsPlayerInsideBossJoinZone()
+    local char = LocalPlayer.Character or Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    local portal = (workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")) or workspace:FindFirstChild("WorldBossPortal", true)
+    local jz = portal and portal:FindFirstChild("JoinZone")
+    if jz and jz:IsA("BasePart") then
+        local p = jz.CFrame:PointToObjectSpace(hrp.Position)
+        local half = jz.Size / 2 + Vector3.new(1.5, 1.5, 1.5)
+        if math.abs(p.X) <= half.X and math.abs(p.Y) <= half.Y and math.abs(p.Z) <= half.Z then
+            return true
+        end
+    end
+    -- Fallback ตรวจสอบพิกัดของ JoinZone: X in [-11.5, 11.5], Z in [-306.5, -301.5], Y in [15, 45]
+    local pos = hrp.Position
+    if math.abs(pos.X) <= 11.5 and pos.Z <= -301.5 and pos.Z >= -306.5 and pos.Y >= 15 and pos.Y <= 45 then
+        return true
+    end
+    local target = Vector3.new(0, 17.85, -304)
+    if (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(target.X, 0, target.Z)).Magnitude <= 4.0 then
+        return true
+    end
+    return false
+end
 local isPetEnhanceRolling = false
 local isPetOperationMutex = false
 local isEconomyActionMutex = false
@@ -1139,14 +1165,13 @@ Fire = function(...)
         if not d or not d.PortalRepaired then
             return -- ประตูยังไม่ได้ซ่อมแซม ห้ามเข้าร่วม
         end
+        -- ตรวจสอบอย่างเข้มงวดว่าตัวละครต้องก้าวเข้าไปอยู่ใน JoinZone จริงๆ 100% ป้องกัน Error 267
+        if not IsPlayerInsideBossJoinZone() then
+            return -- อยู่นอกโซน JoinZone ห้ามส่งคำสั่ง WorldBossJoin เด็ดขาด (สาเหตุหลักของ Error 267)
+        end
         local char = LocalPlayer.Character or Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local p = (workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")) or workspace:FindFirstChild("WorldBossPortal", true)
-        local spot = p and (p:FindFirstChild("PromptSpot") or p:FindFirstChild("JoinZone"))
-        local bossPortalPos = spot and spot.Position or Vector3.new(0, 17.85, -298.0)
-        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 14 then
-            return -- ต้องอยู่ใกล้หน้าประตูบอสโลกไม่เกิน 14 studs (PromptSpot 16 studs) ป้องกัน Error 267
-        end
+        if not hrp then return end
         if hrp.AssemblyLinearVelocity.Magnitude > 0.25 then
             local waitStop = tick()
             while hrp and hrp.AssemblyLinearVelocity.Magnitude > 0.25 and (tick() - waitStop < 1.5) do
@@ -1168,8 +1193,8 @@ Fire = function(...)
     end
     if action == "Teleport" then
         local dest = args[2]
-        if dest ~= "Home" and dest ~= "Hub" then
-            return -- ป้องกัน Error 267 เด็ดขาด: ปลายทาง Teleport ของตัวเกม Pet Dice มีเพียง "Home" และ "Hub" เท่านั้น
+        if dest ~= "Home" and dest ~= "Hub" and dest ~= "Portal" then
+            return -- ป้องกัน Error 267 เด็ดขาด: ปลายทาง Teleport ของตัวเกม Pet Dice มีเพียง "Home", "Hub" และ "Portal" เท่านั้น
         end
     end
     if action == "BuyUpgrade" and args[2] == "worldboss" and not IsFeatureUnlocked("PetUpgrades", "petup") then return
@@ -1380,15 +1405,15 @@ Fire = function(...)
             return -- ห้ามส่งคำสั่ง Teleport เด็ดขาดขณะอยู่ใน 3D Battle Arena ของหอคอย (ต้องอยู่ใน Away Mode ก่อน) ป้องกัน Error 267
         end
         local isBoss = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
-        if isBoss or IsEnteringBossPortal == true then return -- ห้ามส่งคำสั่ง Teleport ขณะกำลังสู้บอสโลก ป้องกัน Error 267
+        if isBoss then return -- ห้ามส่งคำสั่ง Teleport ขณะกำลังสู้บอสโลก ป้องกัน Error 267
         end
         if IsInTrade and (IsInTrade() or getgenv().TradeActiveSession) then
             return -- ห้ามส่งคำสั่ง Teleport ระหว่างเทรด
         end
         
         local dest = args[2]
-        if dest ~= "Home" and dest ~= "Hub" then
-            return -- ป้องกัน Error 267 เด็ดขาด: ปลายทาง Teleport มีเพียง "Home" และ "Hub" เท่านั้น
+        if dest ~= "Home" and dest ~= "Hub" and dest ~= "Portal" then
+            return -- ป้องกัน Error 267 เด็ดขาด: ปลายทาง Teleport มีเพียง "Home", "Hub" และ "Portal" เท่านั้น
         end
         
         -- ตรวจสอบตัวละครและสภาพร่างกายก่อนวาร์ป ป้องกัน desync และ Error 600
@@ -1401,6 +1426,8 @@ Fire = function(...)
         
         local mag = Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude
         if dest == "Hub" and mag < 120 then return -- อยู่ในลานพลาซ่า/ฮับศูนย์กลางอยู่แล้ว ห้ามส่ง Teleport Hub ซ้ำ ป้องกัน Error 267
+        end
+        if dest == "Portal" and ((hrp.Position - Vector3.new(0, 17.85, -304)).Magnitude < 20 or IsPlayerInsideBossJoinZone()) then return -- อยู่หน้าประตูบอสอยู่แล้ว ไม่ต้องส่ง Teleport Portal ซ้ำ ป้องกัน Error 267
         end
         if dest == "Home" and IsPlayerAtHomePlot() and not (IsTowerRunning and IsTowerRunning()) then return -- อยู่ในพื้นที่บ้าน (Home Plot) ของตัวเองอยู่แล้ว ไม่ต้องส่ง Teleport Home ซ้ำ ป้องกัน Error 267
         end
@@ -4406,18 +4433,23 @@ SafeWalkToBossPortal = function()
         end
         
         local portalModel = (workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")) or workspace:FindFirstChild("WorldBossPortal", true)
-        local promptSpot = portalModel and portalModel:FindFirstChild("PromptSpot")
-        local targetPos = promptSpot and promptSpot.Position or Vector3.new(0, 17.85, -298)
+        local joinZone = portalModel and portalModel:FindFirstChild("JoinZone")
+        local targetPos = Vector3.new(0, 17.85, -304)
+        if joinZone and joinZone:IsA("BasePart") then
+            targetPos = Vector3.new(joinZone.Position.X, 17.85, joinZone.Position.Z)
+        end
         
         char = LocalPlayer.Character or Character
         hum = char and char:FindFirstChildOfClass("Humanoid")
         hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
         
-        local distToPortal = (hrp.Position - targetPos).Magnitude
-        if distToPortal <= 10 then
-            return true -- ถึงหน้าประตูอยู่แล้ว
+        -- หากตัวละครอยู่ในโซน JoinZone เรียบร้อยแล้ว ให้ถือว่าถึงจุดหมาย 100%
+        if IsPlayerInsideBossJoinZone() then
+            return true
         end
+        
+        local distToPortal = (hrp.Position - targetPos).Magnitude
         
         -- หากตัวละครอยู่ที่แปลงบ้าน (Home Plot) หรืออยู่ไกลเกิน 120 studs ให้ใช้วาร์ปไปที่ลานพลาซ่า (Hub) อย่างเป็นทางการ
         if IsPlayerAtHomePlot() or distToPortal > 120 then
@@ -4454,17 +4486,17 @@ SafeWalkToBossPortal = function()
         hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp or hum.Health <= 0 then return false end
         
-        -- เดินก้าวเท้าเข้าสู่โซนประตู PromptSpot (0, 17.85, -298) อย่างเป็นธรรมชาติ
-        if (hrp.Position - targetPos).Magnitude > 4 then
+        -- เดินก้าวเท้าเข้าสู่โซนประตู JoinZone (0, 17.85, -304) อย่างเป็นธรรมชาติ
+        if not IsPlayerInsideBossJoinZone() then
             hum:MoveTo(targetPos)
             local walkStart = tick()
-            while tick() - walkStart < 3.5 do
+            while tick() - walkStart < 4.0 do
                 task.wait(0.05)
                 char = LocalPlayer.Character or Character
                 hum = char and char:FindFirstChildOfClass("Humanoid")
                 hrp = char and char:FindFirstChild("HumanoidRootPart")
                 if not hum or not hrp or hum.Health <= 0 then break end
-                if (hrp.Position - targetPos).Magnitude <= 4 then
+                if IsPlayerInsideBossJoinZone() or (hrp.Position - targetPos).Magnitude <= 2.5 then
                     break
                 end
             end
@@ -4483,8 +4515,8 @@ SafeWalkToBossPortal = function()
         
         char = LocalPlayer.Character or Character
         hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp and (hrp.Position - targetPos).Magnitude <= 12 then
-            Humanizer.Wait(0.8, 1.5) -- ยืนนิ่งหน้าประตูอย่างปลอดภัยก่อนตอบรับ
+        if hrp and IsPlayerInsideBossJoinZone() then
+            Humanizer.Wait(0.8, 1.5) -- ยืนนิ่งในโซนประตู JoinZone อย่างปลอดภัยก่อนส่งคำสั่ง
             return true
         end
         return false
@@ -5163,12 +5195,19 @@ Tabs.Tower:AddButton({
             end
             
             local arrived = SafeWalkToBossPortal()
-            if arrived then
+            if arrived and IsPlayerInsideBossJoinZone() then
                 Humanizer.Wait(0.3, 0.6)
-                Fire("WorldBossJoin")
+                local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                local promptUi = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root") and pg.PetDiceUI.Root:FindFirstChild("WorldBossPrompt")
+                local joinBtn = promptUi and (promptUi:FindFirstChild("PromptJoin", true) or promptUi:FindFirstChild("Join", true))
+                if joinBtn and joinBtn:IsA("GuiButton") and firesignal then
+                    pcall(function() firesignal(joinBtn.Activated) end)
+                else
+                    Fire("WorldBossJoin")
+                end
                 Notify("⚔️ บอสโลก", string.format("ส่งคำสั่งเข้าร่วมบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 3)
             else
-                Notify("⚠️ บอสโลก", "ไม่สามารถเดินถึงหน้าประตูบอสโลกได้ (ยกเลิกเพื่อป้องกัน Error 267)", 3)
+                Notify("⚠️ บอสโลก", "ไม่สามารถเดินถึงโซนประตูบอสโลก (JoinZone) ได้ (ยกเลิกเพื่อป้องกัน Error 267)", 3)
             end
         else
             -- คำนวณเวลานับถอยหลังที่เหลืออยู่จริงจนกว่าจะเปิดรับสมัคร
@@ -8166,13 +8205,20 @@ task.spawn(function()
                                 if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.AutoWorldBoss then return end
                                 
                                 -- 3. ส่งคำสั่งเข้าร่วมบอสโลก
-                                if arrived then
+                                if arrived and IsPlayerInsideBossJoinZone() then
                                     hasAttemptedBossJoinThisJoining = true
-                                    Fire("WorldBossJoin")
+                                    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                                    local promptUi = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI:FindFirstChild("Root") and pg.PetDiceUI.Root:FindFirstChild("WorldBossPrompt")
+                                    local joinBtn = promptUi and (promptUi:FindFirstChild("PromptJoin", true) or promptUi:FindFirstChild("Join", true))
+                                    if joinBtn and joinBtn:IsA("GuiButton") and firesignal then
+                                        pcall(function() firesignal(joinBtn.Activated) end)
+                                    else
+                                        Fire("WorldBossJoin")
+                                    end
                                     Notify("⚔️ บอสโลก", string.format("เข้าร่วมการตีบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 4)
                                     Humanizer.Wait(1.5, 2.5)
                                 else
-                                    Notify("⚠️ บอสโลก", "เดินไม่ถึงหน้าประตูบอสโลก ยกเลิกการส่งคำสั่งเพื่อป้องกัน Error 267", 3)
+                                    Notify("⚠️ บอสโลก", "เดินไม่ถึงโซนประตูบอสโลก (JoinZone) ยกเลิกการส่งคำสั่งเพื่อป้องกัน Error 267", 3)
                                 end
                             end)
                         end
