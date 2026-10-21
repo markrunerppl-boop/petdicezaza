@@ -586,6 +586,21 @@ local function DoesWorldBossMatchFilter()
     return elemMatch and diffMatch
 end
 
+local function GetSecondsUntilWorldBossJoin()
+    if ScheduleConfig and ScheduleConfig.WorldBoss then
+        local ok, res = pcall(function()
+            local now = workspace:GetServerTimeNow()
+            local wb = ScheduleConfig.WorldBoss
+            local nextIdx = ScheduleConfig.Index(wb, now) + 1
+            local nextStart = ScheduleConfig.StartOf(wb, nextIdx)
+            local joinSec = (WorldBossConfig and WorldBossConfig.JoinSeconds) or 45
+            return math.max(0, math.floor(nextStart - joinSec - now))
+        end)
+        if ok and type(res) == "number" then return res end
+    end
+    return 9999
+end
+
 local function IsWorldBossActive()
     local cfg = CFG or getgenv().CFG or {}
     if cfg.AutoWorldBoss == false then return false end
@@ -656,6 +671,10 @@ local function CanRunTower()
         if IsWorldBossActive and IsWorldBossActive() then
             return false, "Priority 1 Active: World Boss in progress"
         end
+        local cfg = CFG or getgenv().CFG or {}
+        if cfg.AutoWorldBoss and cfg.PauseTowerForBoss and DoesWorldBossMatchFilter() and GetSecondsUntilWorldBossJoin() <= 20 then
+            return false, "Priority 1 Active: World Boss door opening in <= 20s"
+        end
         if isArenaTransitionLock or getgenv().IsArenaTransitionActive then
             return false, "Priority 0 Active: Arena/Tower transition in progress"
         end
@@ -678,6 +697,10 @@ local function CanRunGeneralFarm()
         end
         if isBossActiveLock or getgenv().IsBossActiveLock or isWorldBossTransitioning or IsWorldBossActive() then
             return false, "Priority 1 Active: World Boss in progress"
+        end
+        local cfg = CFG or getgenv().CFG or {}
+        if cfg.AutoWorldBoss and DoesWorldBossMatchFilter() and GetSecondsUntilWorldBossJoin() <= 7 then
+            return false, "Priority 1 Active: World Boss door opening in <= 7s (clearing queue)"
         end
         if isArenaTransitionLock or getgenv().IsArenaTransitionActive then
             return false, "Priority 0 Active: Arena/Tower transition in progress"
@@ -4442,6 +4465,14 @@ SwitchOrStartTower = function(targetTowerId, force)
             Notify("⚔️ บอสโลก (Priority 2)", "กำลังอยู่ในช่วงเวลากิจกรรมบอสโลก หอคอยจะเริ่มให้อัตโนมัติหลังตีบอสเสร็จสิ้น", 3)
         end
         return false, "In World Boss (Priority 2)"
+    end
+    
+    local cfg = CFG or getgenv().CFG or {}
+    if cfg.AutoWorldBoss and cfg.PauseTowerForBoss and DoesWorldBossMatchFilter() and GetSecondsUntilWorldBossJoin() <= 20 then
+        if force then
+            Notify("⚔️ ประตูบอสโลกใกล้เปิด", "บอสโลกจะเปิดรับสมัครในอีกไม่ถึง 20 วินาที ชะลอการเข้าหอคอยเพื่อเตรียมพร้อมตีบอส!", 3)
+        end
+        return false, "World Boss door opening soon (in <= 20s)"
     end
     
     local nowTick = tick()
