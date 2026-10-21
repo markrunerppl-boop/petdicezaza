@@ -161,7 +161,7 @@ end)
 -- [0] AIRTIGHT ANTI-BAN & PATCH SENTINEL SYSTEM (100% FAIL-SAFE PROTECTION)
 -- ==============================================================================
 VERIFIED_GAME_PLACE_VERSION = 172
-local SECURITY_CONFIG_URL = "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/security.json"
+local SECURITY_CONFIG_URL = "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/security.json"
 
 getgenv().EmergencyPatchHalt = false
 getgenv().EmergencyCloudHalt = false
@@ -2394,7 +2394,6 @@ end
 if not Fluent then
     local fluentUrls = {
         "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/fluent.lua",
-        "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/fluent.lua",
         "https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua",
         "https://raw.githubusercontent.com/dawid-scripts/Fluent/master/main.lua"
     }
@@ -7030,7 +7029,7 @@ Tabs.Settings:AddSection("🚀 อัปเดตสคริปต์เรี�
 
 Tabs.Settings:AddParagraph({
     Title = "📡 แหล่งที่มาทางการ (Official GitHub Repository)",
-    Content = "URL: raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua\n" ..
+    Content = "URL: raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua\n" ..
               "• ซิงค์เกมเรียลไทม์: เชื่อมต่อ State.OnChanged รับการเปลี่ยนแปลงของตัวเกมทันทีทุกเฟรม\n" ..
               "• อัปเดตสคริปต์สด: กดปุ่มด้านล่างเพื่อดึงโค้ดล่าสุดจาก GitHub และเริ่มทำงานใหม่ได้ทันทีโดยไม่ต้องเข้าเกมใหม่"
 })
@@ -7039,7 +7038,7 @@ Tabs.Settings:AddButton({
     Title = "📋 คัดลอกลิงก์ Loadstring สำหรับใส่โปร (Copy Loadstring)",
     Description = "คัดลอกคำสั่งรันสคริปต์แบบเคลียร์แคช CDN ล่าสุดลง Clipboard",
     Callback = function()
-        local scriptCmd = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua?t=" .. tick()))()'
+        local scriptCmd = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua?t=" .. tick()))()'
         local setCb = setclipboard or toclipboard or (Clipboard and Clipboard.set)
         if setCb then
             pcall(function() setCb(scriptCmd) end)
@@ -7062,10 +7061,10 @@ Tabs.Settings:AddButton({
         Notify("🔄 กำลังตรวจสอบอัปเดต...", "กำลังดาวน์โหลดโค้ดล่าสุดจาก GitHub...", 4)
         task.spawn(function()
             local success, newCode = pcall(function()
-                local url = "https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua?t=" .. tostring(tick()); return game:HttpGet(url)
+                local url = "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua?t=" .. tostring(tick()); return game:HttpGet(url)
             end)
             if not success or not newCode or #newCode < 1000 then
-                success, newCode = pcall(function() return game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/testkuysus/main/petdicezaza.lua")
+                success, newCode = pcall(function() return game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua")
                 end)
             end
             if success and newCode and #newCode > 1000 then
