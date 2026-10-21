@@ -636,6 +636,7 @@ end
 -- ลำดับ 4 (หอคอย): ทำงานได้เมื่อ Trade(1), Boss(2), Halloween(3) ไม่ได้ทำงาน และปลดล็อคในระบบเกมแล้ว
 local function CanRunTower()
     local ok, res, reason = pcall(function()
+        if isArenaTransitionLock or getgenv().IsArenaTransitionActive then return false, "Priority 0 Active: Arena/Tower transition in progress" end
         if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
         if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
         if IsHalloweenActive() then return false, "Priority 3 Active: Halloween Event in progress" end
@@ -649,6 +650,7 @@ end
 -- ลำดับ 5 (สุ่มฟาร์มทั่วไป): ทำงานได้เมื่อ Trade(1), Boss(2) ไม่ได้ทำงาน และไม่ได้กำลังเดินเก็บแคนดี้
 local function CanRunGeneralFarm()
     local ok, res, reason = pcall(function()
+        if isArenaTransitionLock or getgenv().IsArenaTransitionActive then return false, "Priority 0 Active: Arena/Tower transition in progress" end
         if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
         if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
         if isCollectingCandyMutex or getgenv().CandyStormMutex or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
@@ -720,6 +722,9 @@ local RemoteRateLimits = {
 -- ป้องกันการส่งคำสั่งเปลี่ยนแมพ/อารีน่าซ้อนกัน (Tower, Boss, Teleport) ซึ่งเป็นสาเหตุหลักของ Error 267
 local LastZoneTransitionTime = 0
 local isZoneTransitionLocked = false
+local isArenaTransitionLock = false
+local lastArenaTransitionLockTime = 0
+getgenv().IsArenaTransitionActive = false
 local ZoneTransitionActions = {
     TowerStart = true,
     TowerExit = true,
@@ -813,6 +818,23 @@ local isFlushingTradeQueue = false
 -- ป้องกันการยิงคำสั่งพร้อมกันในเฟรมเดียวกัน (Single-Threaded FIFO Serializer)
 local RemoteQueue = {}
 getgenv().RemoteQueue = RemoteQueue
+
+local function ClearQueueDuringTransition()
+    pcall(function()
+        if #RemoteQueue > 0 then
+            local cleaned = {}
+            for _, item in ipairs(RemoteQueue) do
+                if item.action == "TowerExit" or item.action == "TowerStart" or item.action == "SetSetting" or item.action == "TowerLeave" then
+                    table.insert(cleaned, item)
+                end
+            end
+            table.clear(RemoteQueue)
+            for _, item in ipairs(cleaned) do
+                table.insert(RemoteQueue, item)
+            end
+        end
+    end)
+end
 local LoopHeartbeats = {}
 getgenv().LoopHeartbeats = LoopHeartbeats
 local MIN_GLOBAL_REMOTE_INTERVAL = 0.28 -- ปรับเป็น 0.28s เพื่อรองรับปิงแกว่งบน UGPhone และ Cloud Emulators
@@ -910,6 +932,17 @@ Fire = function(...)
     -- 0. ระบบความปลอดภัย: Cloud Kill-Switch เท่านั้น
     if getgenv().EmergencyCloudHalt then
         return -- ตัดการส่งคำสั่งเฉพาะเมื่อผู้พัฒนาสั่งหยุดฉุกเฉินจาก Cloud เท่านั้น
+    end
+
+    -- 0.05 Master Arena & Tower Transition Lockout (ตัดการยิงคำสั่งอื่นทั้งหมดทันทีระหว่างเข้าหอคอยหรือออกจากอารีน่า)
+    local TransitionAllowedActions = {
+        TowerStart = true,
+        TowerExit = true,
+        TowerLeave = true,
+        SetSetting = true,
+    }
+    if (isArenaTransitionLock or getgenv().IsArenaTransitionActive) and not TransitionAllowedActions[action] then
+        return -- ตัดคำสั่งทั้งหมดออกทันทีระหว่างช่วงเปลี่ยนผ่าน
     end
 
     -- 0.1 Blanket Trade Isolation & Conflict Queueing (ป้องกันคำสั่งอื่นแทรกแซงระหว่างเทรด 100% พร้อมจัดคิวรอทำตามลำดับ)
@@ -3921,7 +3954,17 @@ ExitArenaCleanly = function(reason)
     if not IsTowerInArena or not IsTowerInArena() then return end
     isExitingArenaCleanly = true
 
+    -- 1. ตัดการยิงคำสั่งอื่นๆ ทั้งหมดออกทันทีตั้งแต่เสี้ยววินาทีแรก (Lockdown & Purge Queue)
+    isArenaTransitionLock = true
+    getgenv().IsArenaTransitionActive = true
+    lastArenaTransitionLockTime = tick()
+    pcall(ClearQueueDuringTransition)
+
     task.spawn(function()
+        -- 2. หน่วงเวลาออกจากอารีน่าแบบสุ่มเวลา (Randomized Human Pre-Exit Delay: 1.5 - 2.8 วินาที)
+        -- จำลองผู้เล่นกวาดสายตามองผลการต่อสู้ก่อนกดปุ่มออกจากอารีน่า
+        Humanizer.Wait(1.5, 2.8)
+
         local fired = false
         pcall(function()
             local pg = LocalPlayer:FindFirstChild("PlayerGui")
@@ -3945,21 +3988,32 @@ ExitArenaCleanly = function(reason)
 
         LastRemoteFire["TowerExit"] = tick()
         
-        -- รอการเปลี่ยนผ่านเข้าสู่ Away Mode สูงสุด 3 วินาที
+        -- 3. รอให้ตัวเกมสลับโหมดเสร็จสมบูรณ์ (Battle หายไป และเข้าสู่ Away Mode) สูงสุด 4.0 วินาที
         local t0 = tick()
-        while tick() - t0 < 3.0 do
+        while tick() - t0 < 4.0 do
             task.wait(0.2)
             if not IsTowerInArena or not IsTowerInArena() then break end
         end
 
         LiveTower.InArena = false
         LiveTower.Away = true
-        local msg = reason or "ออกจากอารีน่ามายังโหมดเบื้องหลัง (Away Mode) เรียบร้อย!"
-        Notify("🚪 หอคอย", msg, 2)
+        
+        -- 4. เมื่อออกจากอารีน่าแล้ว หน่วงเวลาแบบมนุษย์ (Randomized Human Post-Exit Settling Delay)
+        -- จำลองผู้เล่นปรับตำแหน่งและมุมกล้องหลังจากวาร์ปกลับมาลานพลาซ่า (2.2 - 3.8 วินาที)
+        -- โดยระหว่างนี้คำสั่งอื่นๆ ยังคงถูกตัด/ระงับอยู่ 100%
+        local humanDelay = math.random(22, 38) / 10.0
+        local msg = reason or string.format("ออกจากอารีน่าสู่โหมดเบื้องหลังเรียบร้อย (พักปรับตัวแบบมนุษย์ %.1fs ก่อนเริ่มคำสั่งอื่น)...", humanDelay)
+        Notify("🚪 หอคอย", msg, 3)
+        task.wait(humanDelay)
+
+        -- 5. เมื่อหน่วงเวลาแบบมนุษย์เสร็จสมบูรณ์ ค่อยเริ่มรันคำสั่งอื่นๆ ตามมา (Unlock)
+        isArenaTransitionLock = false
+        getgenv().IsArenaTransitionActive = false
+        isExitingArenaCleanly = false
+        
         task.delay(0.2, function()
             if UpdateTowerStatus then UpdateTowerStatus() end
         end)
-        isExitingArenaCleanly = false
     end)
 end
 getgenv().ExitArenaCleanly = ExitArenaCleanly
@@ -4267,6 +4321,16 @@ local function StartTowerDirect(targetTowerId)
         return false, "No pets"
     end
     
+    -- 1. ตัดการยิงคำสั่งอื่นๆ ทั้งหมดออกทันที (Lockdown & Purge Queue)
+    isArenaTransitionLock = true
+    getgenv().IsArenaTransitionActive = true
+    lastArenaTransitionLockTime = tick()
+    pcall(ClearQueueDuringTransition)
+
+    -- 2. หน่วงเวลาเข้าหอคอยแบบสุ่มเวลา (Randomized Human Pre-Start Delay: 1.5 - 2.8 วินาที)
+    -- จำลองผู้เล่นกวาดตามองทีมและเลือกหอคอยก่อนเริ่ม
+    Humanizer.Wait(1.5, 2.8)
+
     -- เปิดระบบ TowerAutoplay ของตัวเกม เพื่อให้หอคอยไต่ชั้นอัตโนมัติอย่างต่อเนื่องไร้รอยต่อ (AUTO: ON)
     pcall(function()
         if data.Settings and data.Settings.TowerAutoplay ~= true then
@@ -4290,10 +4354,21 @@ local function StartTowerDirect(targetTowerId)
     -- ปิดหน้าต่าง BattleResults UI ถ้ามีค้างอยู่
     pcall(function()
         local pg = LocalPlayer:FindFirstChild("PlayerGui")
-        local br = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Effects") and pg.PetDiceUI.Root.Effects:FindFirstChild("BattleResults")
+        local pdUI = pg and pg:FindFirstChild("PetDiceUI")
+        local root = pdUI and pdUI:FindFirstChild("Root")
+        local br = root and root:FindFirstChild("Effects") and root.Effects:FindFirstChild("BattleResults")
         if br and br.Visible then br.Visible = false end
     end)
     
+    -- หากไม่ได้เปิด AutoExitArena ให้ปลดล็อคคำสั่งอื่นหลังเข้าอารีน่าเสร็จ
+    if not CFG.AutoExitArena then
+        task.spawn(function()
+            Humanizer.Wait(2.0, 3.5)
+            isArenaTransitionLock = false
+            getgenv().IsArenaTransitionActive = false
+        end)
+    end
+
     return true
 end
 
@@ -8100,6 +8175,12 @@ task.spawn(function()
         -- 3. Zone Transition Lock (8s)
         if isZoneTransitionLocked and (nowTick - LastZoneTransitionTime > 8.0) then
             isZoneTransitionLocked = false
+        end
+
+        -- 3.1 Arena Transition Lock Watchdog (25s Fail-safe)
+        if (isArenaTransitionLock or getgenv().IsArenaTransitionActive) and (nowTick - lastArenaTransitionLockTime > 25.0) then
+            isArenaTransitionLock = false
+            getgenv().IsArenaTransitionActive = false
         end
 
         -- 4. Trade Session Watchdog (Auto-clears orphaned TradeActiveSession flag if trade window/session is gone)
