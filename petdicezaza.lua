@@ -2635,6 +2635,99 @@ local SecurityStatusPara = Tabs.Overview:AddParagraph({
     Content = string.format("🎮 Game Version: v%d | ปลอดภัย\n🌐 Cloud Kill-Switch: ปกติ (Operational)\n🔒 Anti-Ban Protection: พร้อมทำงาน (ป้องกัน Error 267 / 600)", game.PlaceVersion)
 })
 
+local function TriggerLiveScriptUpdate()
+    Notify("🔄 กำลังตรวจสอบอัปเดต...", "กำลังดาวน์โหลดโค้ดล่าสุดจาก GitHub...", 4)
+    task.spawn(function()
+        local newCode = nil
+        local urls = {
+            "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua?t=" .. tostring(tick()),
+            "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua"
+        }
+        
+        -- 1. พยายามดาวน์โหลดผ่าน HttpGet และ request/http_request แบบทนทาน
+        for _, url in ipairs(urls) do
+            pcall(function() newCode = game:HttpGet(url, true) end)
+            if newCode and type(newCode) == "string" and #newCode > 1000 then break end
+            
+            local req = request or http_request or (http and http.request) or (syn and syn.request)
+            if req then
+                pcall(function()
+                    local resp = req({ Url = url, Method = "GET" })
+                    if resp and resp.Body and #resp.Body > 1000 then
+                        newCode = resp.Body
+                    end
+                end)
+            end
+            if newCode and type(newCode) == "string" and #newCode > 1000 then break end
+        end
+        
+        -- 2. หากดาวน์โหลดผ่านอินเทอร์เน็ตล้มเหลว ให้ใช้ไฟล์ล่าสุดในเครื่อง Potassium Workspace แทน
+        if (not newCode or #newCode < 1000) and isfile and readfile and isfile("petdicezaza.lua") then
+            pcall(function()
+                local localCode = readfile("petdicezaza.lua")
+                if localCode and #localCode > 1000 then
+                    newCode = localCode
+                end
+            end)
+        end
+        
+        if newCode and type(newCode) == "string" and #newCode > 1000 then
+            local fn, compileErr = loadstring(newCode)
+            if fn then
+                -- อัปเดตไฟล์ในเครื่องให้อัตโนมัติ เพื่อให้ loadfile() ครั้งถัดไปเป็นเวอร์ชันล่าสุดเสมอ
+                pcall(function()
+                    if writefile then writefile("petdicezaza.lua", newCode) end
+                end)
+                
+                Notify("✅ อัปเดตสำเร็จ!", "กำลังรันสคริปต์เวอร์ชันใหม่ล่าสุด...", 3)
+                task.wait(0.4)
+                getgenv().PetDiceForceReload = true
+                getgenv().PetDiceScriptLoaded = false
+                getgenv().PetDiceScriptStarting = nil
+                getgenv().PetDiceScriptToken = tick()
+                
+                if Fluent then
+                    pcall(function()
+                        if Fluent.Destroy then Fluent:Destroy() end
+                        Fluent.Window = nil
+                    end)
+                end
+                getgenv().Fluent = nil
+                getgenv().PetDiceFluent = nil
+                getgenv().PetDiceWindow = nil
+                
+                if getgenv().PetDiceMobileToggleGui then
+                    pcall(function() getgenv().PetDiceMobileToggleGui:Destroy() end)
+                    getgenv().PetDiceMobileToggleGui = nil
+                end
+                
+                pcall(function()
+                    local cg = game:GetService("CoreGui")
+                    for _, g in ipairs(cg:GetChildren()) do
+                        if g:IsA("ScreenGui") and (g.Name == "PetDiceFluentGui" or g.Name:find("Fluent")) then
+                            g:Destroy()
+                        end
+                    end
+                end)
+                
+                task.wait(0.3)
+                task.spawn(fn)
+            else
+                warn("[PetDice Updater] Compile error: " .. tostring(compileErr))
+                Notify("❌ เกิดข้อผิดพลาด", "โค้ดคอมไพล์ไม่ผ่าน: " .. tostring(compileErr), 6)
+            end
+        else
+            Notify("❌ ดาวน์โหลดไม่สำเร็จ", "ไม่สามารถดึงข้อมูลจาก GitHub ได้ กรุณาลองใหม่อีกครั้ง", 4)
+        end
+    end)
+end
+
+Tabs.Overview:AddButton({
+    Title = "🔄 อัปเดตสคริปต์เวอร์ชันล่าสุด (Live Update)",
+    Description = "ดาวน์โหลดโค้ดล่าสุดจาก GitHub และเริ่มทำงานใหม่ทันที",
+    Callback = TriggerLiveScriptUpdate
+})
+
 Tabs.Overview:AddButton({
     Title = "🔓 ปลดล็อคความปลอดภัย (Reset Anti-Ban Lockout)",
     Description = "กดเพื่อรีเซ็ตสถานะตัดไฟฉุกเฉินและเริ่มการทำงานสคริปต์ใหม่ทันทีเมื่อไอดีพ้นโทษแบน",
@@ -7144,43 +7237,7 @@ Tabs.Settings:AddButton({
 Tabs.Settings:AddButton({
     Title = "🔄 อัปเดตสคริปต์จาก GitHub ทันที (Live Hot-Reload)",
     Description = "ดาวน์โหลดโค้ดล่าสุดจาก GitHub และเริ่มทำงานใหม่ทันที",
-    Callback = function()
-        Notify("🔄 กำลังตรวจสอบอัปเดต...", "กำลังดาวน์โหลดโค้ดล่าสุดจาก GitHub...", 4)
-        task.spawn(function()
-            local success, newCode = pcall(function()
-                local url = "https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua?t=" .. tostring(tick()); return game:HttpGet(url)
-            end)
-            if not success or not newCode or #newCode < 1000 then
-                success, newCode = pcall(function() return game:HttpGet("https://raw.githubusercontent.com/markrunerppl-boop/petdicezaza/main/petdicezaza.lua")
-                end)
-            end
-            if success and newCode and #newCode > 1000 then
-                local fn, compileErr = loadstring(newCode)
-                if fn then
-                    Notify("✅ อัปเดตสำเร็จ!", "กำลังรันสคริปต์เวอร์ชันใหม่ล่าสุด...", 3)
-                    task.wait(0.5)
-                    getgenv().PetDiceForceReload = true
-                    getgenv().PetDiceScriptLoaded = false
-                    getgenv().PetDiceScriptStarting = nil
-                    getgenv().PetDiceScriptToken = tick()
-                    if Fluent and Fluent.Destroy then
-                        pcall(function() Fluent:Destroy() end)
-                    end
-                    if getgenv().PetDiceMobileToggleGui then
-                        pcall(function() getgenv().PetDiceMobileToggleGui:Destroy() end)
-                        getgenv().PetDiceMobileToggleGui = nil
-                    end
-                    task.wait(0.2)
-                    task.spawn(fn)
-                else
-                    warn("[PetDice Updater] Compile error: " .. tostring(compileErr))
-                    Notify("❌ เกิดข้อผิดพลาด", "โค้ดจาก GitHub คอมไพล์ไม่ผ่าน: " .. tostring(compileErr), 6)
-                end
-            else
-                Notify("❌ ดาวน์โหลดไม่สำเร็จ", "ไม่สามารถดึงข้อมูลจาก GitHub ได้ กรุณาลองใหม่อีกครั้ง", 4)
-            end
-        end)
-    end
+    Callback = TriggerLiveScriptUpdate
 })
 
 -- ==============================================================================
