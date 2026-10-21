@@ -796,6 +796,7 @@ local UpdateTowerStatus
 local ResolveTowerId
 local LeaveTowerCleanly
 local ExitArenaCleanly
+local PauseTowerForWorldBoss
 local isSwitchingTower = false
 -- IsEnteringBossPortal declared above in top-level priority scope
 local LiveTower = {
@@ -4116,6 +4117,7 @@ local isExitingArenaCleanly = false
 ExitArenaCleanly = function(reason)
     if isExitingArenaCleanly then return end
     if not IsTowerInArena or not IsTowerInArena() then return end
+    if LiveTower and LiveTower.Starting then return end
     isExitingArenaCleanly = true
 
     -- 1. ตัดการยิงคำสั่งอื่นๆ ทั้งหมดออกทันทีตั้งแต่เสี้ยววินาทีแรก (Lockdown & Purge Queue)
@@ -4125,7 +4127,27 @@ ExitArenaCleanly = function(reason)
     pcall(ClearQueueDuringTransition)
 
     task.spawn(function()
-        -- 2. หน่วงเวลาออกจากอารีน่าแบบสุ่มเวลา (Randomized Human Pre-Exit Delay: 1.5 - 2.8 วินาที)
+        -- 2. รอให้เซิร์ฟเวอร์ส่งสัญญาณเริ่มชั้นอย่างเป็นทางการ (LiveTower.Starting กลายเป็น false) สูงสุด 7.0 วินาที
+        local waitFloorReady = tick()
+        while (LiveTower and LiveTower.Starting) and (tick() - waitFloorReady < 7.0) do
+            task.wait(0.3)
+        end
+
+        -- 3. ตรวจสอบว่าผ่านเวลาวอร์มอัป Floor 1 อย่างน้อย 5.5 วินาทีหลังคำสั่ง TowerStart เสมอ (ป้องกัน Error 267)
+        local timeSinceStart = tick() - math.max(LastRemoteFire["TowerStart"] or 0, (LiveTower and LiveTower.LastStartTick) or 0)
+        if timeSinceStart < 5.5 then
+            task.wait(5.5 - timeSinceStart)
+        end
+
+        -- 4. ตรวจสอบอีกครั้งว่าตัวละครยังอยู่ในอารีน่าจริงหรือไม่
+        if not IsTowerInArena or not IsTowerInArena() then
+            isArenaTransitionLock = false
+            getgenv().IsArenaTransitionActive = false
+            isExitingArenaCleanly = false
+            return
+        end
+
+        -- 5. หน่วงเวลาออกจากอารีน่าแบบสุ่มเวลา (Randomized Human Pre-Exit Delay: 1.5 - 2.8 วินาที)
         -- จำลองผู้เล่นกวาดสายตามองผลการต่อสู้ก่อนกดปุ่มออกจากอารีน่า
         Humanizer.Wait(1.5, 2.8)
 
@@ -4152,7 +4174,7 @@ ExitArenaCleanly = function(reason)
 
         LastRemoteFire["TowerExit"] = tick()
         
-        -- 3. รอให้ตัวเกมสลับโหมดเสร็จสมบูรณ์ (Battle หายไป และเข้าสู่ Away Mode) สูงสุด 4.0 วินาที
+        -- 6. รอให้ตัวเกมสลับโหมดเสร็จสมบูรณ์ (Battle หายไป และเข้าสู่ Away Mode) สูงสุด 4.0 วินาที
         local t0 = tick()
         while tick() - t0 < 4.0 do
             task.wait(0.2)
@@ -4162,7 +4184,7 @@ ExitArenaCleanly = function(reason)
         LiveTower.InArena = false
         LiveTower.Away = true
         
-        -- 4. เมื่อออกจากอารีน่าแล้ว หน่วงเวลาแบบมนุษย์ (Randomized Human Post-Exit Settling Delay)
+        -- 7. เมื่อออกจากอารีน่าแล้ว หน่วงเวลาแบบมนุษย์ (Randomized Human Post-Exit Settling Delay)
         -- จำลองผู้เล่นปรับตำแหน่งและมุมกล้องหลังจากวาร์ปกลับมาลานพลาซ่า (2.2 - 3.8 วินาที)
         -- โดยระหว่างนี้คำสั่งอื่นๆ ยังคงถูกตัด/ระงับอยู่ 100%
         local humanDelay = math.random(22, 38) / 10.0
@@ -4170,7 +4192,7 @@ ExitArenaCleanly = function(reason)
         Notify("🚪 หอคอย", msg, 3)
         task.wait(humanDelay)
 
-        -- 5. เมื่อหน่วงเวลาแบบมนุษย์เสร็จสมบูรณ์ ค่อยเริ่มรันคำสั่งอื่นๆ ตามมา (Unlock)
+        -- 8. เมื่อหน่วงเวลาแบบมนุษย์เสร็จสมบูรณ์ ค่อยเริ่มรันคำสั่งอื่นๆ ตามมา (Unlock)
         isArenaTransitionLock = false
         getgenv().IsArenaTransitionActive = false
         isExitingArenaCleanly = false
@@ -4301,6 +4323,68 @@ LeaveTowerCleanly = function(reason)
     end)
 end
 getgenv().LeaveTowerCleanly = LeaveTowerCleanly
+
+PauseTowerForWorldBoss = function()
+    if not (IsTowerRunning and IsTowerRunning()) then return true end
+    isWorldBossTransitioning = true
+    Notify("🏰 หอคอย", "พักหอคอยชั่วคราวเพื่อให้สัตว์เลี้ยงพร้อมสู้บอสโลก...", 2)
+    ClearQueueDuringBoss()
+
+    -- 1. ปิด autoplay ชั่วคราว ป้องกันเซิร์ฟเวอร์เริ่มชั้นถัดไป
+    pcall(function()
+        Fire("SetSetting", "TowerAutoplay", false)
+    end)
+
+    -- 2. กดปุ่มยกเลิกหอคอยของตัวเกมจริง (StopRun ในอารีน่า หรือ StopTower ใน HUD)
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        local hud = pg and pg:FindFirstChild("PetDiceUI") and pg.PetDiceUI.Root:FindFirstChild("Hud")
+        if hud then
+            local battle = hud:FindFirstChild("Battle")
+            if battle and battle.Visible then
+                local stopRun = battle:FindFirstChild("StopRun", true)
+                local stopFace = stopRun and stopRun:FindFirstChild("Face")
+                if stopFace and firesignal then
+                    pcall(function() firesignal(stopFace.Activated) end)
+                    pcall(function() firesignal(stopFace.MouseButton1Click) end)
+                end
+            end
+            local tracker = hud:FindFirstChild("TowerTracker")
+            if tracker and tracker.Visible then
+                local stopTower = tracker:FindFirstChild("StopTower", true)
+                local stopFace = stopTower and stopTower:FindFirstChild("Face")
+                if stopFace and firesignal then
+                    pcall(function() firesignal(stopFace.Activated) end)
+                    pcall(function() firesignal(stopFace.MouseButton1Click) end)
+                end
+            end
+        end
+    end)
+
+    -- 3. ส่งคำสั่ง TowerLeave ไปยังเซิร์ฟเวอร์ (เพื่อปลดปล่อยสัตว์เลี้ยงจริง 100%)
+    Fire("TowerLeave")
+    LastRemoteFire["TowerLeave"] = tick()
+
+    -- 4. รอให้เซิร์ฟเวอร์ยืนยันว่าออกจากหอคอยแล้วจริง (IsTowerRunning เป็น false) สูงสุด 4.0 วินาที
+    local leaveWaitStart = tick()
+    while IsTowerRunning() and (tick() - leaveWaitStart < 4.0) do
+        task.wait(0.2)
+    end
+
+    LiveTower.Active = false
+    LiveTower.Starting = false
+    LiveTower.InArena = false
+    LiveTower.Away = false
+    LiveTower.TowerId = nil
+    LiveTower.LastEventTime = 0
+
+    -- 5. หน่วงเวลาแบบมนุษย์หลังออกจากหอคอย (2.0 - 3.2 วินาที)
+    Humanizer.Wait(2.0, 3.2)
+    LastZoneTransitionTime = tick()
+    isWorldBossTransitioning = false
+    return true
+end
+getgenv().PauseTowerForWorldBoss = PauseTowerForWorldBoss
 
 local TowerStatusPara = Tabs.Tower:AddParagraph({
     Title = "⏳ กำลังโหลดสถานะหอคอย...",
@@ -4478,6 +4562,11 @@ local function StartTowerDirect(targetTowerId)
     
     if IsWorldBossActive() then
         return false, "In World Boss (Priority 2)"
+    end
+
+    local cfg = CFG or getgenv().CFG or {}
+    if cfg.AutoWorldBoss and cfg.PauseTowerForBoss and DoesWorldBossMatchFilter and DoesWorldBossMatchFilter() and GetSecondsUntilWorldBossJoin and GetSecondsUntilWorldBossJoin() <= 20 then
+        return false, "World Boss door opening soon (in <= 20s)"
     end
     
     local data = State.Data
@@ -7816,24 +7905,12 @@ task.spawn(function()
             -- ตรวจสอบลำดับความสำคัญ World Boss (Priority 1):
             -- หากบอสโลกกำลังดำเนินอยู่ (ช่วง Joining ที่ตรงตามตัวกรอง หรือช่วง Fighting หรือติด Boss Lockout) ต้องหยุดและออกจากหอคอยทันที
             if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) then
-                LiveTower.Active = false
-                LiveTower.Starting = false
                 if IsTowerRunning and IsTowerRunning() and not isWorldBossTransitioning then
-                    isWorldBossTransitioning = true
-                    Notify("🏰 หอคอย", "พักหอคอยชั่วคราวเพื่อเตรียมตัวสู้บอสโลก...", 2)
-                    ClearQueueDuringBoss()
-                    if IsTowerInArena and IsTowerInArena() then
-                        if ExitArenaCleanly then
-                            ExitArenaCleanly()
-                        else
-                            Fire("TowerLeave")
-                        end
+                    if PauseTowerForWorldBoss then
+                        PauseTowerForWorldBoss()
                     else
                         Fire("TowerLeave")
                     end
-                    task.delay(3.0, function()
-                        isWorldBossTransitioning = false
-                    end)
                 end
                 return
             end
@@ -8075,30 +8152,11 @@ task.spawn(function()
                                 
                                 -- 1. พักหอคอยก่อนเพื่อให้สัตว์เลี้ยงว่างพร้อมตีบอส (Priority 1 เหนือกว่า Tower)
                                 if IsTowerRunning and IsTowerRunning() then
-                                    Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อให้สัตว์เลี้ยงพร้อมสู้บอสโลก...", 2)
-                                    isWorldBossTransitioning = true
-                                    ClearQueueDuringBoss()
-                                    if IsTowerInArena and IsTowerInArena() then
-                                        if ExitArenaCleanly then
-                                            ExitArenaCleanly()
-                                        else
-                                            Fire("TowerLeave")
-                                        end
+                                    if PauseTowerForWorldBoss then
+                                        PauseTowerForWorldBoss()
                                     else
                                         Fire("TowerLeave")
                                     end
-                                    local leaveWaitStart = tick()
-                                    while IsTowerRunning() and (tick() - leaveWaitStart < 4.0) do
-                                        task.wait(0.2)
-                                    end
-                                    LiveTower.Active = false
-                                    LiveTower.Starting = false
-                                    LiveTower.LastEventTime = 0
-                                    LiveTower.TowerId = nil
-                                    -- หน่วงเวลาแบบมนุษย์หลังออกจากหอคอย/อารีน่า
-                                    Humanizer.Wait(2.0, 3.2)
-                                    LastZoneTransitionTime = tick()
-                                    isWorldBossTransitioning = false
                                 end
                                 
                                 -- [HUMAN DELAY BEFORE WALKING]
@@ -9411,7 +9469,7 @@ Notify("🚀 สคริปต์พร้อมทำงาน", "Pet Dice Mas
 
 -- Auto-start tower immediately upon script load if enabled and unlocked
 if CFG and CFG.Tower then
-    task.delay(1.5, function()
+    task.delay(4.5, function()
         if getgenv().PetDiceScriptToken == scriptToken and CFG.Tower and not IsTowerRunning() then
             if IsFeatureUnlocked and IsFeatureUnlocked("Towers", "towers") then
                 local targetId = ResolveTowerId(CFG.SelectedTower)
