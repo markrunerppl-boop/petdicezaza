@@ -541,9 +541,9 @@ end
 local IsFeatureUnlocked = nil
 
 -- ==============================================================================
--- 👑 UNIVERSAL 5-TIER PRIORITY HIERARCHY MANAGER
--- 1. เทรดปลอดภัย (Safe Trade) - ลำดับ 1 (สูงสุด)
--- 2. ตีบอส (World Boss) - ลำดับ 2
+-- 👑 UNIVERSAL PRIORITY HIERARCHY MANAGER (AIRTIGHT BOSS & TOWER SENTINEL)
+-- 1. ตีบอสโลก (World Boss) - ลำดับ 1 (สูงสุดเมื่อประตูเปิด / กำลังต่อสู้)
+-- 2. เทรดปลอดภัย (Safe Trade) - ลำดับ 2
 -- 3. อีเวนต์ฮาโลวีน (Halloween Event) - ลำดับ 3
 -- 4. หอคอย (Infinity Tower) - ลำดับ 4
 -- 5. สุ่มฟาร์มทั่วไป (General Auto Farm) - ลำดับ 5 (ต่ำสุด)
@@ -553,6 +553,17 @@ local isCollectingCandyMutex = false
 local wasInWorldBossFight = false
 local IsEnteringBossPortal = false
 local isWorldBossTransitioning = false
+local isBossActiveLock = false
+getgenv().IsBossActiveLock = false
+local lastBossActiveLockTime = 0
+
+local function ClearQueueDuringBoss()
+    pcall(function()
+        if getgenv().RemoteQueue then
+            table.clear(getgenv().RemoteQueue)
+        end
+    end)
+end
 
 local function IsTradeActive()
     return (IsInTrade and IsInTrade()) or (getgenv().TradeActiveSession == true) or (getgenv().CurrentTradeSession ~= nil) or (GetTradeWindow and GetTradeWindow() ~= nil) or ((getgenv().TradeLockedUntil or 0) > tick())
@@ -579,7 +590,9 @@ local function IsWorldBossActive()
     local cfg = CFG or getgenv().CFG or {}
     if cfg.AutoWorldBoss == false then return false end
     
-    -- 1. ตัวละครกำลังอยู่ในบอสโลก กำลังเดินเข้าประตู อยู่ในรอบต่อสู้ หรือกำลังเดินทางกลับบ้าน
+    -- 1. ตรวจสอบสถานะล็อกดาวน์บอส หรือตัวละครอยู่ในบอส กำลังเดินเข้าประตู อยู่ในรอบต่อสู้ หรือกำลังเดินทางกลับ
+    if isBossActiveLock or getgenv().IsBossActiveLock then return true end
+    
     local isJoined = (LocalPlayer and LocalPlayer:GetAttribute("WorldBossJoined") == true) or 
                      (LocalPlayer and LocalPlayer:GetAttribute("InWorldBoss") == true) or 
                      (IsEnteringBossPortal == true) or 
@@ -612,33 +625,41 @@ local function IsHalloweenActive()
     return stormActive or (getgenv().IsCandyStormActiveRunning == true) or (getgenv().CandyStormMutex == true) or (getgenv().IsTrickOrTreatActiveRunning == true) or (getgenv().TrickOrTreatMutex == true) or (isCollectingCandyMutex == true) or (isTrickOrTreatMutex == true)
 end
 
--- ลำดับ 2 (ตีบอส): ทำงานได้เมื่อ "ไม่มีการเทรด" (Priority 1)
+-- ลำดับ 1 (ตีบอสโลก): ให้ความสำคัญสูงสุดเมื่อประตูบอสเปิด
 local function CanRunWorldBoss()
     local ok, res, reason = pcall(function()
-        if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
         return true
     end)
     if not ok then return false, tostring(res) end
     return res, reason
 end
 
--- ลำดับ 3 (ฮาโลวีน): ทำงานได้เมื่อ "ไม่มีการเทรด" (Priority 1) และ "ไม่ได้กำลังตีบอส" (Priority 2)
+-- ลำดับ 3 (ฮาโลวีน): ทำงานได้เมื่อไม่มีการเทรด และไม่ได้กำลังตีบอสโลก
 local function CanRunHalloween()
     local ok, res, reason = pcall(function()
-        if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
-        if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
+        if isBossActiveLock or getgenv().IsBossActiveLock or isWorldBossTransitioning or IsWorldBossActive() then
+            return false, "Priority 1 Active: World Boss in progress"
+        end
+        if IsTradeActive() then return false, "Priority 2 Active: Trade in progress" end
         return true
     end)
     if not ok then return false, tostring(res) end
     return res, reason
 end
 
--- ลำดับ 4 (หอคอย): ทำงานได้เมื่อ Trade(1), Boss(2), Halloween(3) ไม่ได้ทำงาน และปลดล็อคในระบบเกมแล้ว
+-- ลำดับ 4 (หอคอย): ทำงานได้เมื่อ World Boss, Trade, Halloween ไม่ได้ทำงาน
 local function CanRunTower()
     local ok, res, reason = pcall(function()
-        if isArenaTransitionLock or getgenv().IsArenaTransitionActive then return false, "Priority 0 Active: Arena/Tower transition in progress" end
-        if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
-        if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
+        if isBossActiveLock or getgenv().IsBossActiveLock or isWorldBossTransitioning then
+            return false, "Priority 1 Active: World Boss lockout in progress"
+        end
+        if IsWorldBossActive and IsWorldBossActive() then
+            return false, "Priority 1 Active: World Boss in progress"
+        end
+        if isArenaTransitionLock or getgenv().IsArenaTransitionActive then
+            return false, "Priority 0 Active: Arena/Tower transition in progress"
+        end
+        if IsTradeActive() then return false, "Priority 2 Active: Trade in progress" end
         if IsHalloweenActive() then return false, "Priority 3 Active: Halloween Event in progress" end
         if IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers") then return false, "Towers not unlocked in tree" end
         return true
@@ -647,12 +668,16 @@ local function CanRunTower()
     return res, reason
 end
 
--- ลำดับ 5 (สุ่มฟาร์มทั่วไป): ทำงานได้เมื่อ Trade(1), Boss(2) ไม่ได้ทำงาน และไม่ได้กำลังเดินเก็บแคนดี้
+-- ลำดับ 5 (สุ่มฟาร์มทั่วไป): ทำงานได้เมื่อ World Boss, Trade, Halloween ไม่ได้ทำงาน
 local function CanRunGeneralFarm()
     local ok, res, reason = pcall(function()
-        if isArenaTransitionLock or getgenv().IsArenaTransitionActive then return false, "Priority 0 Active: Arena/Tower transition in progress" end
-        if IsTradeActive() then return false, "Priority 1 Active: Trade in progress" end
-        if IsWorldBossActive() then return false, "Priority 2 Active: World Boss in progress" end
+        if isBossActiveLock or getgenv().IsBossActiveLock or isWorldBossTransitioning or IsWorldBossActive() then
+            return false, "Priority 1 Active: World Boss in progress"
+        end
+        if isArenaTransitionLock or getgenv().IsArenaTransitionActive then
+            return false, "Priority 0 Active: Arena/Tower transition in progress"
+        end
+        if IsTradeActive() then return false, "Priority 2 Active: Trade in progress" end
         if isCollectingCandyMutex or getgenv().CandyStormMutex or isTrickOrTreatMutex or getgenv().TrickOrTreatMutex then
             return false, "Priority 3 Active: Halloween Event in progress"
         end
@@ -932,6 +957,19 @@ Fire = function(...)
     -- 0. ระบบความปลอดภัย: Cloud Kill-Switch เท่านั้น
     if getgenv().EmergencyCloudHalt then
         return -- ตัดการส่งคำสั่งเฉพาะเมื่อผู้พัฒนาสั่งหยุดฉุกเฉินจาก Cloud เท่านั้น
+    end
+
+    -- 0.04 Master Boss Lockout (หยุดการยิงคำสั่งอื่นทั้งหมดทันทีเมื่อประตูบอสเปิดหรือกำลังตีบอสโลก)
+    local BossAllowedActions = {
+        WorldBossJoin = true,
+        WorldBossLeave = true,
+        TowerLeave = true,
+        TowerExit = true,
+        Teleport = true,
+        SetSetting = true,
+    }
+    if (isBossActiveLock or getgenv().IsBossActiveLock or isWorldBossTransitioning) and not BossAllowedActions[action] then
+        return -- ตัดคำสั่งทั้งหมดออกทันทีระหว่างช่วงเปิดประตูบอสและสู้บอส
     end
 
     -- 0.05 Master Arena & Tower Transition Lockout (ตัดการยิงคำสั่งอื่นทั้งหมดทันทีระหว่างเข้าหอคอยหรือออกจากอารีน่า)
@@ -4152,6 +4190,7 @@ SafeWalkToBossPortal = function()
         return false
     end
     IsEnteringBossPortal = true
+    ClearQueueDuringBoss()
     local ok, res = pcall(function()
         local char = LocalPlayer.Character or Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -4175,7 +4214,7 @@ SafeWalkToBossPortal = function()
         
         -- หากตัวละครอยู่ไกลเกิน 35 studs ใช้ระบบการเดินทางอย่างเป็นทางการของตัวเกม (Teleport: Portal)
         if (hrp.Position - targetPos).Magnitude > 35 then
-            Humanizer.Wait(0.6, 1.0)
+            Humanizer.Wait(0.8, 1.4)
             Fire("Teleport", "Portal")
             
             local t0 = tick()
@@ -4188,7 +4227,7 @@ SafeWalkToBossPortal = function()
                 end
             end
             -- หน่วงเวลาพักหลังลงจอด เลียนแบบผู้เล่นจริงและรอเซิร์ฟเวอร์ Sync ตำแหน่ง
-            Humanizer.Wait(1.0, 1.5)
+            Humanizer.Wait(1.2, 1.8)
         end
         
         char = LocalPlayer.Character or Character
@@ -4237,7 +4276,7 @@ SafeWalkToBossPortal = function()
         char = LocalPlayer.Character or Character
         hrp = char and char:FindFirstChild("HumanoidRootPart")
         if hrp and (hrp.Position - targetPos).Magnitude <= 10 then
-            Humanizer.Wait(0.6, 1.0) -- ยืนนิ่งหน้าประตูอย่างปลอดภัยก่อนตอบรับ
+            Humanizer.Wait(0.8, 1.5) -- ยืนนิ่งหน้าประตูอย่างปลอดภัยก่อนตอบรับ
             return true
         end
         return false
@@ -7669,15 +7708,24 @@ task.spawn(function()
             end
             lastBossStateInTower = curBossState
             
-            -- ตรวจสอบลำดับความสำคัญ World Boss (Priority 2):
-            -- หากบอสโลกกำลังดำเนินอยู่ (ช่วง Joining ที่ตรงตามตัวกรอง หรือช่วง Fighting) ต้องหยุดและออกจากหอคอยทันที
-            if IsWorldBossActive and IsWorldBossActive() then
+            -- ตรวจสอบลำดับความสำคัญ World Boss (Priority 1):
+            -- หากบอสโลกกำลังดำเนินอยู่ (ช่วง Joining ที่ตรงตามตัวกรอง หรือช่วง Fighting หรือติด Boss Lockout) ต้องหยุดและออกจากหอคอยทันที
+            if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) then
                 LiveTower.Active = false
                 LiveTower.Starting = false
                 if IsTowerRunning and IsTowerRunning() and not isWorldBossTransitioning then
                     isWorldBossTransitioning = true
                     Notify("🏰 หอคอย", "พักหอคอยชั่วคราวเพื่อเตรียมตัวสู้บอสโลก...", 2)
-                    Fire("TowerLeave")
+                    ClearQueueDuringBoss()
+                    if IsTowerInArena and IsTowerInArena() then
+                        if ExitArenaCleanly then
+                            ExitArenaCleanly()
+                        else
+                            Fire("TowerLeave")
+                        end
+                    else
+                        Fire("TowerLeave")
+                    end
                     task.delay(3.0, function()
                         isWorldBossTransitioning = false
                     end)
@@ -7787,20 +7835,20 @@ task.spawn(function()
     end
 end)
 
--- 3.1. Auto World Boss Runner (Safe Real-Time Engine)
+-- 3.1. Auto World Boss Runner (Safe Real-Time Engine - Priority 1 Master Boss Sentinel)
 task.spawn(function()
     local lastBossJoinAttempt = 0
     local wasInBoss = false
     local hasAttemptedBossJoinThisJoining = false
     local lastWbState = RS:GetAttribute("WorldBossState") or "Idle"
     while true do
-        task.wait(1.5)
+        task.wait(1.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
         LoopHeartbeats["Loop3_WorldBoss"] = tick()
-        if not CanRunWorldBoss() then task.wait(2.0); continue end
+        if not CanRunWorldBoss() then task.wait(1.5); continue end
         local char = LocalPlayer.Character or Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if not char or not hum or hum.Health <= 0 then task.wait(2.0); continue end
+        if not char or not hum or hum.Health <= 0 then task.wait(1.5); continue end
         
         local wbState = RS:GetAttribute("WorldBossState") or "Idle"
         local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
@@ -7812,27 +7860,55 @@ task.spawn(function()
         if isJoined or (wbState == "Fighting" and (wasInBoss or DoesWorldBossMatchFilter())) then
             wasInBoss = true
             wasInWorldBossFight = true
+            if not isBossActiveLock then
+                isBossActiveLock = true
+                getgenv().IsBossActiveLock = true
+                lastBossActiveLockTime = tick()
+                ClearQueueDuringBoss()
+            end
         end
         
-        -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และให้เริ่มหอคอยต่อทันทีอัตโนมัติ (Priority 2 -> Priority 4)
+        -- เมื่อบอสโลกจบลง ให้พากลับบ้านอย่างปลอดภัย และหน่วงเวลาแบบมนุษย์ก่อนค่อยๆ เริ่มยิงคำสั่งอื่นเข้ามา
         local bossJustEnded = (wasInBoss or wasInWorldBossFight) and (wbState ~= "Fighting" and wbState ~= "Joining") and not isJoined
         if bossJustEnded then
             wasInBoss = false
             wasInWorldBossFight = false
             isWorldBossTransitioning = true
-            task.wait(1.5)
+            isBossActiveLock = true
+            getgenv().IsBossActiveLock = true
+            lastBossActiveLockTime = tick()
+            
+            Notify("🏆 บอสโลก", "จบศึกบอสโลกเรียบร้อย กำลังวาร์ปกลับบ้าน...", 3)
+            -- หน่วงเวลารอคัตซีนและสรุปผลรางวัลบอสจบลง
+            Humanizer.Wait(1.8, 2.8)
             pcall(function()
                 Fire("Teleport", "Home")
             end)
-            Humanizer.Wait(2.5, 3.5)
             LastZoneTransitionTime = tick()
+            
+            -- [HUMANIZED POST-BOSS DELAY] หน่วงเวลาแบบมนุษย์หลังออกจากด่านบอส ก่อนค่อยๆ เริ่มส่งคำสั่งอื่นเข้ามา
+            Notify("⏳ พักผ่อน", "หน่วงเวลาแบบมนุษย์หลังจบศึกบอสโลก กำลังเตรียมความพร้อม...", 4)
+            Humanizer.Wait(4.5, 7.5)
+            
+            -- เคลียร์คิวคำสั่งตกค้างทั้งหมด ป้องกันคำสั่งรัวหลังปลดล็อค
+            ClearQueueDuringBoss()
+            
+            -- ปลดล็อคระบบบอส
             isWorldBossTransitioning = false
-            Notify("🏰 หอคอย", "จบศึกบอสโลกเรียบร้อย กลับถึงบ้านแล้ว เริ่มลงหอคอยต่อทันที...", 3)
+            isBossActiveLock = false
+            getgenv().IsBossActiveLock = false
+            lastBossActiveLockTime = 0
+            
+            Notify("🚀 เริ่มทำงานต่อ", "สิ้นสุดการพักหน่วงเวลา ค่อยๆ ทยอยเริ่มระบบงานอื่นตามลำดับ...", 3)
+            
+            -- ทยอยเริ่มระบบหอคอยต่อแบบเว้นระยะห่าง (Staggered Resume)
             if CFG.Tower and SwitchOrStartTower then
                 task.spawn(function()
-                    task.wait(1.0)
-                    local targetId = (ResolveTowerId and ResolveTowerId(CFG.SelectedTower)) or "Infinity"
-                    SwitchOrStartTower(targetId, true)
+                    Humanizer.Wait(2.2, 3.8)
+                    if not isBossActiveLock and not (IsWorldBossActive and IsWorldBossActive()) then
+                        local targetId = (ResolveTowerId and ResolveTowerId(CFG.SelectedTower)) or "Infinity"
+                        SwitchOrStartTower(targetId, true)
+                    end
                 end)
             end
         end
@@ -7857,27 +7933,53 @@ task.spawn(function()
                                      (tostring(CFG.WorldBossDifficultyFilter):find(wbDiff))
                     
                     if elemMatch and diffMatch then
+                        -- [DOOR OPEN IMMEDIATE LOCKOUT] ประตูบอสเปิด: ตัดการยิงคำสั่งอื่นทั้งหมดทันที และให้ความสำคัญการตีบอสเป็นอันดับแรก!
+                        if not isBossActiveLock then
+                            isBossActiveLock = true
+                            getgenv().IsBossActiveLock = true
+                            lastBossActiveLockTime = tick()
+                            ClearQueueDuringBoss()
+                            Notify("⚔️ ประตูบอสโลกเปิดแล้ว!", string.format("ตรวจพบประตูบอสโลก [%s %s] เปิดรับสมัคร!\nหยุดยิงคำสั่งอื่นทั้งหมด เพื่อเตรียมตัวตีบอสเป็นอันดับแรก...", wbDiff, wbElem), 4)
+                        end
+                        
                         local now = tick()
-                        if now - lastBossJoinAttempt >= 6.0 then
+                        if now - lastBossJoinAttempt >= 5.0 then
                             lastBossJoinAttempt = now
                             CircuitBreaker.Execute("WorldBossJoin", function()
                                 local data = State.Data
                                 local isBossUnlocked = IsFeatureUnlocked("WorldBoss", "worldboss")
                                 
-                                -- ถ้ายังไม่ปลดล็อค ไม่ต้องออกจากหอคอย ไม่ต้องเดินไปประตูบอสโลก ให้ฟาร์มหอคอยต่อไปอย่างปลอดภัย 100%
-                                if not isBossUnlocked then return end
-                                
-                                -- ตรวจสอบความสมบูรณ์ของประตูบอสโลก (หากชำรุดแจ้งเตือนให้ผู้เล่นทำเควสต์ ไม่ยิงรีโมตตรงป้องกัน Error 267)
-                                if data and data.PortalRepaired == false then
-                                    Notify("⚠️ ประตูบอสชำรุด", "กรุณานำ Keystone ไปวางที่หน้าประตูบอสโลกก่อน จึงจะสามารถเข้าร่วมได้!", 5)
+                                -- ถ้ายังไม่ปลดล็อค ไม่ต้องออกจากหอคอย
+                                if not isBossUnlocked then
+                                    isBossActiveLock = false
+                                    getgenv().IsBossActiveLock = false
                                     return
                                 end
                                 
-                                -- 1. พักหอคอยก่อนเพื่อให้สัตว์เลี้ยงว่างพร้อมตีบอส (Priority 2 เหนือกว่า Priority 4)
+                                -- ตรวจสอบความสมบูรณ์ของประตูบอสโลก
+                                if data and data.PortalRepaired == false then
+                                    Notify("⚠️ ประตูบอสชำรุด", "กรุณานำ Keystone ไปวางที่หน้าประตูบอสโลกก่อน จึงจะสามารถเข้าร่วมได้!", 5)
+                                    isBossActiveLock = false
+                                    getgenv().IsBossActiveLock = false
+                                    return
+                                end
+                                
+                                -- [HUMAN REACTION DELAY] จำลองเวลามนุษย์รับรู้ว่าประตูบอสเปิด
+                                Humanizer.Wait(1.2, 2.2)
+                                if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.AutoWorldBoss then return end
+                                
+                                -- 1. พักหอคอยก่อนเพื่อให้สัตว์เลี้ยงว่างพร้อมตีบอส (Priority 1 เหนือกว่า Tower)
                                 if IsTowerRunning and IsTowerRunning() then
                                     Notify("🏰 หอคอย", "ออกจากหอคอยชั่วคราวเพื่อให้สัตว์เลี้ยงพร้อมสู้บอสโลก...", 2)
-                                    if not isWorldBossTransitioning then
-                                        isWorldBossTransitioning = true
+                                    isWorldBossTransitioning = true
+                                    ClearQueueDuringBoss()
+                                    if IsTowerInArena and IsTowerInArena() then
+                                        if ExitArenaCleanly then
+                                            ExitArenaCleanly()
+                                        else
+                                            Fire("TowerLeave")
+                                        end
+                                    else
                                         Fire("TowerLeave")
                                     end
                                     local leaveWaitStart = tick()
@@ -7888,23 +7990,29 @@ task.spawn(function()
                                     LiveTower.Starting = false
                                     LiveTower.LastEventTime = 0
                                     LiveTower.TowerId = nil
-                                    isWorldBossTransitioning = false
-                                    Humanizer.Wait(3.0, 4.0)
+                                    -- หน่วงเวลาแบบมนุษย์หลังออกจากหอคอย/อารีน่า
+                                    Humanizer.Wait(2.0, 3.2)
                                     LastZoneTransitionTime = tick()
+                                    isWorldBossTransitioning = false
                                 end
+                                
+                                -- [HUMAN DELAY BEFORE WALKING]
+                                Humanizer.Wait(0.8, 1.5)
+                                if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.AutoWorldBoss then return end
                                 
                                 -- 2. เดินทางไปหน้าประตูบอสด้วยระบบทางการของตัวเกม และเดินขึ้นบันไดตามธรรมชาติ (ปลอดภัยจากการตรวจจับ 100%)
                                 local arrived = SafeWalkToBossPortal()
                                 
-                                -- 3. Humanizer หน่วงเวลาเล็กน้อย
-                                Humanizer.Wait(0.6, 1.2)
+                                -- [HUMAN DELAY AT PORTAL] หน่วงเวลาแบบมนุษย์ที่หน้าประตู
+                                Humanizer.Wait(0.8, 1.6)
                                 if getgenv().PetDiceScriptToken ~= scriptToken or not CFG.AutoWorldBoss then return end
                                 
-                                -- 4. ส่งคำสั่งเข้าร่วมบอสโลก
+                                -- 3. ส่งคำสั่งเข้าร่วมบอสโลก
                                 if arrived then
                                     hasAttemptedBossJoinThisJoining = true
                                     Fire("WorldBossJoin")
                                     Notify("⚔️ บอสโลก", string.format("เข้าร่วมการตีบอสโลก [%s %s] สำเร็จ!", wbDiff, wbElem), 4)
+                                    Humanizer.Wait(1.5, 2.5)
                                 else
                                     Notify("⚠️ บอสโลก", "เดินไม่ถึงหน้าประตูบอสโลก ยกเลิกการส่งคำสั่งเพื่อป้องกัน Error 267", 3)
                                 end
@@ -7971,6 +8079,7 @@ task.spawn(function()
         local delayTime = math.max(3.0, CFG.UpgradeTreeDelay or 3)
         task.wait(delayTime)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) or not CanRunGeneralFarm() then task.wait(2.0); continue end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.UpgradeTree or (IsFeatureUnlocked and not IsFeatureUnlocked("Towers", "towers")) then
@@ -8013,6 +8122,7 @@ task.spawn(function()
     while true do
         task.wait(1.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) or not CanRunGeneralFarm() then task.wait(2.0); continue end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.AutoEquipBest then
@@ -8104,6 +8214,7 @@ task.spawn(function()
     while true do
         task.wait(8.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) or not CanRunGeneralFarm() then task.wait(2.0); continue end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.AutoExpedition then
@@ -8180,6 +8291,24 @@ task.spawn(function()
         if (isArenaTransitionLock or getgenv().IsArenaTransitionActive) and (nowTick - lastArenaTransitionLockTime > 25.0) then
             isArenaTransitionLock = false
             getgenv().IsArenaTransitionActive = false
+        end
+
+        -- 3.2 Boss Active Lock Watchdog (Fail-safe: 12 minutes max or 30s if boss state is idle and not joined)
+        if isBossActiveLock or getgenv().IsBossActiveLock then
+            local wbState = RS:GetAttribute("WorldBossState") or "Idle"
+            local isJoined = (LocalPlayer:GetAttribute("WorldBossJoined") == true) or (LocalPlayer:GetAttribute("InWorldBoss") == true)
+            local lockT = lastBossActiveLockTime or 0
+            if (wbState == "Idle" or wbState == "") and not isJoined and not wasInWorldBossFight and not isWorldBossTransitioning then
+                if lockT > 0 and (nowTick - lockT > 30.0) then
+                    isBossActiveLock = false
+                    getgenv().IsBossActiveLock = false
+                    lastBossActiveLockTime = 0
+                end
+            elseif lockT > 0 and (nowTick - lockT > 720.0) then
+                isBossActiveLock = false
+                getgenv().IsBossActiveLock = false
+                lastBossActiveLockTime = 0
+            end
         end
 
         -- 4. Trade Session Watchdog (Auto-clears orphaned TradeActiveSession flag if trade window/session is gone)
@@ -8405,6 +8534,7 @@ task.spawn(function()
     while true do
         task.wait(1.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) then task.wait(2.0); continue end
         
         -- สแกนเรียลไทม์: ตรวจสอบเงื่อนไขว่าปลดล็อคการเทรดในเกมหรือยัง (10 Rebirths & 10,000 Rolls)
         local data = State.Data
@@ -8653,6 +8783,7 @@ task.spawn(function()
     while true do
         task.wait(2.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) or not CanRunGeneralFarm() then task.wait(2.0); continue end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.AutoUpgradePetLevel then
@@ -8741,6 +8872,7 @@ task.spawn(function()
     while true do
         task.wait(0.35)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) or not CanRunGeneralFarm() then task.wait(2.0); continue end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.AutoRollGrade then
@@ -8823,6 +8955,7 @@ task.spawn(function()
     while true do
         task.wait(0.35)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) or not CanRunGeneralFarm() then task.wait(2.0); continue end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         if CFG.AutoRollTrait then
@@ -8905,6 +9038,7 @@ task.spawn(function()
     while true do
         task.wait(2.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) or not CanRunGeneralFarm() then task.wait(2.0); continue end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         if not Character or not Humanoid or Humanoid.Health <= 0 then task.wait(2.0); continue end
         
@@ -8998,6 +9132,7 @@ task.spawn(function()
     while true do
         task.wait(6.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) or not CanRunGeneralFarm() then task.wait(2.0); continue end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(2.0); continue end
         
         CircuitBreaker.Execute("AutoRewardsAndQuests", function()
@@ -9075,6 +9210,7 @@ task.spawn(function()
     while true do
         task.wait(6.0)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) or not CanRunGeneralFarm() then task.wait(3.0); continue end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0); continue end
         if LocalPlayer:GetAttribute("PetDiceLoading") == true then task.wait(2.0); continue end
         
@@ -9121,6 +9257,7 @@ task.spawn(function()
     while true do
         task.wait(3.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
+        if isBossActiveLock or getgenv().IsBossActiveLock or (IsWorldBossActive and IsWorldBossActive()) or not CanRunGeneralFarm() then task.wait(3.0); continue end
         if IsInTrade() or getgenv().TradeActiveSession then task.wait(3.0); continue end
         
         if CFG.AutoSellPets and not isAutoSellingActive and not isPetOperationMutex and not isPetEnhanceRolling then
