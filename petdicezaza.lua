@@ -668,9 +668,14 @@ local function CanRunTower()
     return res, reason
 end
 
+local scriptStartupTimestamp = tick()
+
 -- ลำดับ 5 (สุ่มฟาร์มทั่วไป): ทำงานได้เมื่อ World Boss, Trade, Halloween ไม่ได้ทำงาน
 local function CanRunGeneralFarm()
     local ok, res, reason = pcall(function()
+        if tick() - scriptStartupTimestamp < 4.0 then
+            return false, "Startup grace period in progress (waiting 4.0s)"
+        end
         if isBossActiveLock or getgenv().IsBossActiveLock or isWorldBossTransitioning or IsWorldBossActive() then
             return false, "Priority 1 Active: World Boss in progress"
         end
@@ -795,10 +800,15 @@ local function IsPlayerAtHomePlot()
     local pos = hrp.Position
     local distCenter = Vector3.new(pos.X, 0, pos.Z).Magnitude
     
-    -- ลานพลาซ่า (Plaza Hub) มีรัศมีประมาณ 70 studs จากจุดกึ่งกลาง (0,0)
-    -- หากอยู่นอกระยะ 70 studs แปลว่าอยู่ที่แปลงบ้าน หรือในอารีน่าหอคอยแล้ว
-    if distCenter >= 70 then
-        return true
+    -- ลานพลาซ่า/ฮับศูนย์กลาง (Hub Plaza) มีรัศมีประมาณ 110 studs จากจุดกึ่งกลาง (0,0)
+    if distCenter < 110 then
+        return false
+    end
+    
+    -- พื้นที่หน้าประตูบอสโลกและตลาด (World Boss Portal / Market) อยู่ที่ Z = -298
+    local distBossPortal = (pos - Vector3.new(0, 17.85, -298)).Magnitude
+    if distBossPortal < 140 then
+        return false
     end
     
     -- ตรวจสอบตำแหน่งแปลงบ้านของผู้เล่น
@@ -817,7 +827,7 @@ local function IsPlayerAtHomePlot()
         end
     end
     
-    return false
+    return distCenter >= 140
 end
 local isPetEnhanceRolling = false
 local isPetOperationMutex = false
@@ -1110,15 +1120,15 @@ Fire = function(...)
         local p = (workspace:FindFirstChild("Market") and workspace.Market:FindFirstChild("WorldBossPortal")) or workspace:FindFirstChild("WorldBossPortal", true)
         local spot = p and (p:FindFirstChild("PromptSpot") or p:FindFirstChild("JoinZone"))
         local bossPortalPos = spot and spot.Position or Vector3.new(0, 17.85, -298.0)
-        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 12 then
-            return -- ต้องอยู่ใกล้หน้าประตูบอสโลกไม่เกิน 12 studs (PromptSpot 16 studs) ป้องกัน Error 267
+        if not hrp or (hrp.Position - bossPortalPos).Magnitude > 14 then
+            return -- ต้องอยู่ใกล้หน้าประตูบอสโลกไม่เกิน 14 studs (PromptSpot 16 studs) ป้องกัน Error 267
         end
-        if hrp.AssemblyLinearVelocity.Magnitude > 0.15 then
+        if hrp.AssemblyLinearVelocity.Magnitude > 0.25 then
             local waitStop = tick()
-            while hrp and hrp.AssemblyLinearVelocity.Magnitude > 0.15 and (tick() - waitStop < 1.5) do
+            while hrp and hrp.AssemblyLinearVelocity.Magnitude > 0.25 and (tick() - waitStop < 1.5) do
                 task.wait(0.1)
             end
-            if not hrp or hrp.AssemblyLinearVelocity.Magnitude > 0.15 then return end
+            if not hrp or hrp.AssemblyLinearVelocity.Magnitude > 0.25 then return end
         end
         if (tick() - (LastRemoteFire["Teleport"] or 0) < 2.5) then
             return -- ต้องรอหลังเทเลพอร์ตอย่างน้อย 2.5 วิ ให้เซิร์ฟเวอร์ Sync พิกัดตัวละครให้ตรงกัน 100%
@@ -1132,12 +1142,10 @@ Fire = function(...)
     if action == "PortalRepair" then
         return -- ปิดกั้นการส่งรีโมต PortalRepair เด็ดขาด เนื่องจากตัวเกมแท้ต้องทำเควสต์หยิบ Keystone วิ่งไปส่งหน้าประตูก่อน การยิงรีโมตตรงส่งผลให้เซิร์ฟเวอร์ตรวจพบความผิดปกติและตัดการเชื่อมต่อ Error 267
     end
-    if action == "Teleport" and args[2] == "Portal" then
-        if not IsFeatureUnlocked("WorldBoss", "worldboss") then return end
-        local wbState = RS:GetAttribute("WorldBossState")
-        if wbState ~= "Joining" and wbState ~= "Fighting" then return end
-        if (tick() - (LastRemoteFire["TowerLeave"] or 0) < 4.0) then
-            return -- ป้องกัน Error 267 จากการสลับโซนเร็วเกินไป (Zone Transition Collision) หลังเพิ่งออกจากหอคอย
+    if action == "Teleport" then
+        local dest = args[2]
+        if dest ~= "Home" and dest ~= "Hub" then
+            return -- ป้องกัน Error 267 เด็ดขาด: ปลายทาง Teleport ของตัวเกม Pet Dice มีเพียง "Home" และ "Hub" เท่านั้น
         end
     end
     if action == "BuyUpgrade" and args[2] == "worldboss" and not IsFeatureUnlocked("PetUpgrades", "petup") then return
@@ -1355,6 +1363,9 @@ Fire = function(...)
         end
         
         local dest = args[2]
+        if dest ~= "Home" and dest ~= "Hub" then
+            return -- ป้องกัน Error 267 เด็ดขาด: ปลายทาง Teleport มีเพียง "Home" และ "Hub" เท่านั้น
+        end
         
         -- ตรวจสอบตัวละครและสภาพร่างกายก่อนวาร์ป ป้องกัน desync และ Error 600
         local char = LocalPlayer.Character or Character
@@ -4212,50 +4223,56 @@ SafeWalkToBossPortal = function()
         hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
         
-        -- หากตัวละครอยู่ไกลเกิน 35 studs ใช้ระบบการเดินทางอย่างเป็นทางการของตัวเกม (Teleport: Portal)
-        if (hrp.Position - targetPos).Magnitude > 35 then
-            Humanizer.Wait(0.8, 1.4)
-            Fire("Teleport", "Portal")
+        local distToPortal = (hrp.Position - targetPos).Magnitude
+        if distToPortal <= 10 then
+            return true -- ถึงหน้าประตูอยู่แล้ว
+        end
+        
+        -- หากตัวละครอยู่ที่แปลงบ้าน (Home Plot) หรืออยู่ไกลเกิน 120 studs ให้ใช้วาร์ปไปที่ลานพลาซ่า (Hub) อย่างเป็นทางการ
+        if IsPlayerAtHomePlot() or distToPortal > 120 then
+            Humanizer.Wait(0.5, 1.0)
+            Fire("Teleport", "Hub")
             
             local t0 = tick()
-            while tick() - t0 < 4.0 do
-                task.wait(0.1)
+            while tick() - t0 < 4.5 do
+                task.wait(0.2)
                 char = LocalPlayer.Character or Character
                 hrp = char and char:FindFirstChild("HumanoidRootPart")
-                if hrp and (hrp.Position - targetPos).Magnitude < 40 then
+                if hrp and not IsPlayerAtHomePlot() and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z).Magnitude < 110) then
                     break
                 end
             end
             -- หน่วงเวลาพักหลังลงจอด เลียนแบบผู้เล่นจริงและรอเซิร์ฟเวอร์ Sync ตำแหน่ง
-            Humanizer.Wait(1.2, 1.8)
+            Humanizer.Wait(1.5, 2.2)
         end
         
         char = LocalPlayer.Character or Character
         hum = char and char:FindFirstChildOfClass("Humanoid")
         hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hum or not hrp then return false end
+        if not hum or not hrp or hum.Health <= 0 then return false end
         
-        -- เดินก้าวขึ้นบันไดตามความชันจริงด้วย Humanoid:MoveTo ไปยังแท่นชานชาลา TopTile (0, 17.85, -288)
+        -- เดินด้วยระบบ Pathfinding ตามเส้นทางขึ้นบันไดและชานชาลา (0, 17.85, -288) อย่างเป็นธรรมชาติ
         local midWayPos = Vector3.new(0, 17.85, -288)
-        if (hrp.Position - midWayPos).Magnitude > 6 then
-            hum:MoveTo(midWayPos)
+        if (hrp.Position - midWayPos).Magnitude > 8 then
+            WalkAlongPath(midWayPos, 16.0)
+            Humanizer.Wait(0.2, 0.4)
+        end
+        
+        char = LocalPlayer.Character or Character
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp or hum.Health <= 0 then return false end
+        
+        -- เดินก้าวเท้าเข้าสู่โซนประตู PromptSpot (0, 17.85, -298) อย่างเป็นธรรมชาติ
+        if (hrp.Position - targetPos).Magnitude > 4 then
+            hum:MoveTo(targetPos)
             local walkStart = tick()
             while tick() - walkStart < 3.5 do
                 task.wait(0.05)
-                if not hum or not hrp then break end
-                if (hrp.Position - midWayPos).Magnitude <= 4 then
-                    break
-                end
-            end
-        end
-        
-        -- เดินก้าวเท้าเข้าสู่โซนประตู PromptSpot (0, 17.85, -298) อย่างเป็นธรรมชาติ
-        if hum and hrp then
-            hum:MoveTo(targetPos)
-            local walkStart = tick()
-            while tick() - walkStart < 3.0 do
-                task.wait(0.05)
-                if not hum or not hrp then break end
+                char = LocalPlayer.Character or Character
+                hum = char and char:FindFirstChildOfClass("Humanoid")
+                hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if not hum or not hrp or hum.Health <= 0 then break end
                 if (hrp.Position - targetPos).Magnitude <= 4 then
                     break
                 end
@@ -4275,7 +4292,7 @@ SafeWalkToBossPortal = function()
         
         char = LocalPlayer.Character or Character
         hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp and (hrp.Position - targetPos).Magnitude <= 10 then
+        if hrp and (hrp.Position - targetPos).Magnitude <= 12 then
             Humanizer.Wait(0.8, 1.5) -- ยืนนิ่งหน้าประตูอย่างปลอดภัยก่อนตอบรับ
             return true
         end
@@ -9035,6 +9052,7 @@ end)
 -- 13. Auto Potions & Consumables
 task.spawn(function()
     local lastInfinityBagOpenTick = 0
+    task.wait(3.5)
     while true do
         task.wait(2.5)
         if getgenv().PetDiceScriptToken ~= scriptToken then break end
