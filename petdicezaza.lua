@@ -2298,10 +2298,7 @@ end
 -- ==============================================================================
 -- [3] CONFIGURATION MANAGEMENT
 -- ==============================================================================
-local userUid = (LocalPlayer and LocalPlayer.UserId) or 0
-local userConfigFile = string.format("PetDice_Config_%s.json", tostring(userUid))
-local legacyConfigFile = "PetDice_Master_v4_Config.json"
-local ConfigFile = userConfigFile
+local ConfigFile = string.format("PetDice_Config_%s.json", tostring((LocalPlayer and LocalPlayer.UserId) or 0))
 
 local defaultCFG = {
     Tower = true, AutoPlay = true, AutoExitArena = true,
@@ -2361,7 +2358,7 @@ for k, v in pairs(defaultCFG) do
 end
 
 if readfile and isfile then
-    local fileToLoad = isfile(userConfigFile) and userConfigFile or (isfile(legacyConfigFile) and legacyConfigFile)
+    local fileToLoad = isfile(ConfigFile) and ConfigFile or (isfile("PetDice_Master_v4_Config.json") and "PetDice_Master_v4_Config.json")
     if fileToLoad then
         pcall(function()
             local saved = HS:JSONDecode(readfile(fileToLoad))
@@ -3183,10 +3180,6 @@ end
 
 local RebirthStatusPara
 local TreeStatusPara
-local GetCurrentTowerFloor
-local IsTowerRunning
-local IsTowerInArena
-local GetActiveTowerId
 
 local function UpdateOverviewTab()
     pcall(function()
@@ -3792,8 +3785,6 @@ Tabs.Enhance:AddToggle("TogAutoPetTrait", {
 -- 🏰 TAB 3: TOWER & DICE
 -- ------------------------------------------------------------------------------
 task.wait()
-local GetActiveTowerId
-local SafeWalkToBossPortal
 -- isSwitchingTower forward declared
 local lastLoopStartAttempt = 0
 -- IsEnteringBossPortal forward declared
@@ -5076,7 +5067,9 @@ Tabs.Tower:AddButton({
         end
     end
 })
+end -- END TAB 3 TOWER PART
 
+do -- TAB 3 WORLD BOSS PART
 -- ดึงข้อมูลธาตุและระดับความยากของบอสโลกจากตัวเกมจริง
 local dynamicBossElemOptions = {"[ ตีทุกธาตุ (All Elements) ]"}
 if WorldBossConfig and WorldBossConfig.Elements then
@@ -6996,7 +6989,9 @@ Tabs.Trade:AddButton({
         Notify("❌ ยกเลิกการเทรด", "ยกเลิกเซสชันเทรดและปลดคิวคำสั่งเรียบร้อย", 3)
     end
 })
+end -- END TAB 8 SETTINGS PART
 
+do -- TAB 8 STATUS PART
 local TradeStatusPara = Tabs.Trade:AddParagraph({
     Title = "⏳ สถานะระบบเทรดความปลอดภัย...",
     Content = "กำลังตรวจสอบสถานะการเทรด..."
